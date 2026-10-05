@@ -1,7 +1,7 @@
 [package]
 name = "flip-the-meme"
-version = "0.1.0"
-description = "Shared-round parimutuel prediction arena"
+version = "0.2.0"
+description = "Matched 1:1 UP/DOWN rounds on fresh Solana memecoins"
 edition = "2021"
 
 [lib]
@@ -10,10 +10,24 @@ name = "flip_the_meme"
 
 [features]
 default = []
+cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
-cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
 
 [dependencies]
 anchor-lang = { version = "=1.1.2", features = ["init-if-needed"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[dev-dependencies]
+litesvm = "=0.17.0"
+solana-keypair = "3.1"
+solana-signer = "3"
+solana-transaction = "4.1.5"
+solana-clock = "~3.2"

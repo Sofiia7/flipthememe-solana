@@ -7,7 +7,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-flip_the_meme = "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+flip_the_meme = "5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz"
 
 [provider]
 cluster = "devnet"
