@@ -1,48 +1,112 @@
-# FlipTheMeme on Solana
+# FlipTheMeme
 
-Android-first shared arena for 60-second UP/DOWN forecasts on fresh Solana tokens. It is being built for the Solana Mobile CLOCK IN hackathon; submissions close on **8 October 2026**.
+**60-second UP/DOWN calls on fresh Solana memecoins, matched 1:1 against other players. Android app built for Seeker, money on Solana devnet, prices from mainnet PumpSwap pools.**
 
-The current product is one common round, not a feed, map, duel, or full-body avatar world. Players see the same chart and the same UP/DOWN pools. They participate against the crowd through a parimutuel pool, without buying the token itself. Avatars are compact custom pixel faces only.
+A fresh memecoin. A shared start. One minute to prove your call, without buying the token.
 
-The complete product brief is [DEVELOPMENT_BRIEF.md](DEVELOPMENT_BRIEF.md). It is authoritative over archived map/duel documents.
+| | |
+|---|---|
+| Program (devnet) | [`5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`](https://explorer.solana.com/address/5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz?cluster=devnet) |
+| Config | [`A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ`](https://explorer.solana.com/address/A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ?cluster=devnet) |
+| APK | GitHub Actions artifact `FlipTheMeme-apk` (signed release) |
+| Built for | Solana Mobile CLOCK IN · Solana Perps and Prediction Markets |
 
-## What is implemented
+## Try it on an Android phone
 
-- Dependency-free money/state model in [`packages/arena-core`](packages/arena-core/src/arena.mjs): cutoff, one position per authority, 1% of the losing pool, pro-rata payout, claims, ties and timeouts.
-- Expo 57 React Native app in [`apps/mobile`](apps/mobile/App.tsx): shared arena UI, pixel faces, amount/side selection, devnet Mobile Wallet Adapter provider.
-- Mock-only keeper API in [`services/keeper`](services/keeper/src/server.mjs), which makes the absence of an approved live price source explicit.
-- Anchor program draft in [`programs/flip-the-meme`](programs/flip-the-meme/src/lib.rs): Config, Vault, session restriction, Round, Position, settlement, refund and claim instructions.
+1. Install the APK. Any Android 7+ phone works; it is built and tested on a Solana Seeker.
+2. Switch your wallet to devnet: Phantom (Settings, Developer Settings, Testnet Mode, Solana Devnet) or Solflare (network: Devnet).
+3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault and opens a 24-hour session. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
+4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the session key signs, no wallet pop-up.
+5. About two minutes after entry closes the result is in and winnings are in your balance. **Withdraw** sends free SOL back to your wallet.
 
-The app is intentionally development-network only. `Config` starts in an irreversible `MOCK_ONLY` state, so the program rejects both deposits and round creation until a separately audited live-price implementation replaces it. No program ID, live price source, signing key, monetary production deployment, or APK is claimed as complete.
+## How a round works
 
-## Local setup
+A new round opens at every UTC minute. While one round measures its move, the next one takes calls.
 
-Prerequisites for the mobile app: Node 22.13+, pnpm 11, Android SDK/Java and an MWA-compatible Android wallet. A custom Expo development build is required; Expo Go cannot load MWA native modules.
+| Phase | Length | What happens |
+|---|---|---|
+| Entry | 60 s | calls are accepted until `cutoff_at`, enforced by the program clock |
+| Pause | 30 s | nobody can enter; on devnet the house may match the short side |
+| Strike window | 10 s | the strike is the mean of the pool price observed in this window |
+| Move | 60 s | from the start of the strike window to the start of the exit window |
+| Exit window | 10 s | the exit price is the mean of this window |
+| Settle | seconds | the keeper posts the exit price and credits every position |
 
-```powershell
-pnpm install
-pnpm test
-pnpm --filter @flipthememe/mobile typecheck
-pnpm --filter @flipthememe/keeper start
-pnpm android
+You call the move from a strike that is fixed after entry closes, never the price you see when you tap.
+
+## The money rules
+
+- **Matched 1:1.** `m = min(UP, DOWN)` plays on each side. The larger side's surplus comes back pro rata without a fee.
+- **A win pays exactly 1.96x** of the stake that played, whatever the book looks like.
+- **Fees:** 2% of the matched bank `2m` on an UP/DOWN result; 1% on a refund of an activated round (tie, too few price observations, missed deadline).
+- **No match, no fee:** a round without both sides, or with a matched bank under 0.02 SOL, returns every stake in full.
+- **Depth cap:** the matched bank may not exceed the pool's SOL reserve / 2,500, so a round can never be worth moving a thin pool.
+- **House on devnet:** after entry closes, a house account may fill the short side up to a per-round cap and a daily budget, shown as `HOUSE`. It never takes the larger side.
+
+Why these rules: an earlier version of this project backtested 743k real swaps from 15 memecoin pools over 14 days. With a strike taken before the bet, a bot betting 2 s after a swap won 89% of 60-second matches; with odds that follow the book, two-sided bettors profited from skew and ordinary players lost 9-22%. A matched bank plus a strike after a pause bring player loss down to the fee range on 300-second rounds. Devnet uses 60-second rounds for the mobile feel, where the measured bot edge is higher (about 7%); mainnet round length will follow the measurements.
+
+## Price source and trust
+
+- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal; the keeper keeps a token at least 15 minutes and checks the pool on chain (owner, mints, at least 50 SOL reserve).
+- Price = `quote_vault_amount * 10^12 / base_vault_amount`, read from the two vault token accounts every second at `confirmed`.
+- Every observation used (mainnet slot and price, up to 16 per window, at least 5) is passed to `set_strike` / `settle`; **the program computes the mean itself** and the samples stay in the transaction forever.
+- **Trust boundary:** on devnet the keeper is the price authority, and the app says so. Settlement math, payouts, sessions and limits are all on chain. Claims are permissionless, and after `settle_deadline` anyone can call `refund_expired`.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  A["Android app<br/>Expo + MWA + @solana/kit"] -- "MWA: top-up, session, withdraw<br/>session key: place_bet" --> P["Anchor program (devnet)<br/>Config, Vault, Session, Round, Position"]
+  A -. "reads rounds, positions, vault" .-> P
+  A -. "live chart: vault balances" .-> M["PumpSwap pool (mainnet)"]
+  K["Keeper (Node, Docker)"] -- "create_round, house_fill,<br/>set_strike, settle, claim, sweep" --> P
+  K -. "price samples every 1 s" .-> M
 ```
 
-The current workspace has Node and pnpm installed. Rust, Anchor, Solana CLI, Java/Android SDK are not installed here yet, so `anchor build` and `pnpm android` still require their toolchains.
+There is no app server: the phone reads devnet and mainnet directly; the keeper only cranks.
 
-## Validation run
+## Mobile-first details
 
-On 15 September 2026:
+- **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (24 h, max 0.1 SOL per bet, budget = top-up) and a small SOL transfer to the device key for fees.
+- **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its budget and expiry; it has no instruction that lets it withdraw or raise its own limit.
+- **Pixel faces:** 8 bytes that ride inside every `place_bet`, so other players see your face without NFTs or extra transactions.
+- **Share:** challenge a friend to take the other side; result cards through the Android share sheet.
 
-- `pnpm --filter @flipthememe/mobile typecheck` passed.
-- `node --test packages/arena-core/test/*.test.mjs` passed 8/8 scenarios.
-- `cargo check --manifest-path programs/flip-the-meme/Cargo.toml` passed with the pinned Anchor 1.1.2 dependencies (the native MSVC environment is required on Windows).
+## Program
 
-The contract must be compiled and tested with a pinned Anchor/Solana toolchain before it is trusted with devnet funds. See [price-source.md](docs/implementation/price-source.md) and [mwa.md](docs/implementation/mwa.md) for the two remaining integration gates.
+`programs/flip-the-meme` (Anchor 1.1.2): `initialize_config`, `update_config`, `set_pause`, `open_vault`, `deposit`, `withdraw`, `start_session`, `revoke_session`, `create_round`, `place_bet`, `house_fill`, `set_strike`, `settle`, `refund_expired`, `claim`, `sweep_fees`, `close_empty_round`. Pause stops new bets only; settlement, refunds, claims and withdrawals keep working.
 
-## Product and research documents
+Tests:
 
-- [Arena decision and UX rationale](docs/superpowers/specs/2026-09-11-flipthememe-arena-design.md)
-- [Solana Mobile research](docs/research/2026-09-10-solana-mobile/review.md)
-- [Pixel-face direction](docs/design-references/pixel-faces-concept.md)
-- [Price-source gate](docs/implementation/price-source.md)
-- [MWA setup](docs/implementation/mwa.md)
+- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --lib`: payout math, including "payouts never exceed the bank" over 1,000 random books.
+- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow`: 19 LiteSVM scenarios against the compiled program (surplus and 1.96x, house fill windows, not activated, tie, unpriceable, malformed samples, expiry refund by anyone, single claim and settle, cutoff on the program clock, session budget, expiry and revocation, foreign vault, depth cap, locked stake, pause, admin-only rounds, empty-round close, config snapshots).
+- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test vectors` writes the exact instruction and account bytes that `packages/client` is checked against.
+
+## Repository
+
+```
+programs/flip-the-meme   Anchor program, payout math, LiteSVM tests
+packages/client          TypeScript client on @solana/kit: PDAs, codecs, instructions, payout mirror, PumpSwap price source
+services/keeper          round crank: pool selection, sampler, scheduler, house budget, Docker deploy
+apps/mobile              Expo 57 / React Native 0.86 Android app
+docs                     design, plan, submission materials
+```
+
+## Build and test from source
+
+Prerequisites: Node 22+, pnpm 11 (`corepack enable`), Rust, Agave 3.1.14 for `cargo build-sbf`.
+
+```bash
+corepack pnpm install
+corepack pnpm --filter @flipthememe/client test
+corepack pnpm --filter @flipthememe/keeper test
+corepack pnpm --filter @flipthememe/mobile typecheck
+cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml
+cargo test --manifest-path programs/flip-the-meme/Cargo.toml
+```
+
+The APK is built by `.github/workflows/android.yml` (`expo prebuild` + Gradle, release signing from repository secrets) and also produces a debug development client.
+
+## Limits
+
+Devnet only, test SOL only. No external audit. The price authority is trusted on devnet. 60-second rounds give bots more edge than the measured 300-second design. The house fill is a devnet bootstrap with a budget, not a mainnet feature.
