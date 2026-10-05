@@ -96,7 +96,8 @@ export async function sendAndConfirm(
 /** Reads the custom program error number out of a failed transaction, if there is one. */
 export function programErrorCode(error: unknown): number | null {
   const text = error instanceof TransactionFailed ? stringify(error.detail) : error instanceof Error ? error.message + stringify((error as { context?: unknown }).context ?? null) : stringify(error);
-  const match = text.match(/"Custom":\s*(\d+)/) ?? text.match(/custom program error: 0x([0-9a-f]+)/i);
+  // Kit reports on-chain failures with bigint codes, which stringify() turns into quoted numbers.
+  const match = text.match(/"Custom":\s*"?(\d+)"?/) ?? text.match(/custom program error: 0x([0-9a-f]+)/i);
   if (!match) return null;
   return match[0].includes('0x') ? parseInt(match[1], 16) : Number(match[1]);
 }

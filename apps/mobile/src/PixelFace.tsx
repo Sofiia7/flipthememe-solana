@@ -1,33 +1,66 @@
-import { StyleSheet, View } from "react-native";
+import { memo } from 'react';
+import { PixelRatio, StyleSheet, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
+import { GRID, faceGrid, faceKey, gridToPaths, houseGrid, type Face } from './face/faceModel';
 
-export type Face = {
-  skin: string;
-  hair: string;
-  hairColor: string;
-  eye: string;
-  accessory?: "none" | "glasses" | "cap";
-};
+export {
+  FACE_OPTIONS,
+  faceFromBytes,
+  faceToBytes,
+  normalizeFace,
+  randomFace,
+  type Face,
+} from './face/faceModel';
 
-/** A compact 32px pixel head: no torso, shoulders, or full-body character. */
-export function PixelFace({ face, size = 32 }: { face: Face; size?: number }) {
-  const unit = size / 8;
+type Paths = { color: string; d: string }[];
+const pathCache = new Map<string, Paths>();
+let housePaths: Paths | null = null;
+
+/**
+ * Snaps the drawn size so one logical pixel is a whole number of device pixels:
+ * react-native-svg always anti-aliases, so aligned edges are what keeps the pixels crisp.
+ */
+function snappedSize(size: number): number {
+  const ratio = PixelRatio.get();
+  const k = Math.max(1, Math.round((size * ratio) / GRID));
+  return (k * GRID) / ratio;
+}
+
+function facePaths(face: Face, key: string): Paths {
+  let paths = pathCache.get(key);
+  if (!paths) {
+    paths = gridToPaths(faceGrid(face));
+    pathCache.set(key, paths);
+  }
+  return paths;
+}
+
+function PixelCanvas({ paths, size, tile }: { paths: Paths; size: number; tile: boolean }) {
+  const px = snappedSize(size);
   return (
-    <View style={[styles.canvas, { width: size, height: size, borderRadius: unit / 2 }]}>
-      <View style={[styles.hairBack, { backgroundColor: face.hairColor, left: unit, top: 0, width: unit * 6, height: unit * 5 }]} />
-      <View style={[styles.head, { backgroundColor: face.skin, left: unit, top: unit * 2, width: unit * 6, height: unit * 5 }]} />
-      <View style={[styles.fringe, { backgroundColor: face.hairColor, left: face.hair === "side" ? unit : unit * 2, top: unit, width: face.hair === "bangs" ? unit * 5 : unit * 3, height: unit * 2 }]} />
-      <View style={[styles.eye, { backgroundColor: face.eye, left: unit * 2, top: unit * 4, width: unit, height: unit }]} />
-      <View style={[styles.eye, { backgroundColor: face.eye, left: unit * 5, top: unit * 4, width: unit, height: unit }]} />
-      <View style={[styles.mouth, { left: unit * 3, top: unit * 6, width: unit * 2, height: Math.max(1, unit / 2) }]} />
-      {face.accessory === "glasses" ? <View style={[styles.glasses, { left: unit * 1.5, top: unit * 3.6, width: unit * 5, height: unit * 1.6 }]} /> : null}
-      {face.accessory === "cap" ? <View style={[styles.cap, { backgroundColor: "#9c54ff", left: unit, top: 0, width: unit * 6, height: unit * 1.5 }]} /> : null}
+    <View style={[{ width: px, height: px }, tile && styles.tile]}>
+      <Svg width={px} height={px} viewBox={`0 0 ${GRID} ${GRID}`}>
+        {paths.map(({ color, d }) => (
+          <Path key={color} d={d} fill={color} />
+        ))}
+      </Svg>
     </View>
   );
 }
 
+/** A compact pixel head (16x16 logical pixels): hair, face, accessory. Never a body. */
+export const PixelFace = memo(function PixelFace({ face, size = 32, tile = true }: { face: Face; size?: number; tile?: boolean }) {
+  // Paths are cached per face key, so re-renders cost a map lookup.
+  const paths = facePaths(face, faceKey(face));
+  return <PixelCanvas paths={paths} size={size} tile={tile} />;
+});
+
+/** The house's marker in player lists: a pixel house, so it never reads as a person. */
+export const HouseFace = memo(function HouseFace({ size = 32, tile = true }: { size?: number; tile?: boolean }) {
+  if (!housePaths) housePaths = gridToPaths(houseGrid());
+  return <PixelCanvas paths={housePaths} size={size} tile={tile} />;
+});
+
 const styles = StyleSheet.create({
-  canvas: { overflow: "hidden", backgroundColor: "#29233c" },
-  hairBack: { position: "absolute" }, head: { position: "absolute" }, fringe: { position: "absolute" },
-  eye: { position: "absolute" }, mouth: { position: "absolute", backgroundColor: "#743b54" },
-  glasses: { position: "absolute", borderColor: "#a8d7ff", borderWidth: 1 }, cap: { position: "absolute" },
+  tile: { backgroundColor: '#29233c', overflow: 'hidden' },
 });

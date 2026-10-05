@@ -11,6 +11,7 @@
   "dependencies": {
     "@flipthememe/arena-core": "workspace:*",
     "@flipthememe/client": "workspace:*",
+    "@noble/curves": "^2.4.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@solana/kit": "^7.1.1",
     "@wallet-ui/react-native-kit": "^4.3.0",
