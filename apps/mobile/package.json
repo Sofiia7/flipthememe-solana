@@ -10,15 +10,24 @@
   },
   "dependencies": {
     "@flipthememe/arena-core": "workspace:*",
-    "@solana/kit": "^8.3.0",
+    "@flipthememe/client": "workspace:*",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@solana/kit": "^7.1.1",
     "@wallet-ui/react-native-kit": "^4.3.0",
     "expo": "~57.0.22",
+    "expo-build-properties": "~57.0.17",
+    "expo-clipboard": "~57.0.2",
+    "expo-constants": "~57.0.18",
     "expo-dev-client": "~57.0.19",
     "expo-haptics": "~57.0.3",
+    "expo-linking": "~57.0.10",
+    "expo-secure-store": "~57.0.4",
     "react": "19.2.3",
     "react-native": "0.86.0",
     "react-native-nitro-modules": "^0.37.1",
-    "react-native-quick-crypto": "^1.1.7"
+    "react-native-quick-crypto": "^1.1.7",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-svg": "15.15.4"
   },
   "devDependencies": {
     "@types/react": "~19.2.0",
