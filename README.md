@@ -14,7 +14,7 @@ A fresh memecoin. A shared start. One minute to prove your call, without buying 
 ## Try it on an Android phone
 
 1. Install the APK. Any Android 7+ phone works; it is built and tested on a Solana Seeker.
-2. Install a Mobile Wallet Adapter wallet and switch it to devnet. Tested on a Seeker with **Solflare** (Settings, Network, Devnet). In our tests Phantom opened but did not return signatures over MWA.
+2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** works the same way on any Android phone. In our tests Phantom opened but did not return signatures over MWA.
 3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault and opens a 24-hour session. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
 4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the session key signs, no wallet pop-up.
 5. About two minutes after entry closes the result is in and winnings are in your balance. **Withdraw** sends free SOL back to your wallet.
