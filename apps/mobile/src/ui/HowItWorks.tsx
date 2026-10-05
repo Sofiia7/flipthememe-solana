@@ -57,7 +57,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="30s" color={C.neonYellow} size={12} />
       </Icon>
     ),
-    text: 'The strike is fixed 30 s after entry closes. You call the next 60 s.',
+    text: 'The strike is the average price of 10 s that start 30 s after entry closes. You call the next 60 s. Result in about 2 min.',
   },
   {
     icon: (
@@ -65,7 +65,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="x1.96" color={C.neonYellow} size={10} />
       </Icon>
     ),
-    text: 'Matched 1:1 with the other side. A win pays 1.96x.',
+    text: 'Matched 1:1 with the other side. A win pays 1.96x of the matched part; the rest comes back.',
   },
   {
     icon: (
@@ -89,7 +89,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="1" color={C.neonPink} size={16} />
       </Icon>
     ),
-    text: 'One arena, one token: the hottest coin that just graduated from pump.fun, so everyone plays the same chart.',
+    text: 'One arena, one token: a busy pump.fun coin whose pool is minutes old, so everyone plays the same chart. Price is TOKEN/SOL.',
   },
   {
     icon: (

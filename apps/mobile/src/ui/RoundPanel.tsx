@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
-import { Side, type PositionAccount } from '@flipthememe/client';
+import { Side, acceptedStake, isActivated, type PositionAccount } from '@flipthememe/client';
 import type { PositionView, RoundView } from '../chain/fetch';
 import { matchedPerSide, type InFlightStage } from '../chain/phase';
 import { faceFromBytes, type Expression } from '../face/faceModel';
@@ -145,7 +145,26 @@ export function MyRoundPanel({
         <SideColumn side={Side.Up} total={a.rawUp} positions={ups} me={me} myExpression={expression} big />
         <SideColumn side={Side.Down} total={a.rawDown} positions={downs} me={me} myExpression={expression} big />
       </View>
+      {/* While the strike is being fixed the house may still fill the short side: wait until the book is final. */}
+      {stage !== 'fixing' ? <MatchedLine rawUp={a.rawUp} rawDown={a.rawDown} minBank={a.minBank} side={position.account.side} stake={position.account.stake} /> : null}
     </View>
+  );
+}
+
+/**
+ * Once the house fill window is over the book is final: how much of my stake plays and how much comes back.
+ * Nothing to say when all of it plays.
+ */
+function MatchedLine({ rawUp, rawDown, minBank, side, stake }: { rawUp: bigint; rawDown: bigint; minBank: bigint; side: number; stake: bigint }) {
+  if (!isActivated(rawUp, rawDown, minBank)) {
+    return <Text style={[styles.matchedLine, { color: C.neonYellow }]}>NO MATCH · YOUR STAKE COMES BACK IN FULL</Text>;
+  }
+  const accepted = acceptedStake(rawUp, rawDown, side as Side, stake);
+  if (accepted === null || accepted >= stake) return null;
+  return (
+    <Text style={styles.matchedLine}>
+      IN PLAY {formatSol(accepted)} · {formatSol(stake - accepted)} COMES BACK
+    </Text>
   );
 }
 
@@ -247,6 +266,7 @@ export function NextRoundBar({ roundId, secondsLeft, opens }: { roundId: bigint;
 }
 
 const styles = StyleSheet.create({
+  matchedLine: { color: C.subtle, fontSize: 11, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
   panel: { borderWidth: 2, backgroundColor: C.panelDeep, padding: 8, gap: 8 },
   panelOpen: { borderColor: '#5b4f78', borderWidth: 1 },
   head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 22 },

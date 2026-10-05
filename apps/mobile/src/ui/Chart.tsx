@@ -12,6 +12,8 @@ type Props = {
   strike?: bigint | null;
   /** "STRIKE #101" */
   strikeLabel?: string;
+  /** "TESLA / SOL": the price is in SOL, not USD. */
+  pairLabel?: string;
   /**
    * The strike window with its label ("STRIKE IN 0:12"): strong while the strike is being fixed,
    * faint afterwards to show where the strike line comes from.
@@ -32,7 +34,7 @@ const PAD_BOTTOM = 16;
 const AHEAD_MAX_MS = 110_000;
 
 /** Live mainnet price: the strike as a dashed line with green above and red below, plus the round's windows. */
-export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, exitWindow, cutoffMs, stale, height = 150, emptyText }: Props) {
+export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, strikeWindow, exitWindow, cutoffMs, stale, height = 150, emptyText }: Props) {
   const [width, setWidth] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width));
 
@@ -143,6 +145,11 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
             </>
           ) : null}
           <Line x1={x(nowMs)} x2={x(nowMs)} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={C.border} strokeWidth={1} />
+          {pairLabel ? (
+            <SvgText x={4} y={PAD_TOP - 5} fill={C.subtle} fontSize={8} fontWeight="bold" fontFamily={MONO}>
+              {pairLabel}
+            </SvgText>
+          ) : null}
 
           {d && split ? (
             <>

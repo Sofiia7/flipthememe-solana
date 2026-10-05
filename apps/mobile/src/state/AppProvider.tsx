@@ -308,8 +308,8 @@ function resultToast(
       kind: 'won',
       tone: 'win',
       title: 'YOU WON',
-      body: `+${sol(amount)}`,
-      shareText: `I called ${sideName(side)} on ${token} in FlipTheMeme round #${round.id} and won ${sol(amount)} (Solana devnet test SOL). ${roundLink(round.id)}`,
+      body: `+${sol(amount - stake)}`,
+      shareText: `I called ${sideName(side)} on ${token} in FlipTheMeme round #${round.id} and won +${sol(amount - stake)} (Solana devnet test SOL). ${roundLink(round.id)}`,
     };
   }
   if (r.kind === 'lost') {
@@ -337,7 +337,7 @@ function resultToast(
     kind: r.kind === 'full-refund' ? 'full-refund' : 'refund',
     tone: 'neutral',
     title,
-    body: r.kind === 'full-refund' ? `+${sol(amount)}` : `+${sol(amount)} (1% fee)`,
+    body: r.kind === 'refund' && a.feeRefundBps > 0 ? `+${sol(amount)} (${a.feeRefundBps / 100}% fee)` : `+${sol(amount)}`,
     shareText: `Round #${round.id} on ${token} ended ${label} in FlipTheMeme (Solana devnet). ${roundLink(round.id)}`,
   };
 }

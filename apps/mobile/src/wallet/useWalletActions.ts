@@ -156,6 +156,35 @@ export function useWalletActions(input: {
     [run, owner, sessionKey, rpc, chainNowSec, signAndSubmit],
   );
 
+  /**
+   * Fast bets again without a deposit: a new 24 h session whose budget is the game balance the
+   * player already has (shown on the button), plus 0.03 SOL for the key when it runs low.
+   */
+  const renewSession = useCallback(
+    (budget: bigint) =>
+      run('renew', async () => {
+        const payer = owner;
+        if (!payer) throw new Error('Connect a wallet first.');
+        if (!sessionKey) throw new Error('The session key is still loading - try again in a second.');
+        if (budget <= 0n) throw new Error('Nothing in the game balance to play with - top up first.');
+        const [keyRaw] = await fetchAccounts(rpc, [sessionKey]);
+        const needsKeyGas = (keyRaw?.lamports ?? 0n) < SESSION_RULES.gasMin;
+        const ixs: Instruction[] = [
+          await startSession({
+            owner: payer,
+            sessionSigner: sessionKey,
+            expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
+            maxPerBet: SESSION_RULES.maxPerBet,
+            sessionCap: budget,
+          }),
+        ];
+        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: sessionKey, lamports: SESSION_RULES.gasTopUp }));
+        const signature = await signAndSubmit(payer, ixs);
+        return { message: `Fast bets are on for 24 h, up to ${sol(budget)} in total.`, signature };
+      }),
+    [run, owner, sessionKey, rpc, chainNowSec, signAndSubmit],
+  );
+
   const withdrawAll = useCallback(
     (available: bigint) =>
       run('withdraw', async () => {
@@ -207,6 +236,7 @@ export function useWalletActions(input: {
     connect,
     disconnect,
     topUpAndPlay,
+    renewSession,
     withdrawAll,
     revoke,
     airdrop,

@@ -60,7 +60,9 @@ function CountUpSol({ lamports }: { lamports: bigint }) {
 }
 
 function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  const { face, setTab } = useApp();
+  const { face, setTab, my } = useApp();
+  // The round is final first; the keeper's claim moves the money a few seconds later.
+  const credited = my.positions.some((p) => p.round?.id === toast.roundId && p.account.claimed);
   const { width } = useWindowDimensions();
   const pop = useRef(new Animated.Value(0)).current;
   const [sharing, setSharing] = useState(false);
@@ -83,7 +85,7 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   const share = () => {
     setSharing(true);
     void shareCard(
-      { kind: 'win', face, side: toast.side, roundId: toast.roundId, symbol: info?.symbol ?? null, imageUrl: info?.imageUrl ?? null, payout: toast.payout },
+      { kind: 'win', face, side: toast.side, roundId: toast.roundId, symbol: info?.symbol ?? null, imageUrl: info?.imageUrl ?? null, profit: toast.payout - toast.stake },
       toast.shareText,
       'Share your win',
     ).finally(() => setSharing(false));
@@ -99,7 +101,11 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
           <PixelFace face={face} size={150} expression="happy" />
         </Animated.View>
         <PixelText text="YOU WON" size={titleSize} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
-        <CountUpSol lamports={toast.payout} />
+        <CountUpSol lamports={toast.payout - toast.stake} />
+        <Text style={styles.credit}>
+          {formatSol(toast.payout)} SOL to your balance, stake included ·{' '}
+          <Text style={{ color: credited ? C.neonGreen : C.neonYellow }}>{credited ? 'CREDITED' : 'CREDITING...'}</Text>
+        </Text>
         <Text style={styles.meta}>
           <Text style={{ color: up ? C.neonGreen : C.neonRed }}>{up ? 'UP ▲' : 'DOWN ▼'}</Text>
           {info?.symbol ? ` · $${info.symbol}` : ''} · ROUND #{toast.roundId.toString()}
@@ -206,6 +212,7 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 0 },
   },
   meta: { color: C.text, fontSize: 14, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
+  credit: { color: C.white, fontSize: 12, fontWeight: '800', fontFamily: MONO, textAlign: 'center', opacity: 0.9 },
   buttons: { flexDirection: 'row', gap: 12, paddingHorizontal: 16 },
   flex: { flex: 1 },
   toastWrap: { position: 'absolute', left: 12, right: 12, zIndex: 100, elevation: 100 },

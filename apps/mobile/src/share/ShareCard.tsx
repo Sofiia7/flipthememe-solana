@@ -13,7 +13,7 @@ import { Gradient } from '../ui/Gradient';
 import { PixelText } from '../ui/PixelText';
 
 export type ShareCardData =
-  | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; payout: bigint }
+  | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; profit: bigint }
   | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null };
 
 export const CARD_W = 360;
@@ -62,7 +62,7 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
       {data.kind === 'win' ? (
         <View style={styles.center}>
           <PixelText text="I WON" size={6} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
-          <Text style={[styles.amount, { textShadowColor: C.neonGreen }]}>+{formatSol(data.payout)} SOL</Text>
+          <Text style={[styles.amount, { textShadowColor: C.neonGreen }]}>+{formatSol(data.profit)} SOL</Text>
           <View style={styles.tokenRow}>
             <Text style={styles.small}>CALLED</Text>
             <Text style={[styles.side, { color: sideColor }]}>{up ? 'UP ▲' : 'DOWN ▼'}</Text>

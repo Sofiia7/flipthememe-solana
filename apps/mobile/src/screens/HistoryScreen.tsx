@@ -90,7 +90,7 @@ function HistoryRow({ item, nowMs }: { item: MyPosition; nowMs: number }) {
   const share = () => {
     if (result.kind === 'won') {
       // Wins go out as the picture card; the text (with the round link) is the fallback.
-      const text = `I called ${side} on ${symbol} in FlipTheMeme round #${round.id} and won ${sol(result.payout ?? 0n)} (Solana devnet test SOL). ${roundLink(round.id)}`;
+      const text = `I called ${side} on ${symbol} in FlipTheMeme round #${round.id} and won +${sol((result.payout ?? 0n) - p.stake)} (Solana devnet test SOL). ${roundLink(round.id)}`;
       void shareCard(
         {
           kind: 'win',
@@ -99,7 +99,7 @@ function HistoryRow({ item, nowMs }: { item: MyPosition; nowMs: number }) {
           roundId: round.id,
           symbol: info?.symbol ?? null,
           imageUrl: info?.imageUrl ?? null,
-          payout: result.payout ?? 0n,
+          profit: (result.payout ?? 0n) - p.stake,
         },
         text,
         'Share your win',

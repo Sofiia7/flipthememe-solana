@@ -260,3 +260,19 @@ test('chart line splits exactly at the strike level, so its colour always follow
   // All above: nothing red at all, however far the strike sits below.
   assert.deepEqual(splitAtLevel([{ x: 0, y: 5 }, { x: 1, y: 9 }], 100), { above: 'M0.0 5.0L1.0 9.0', below: '' });
 });
+
+test('top up plan lists every lamport leaving the wallet; win profit is 0.96x of a matched stake', async () => {
+  const { topUpPlan, maxWinProfit, NETWORK_FEE } = await import('../wallet/topUpPlan.ts');
+  const SOL = 1_000_000_000n;
+  const rules = { gasMin: SOL / 100n, gasTopUp: (SOL * 3n) / 100n };
+  // First top up: deposit, key fees, both accounts' rent and the network fee.
+  const first = topUpPlan({ deposit: SOL / 10n, vaultExists: false, sessionExists: false, keyLamports: 0n, rent: { vault: 1_287_600n, session: 1_851_360n }, ...rules });
+  assert.equal(first.keyFees, (SOL * 3n) / 100n);
+  assert.equal(first.setup, 1_287_600n + 1_851_360n);
+  assert.equal(first.total, SOL / 10n + (SOL * 3n) / 100n + 1_287_600n + 1_851_360n + NETWORK_FEE);
+  // Renewal with a funded key and existing accounts: only the network fee.
+  const renew = topUpPlan({ deposit: 0n, vaultExists: true, sessionExists: true, keyLamports: SOL / 10n, rent: null, ...rules });
+  assert.deepEqual([renew.keyFees, renew.setup, renew.total], [0n, 0n, NETWORK_FEE]);
+  assert.equal(maxWinProfit(SOL / 50n, 200), 19_200_000n); // 0.02 SOL wins +0.0192
+  assert.equal(maxWinProfit(SOL / 100n, 200), 9_600_000n);
+});

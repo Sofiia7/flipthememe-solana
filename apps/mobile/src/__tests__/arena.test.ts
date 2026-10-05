@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Outcome, RefundReason, RoundStatus, type RoundAccount } from '@flipthememe/client';
-import { deltaView, formatAgoShort, graduatedLabel } from '../lib/format.ts';
+import { deltaView, formatAgoShort, poolAgeLabel } from '../lib/format.ts';
 import { entryTick, inFlightStage, selectChartRound, selectPanel, strikeState, OVERDUE_SECS } from '../chain/phase.ts';
 import { createBoolStore, type KeyValueStorage } from '../lib/boolStore.ts';
 import { GLYPHS, GLYPH_H, GLYPH_W, cellsToPath, textCells } from '../lib/pixelFont.ts';
@@ -68,16 +68,16 @@ test('delta vs strike: sign from integers, arrow and tone', () => {
   assert.equal(deltaView(0n, 5n), null);
 });
 
-test('graduated label from the pool creation time', () => {
+test('pool age label from the pool creation time', () => {
   const now = 1_800_000_000_000;
-  assert.equal(graduatedLabel(now - 12 * 60_000, now), 'graduated 12m ago');
-  assert.equal(graduatedLabel(now - 45_000, now), 'graduated 45s ago');
-  assert.equal(graduatedLabel(now - 3 * 3_600_000 - 5, now), 'graduated 3h ago');
-  assert.equal(graduatedLabel(now - 3 * 86_400_000, now), 'graduated 3d ago');
-  assert.equal(graduatedLabel(now - 2_000, now), 'graduated just now');
-  assert.equal(graduatedLabel(now + 60_000, now), 'graduated just now'); // clock skew
-  assert.equal(graduatedLabel(null, now), null);
-  assert.equal(graduatedLabel(0, now), null);
+  assert.equal(poolAgeLabel(now - 12 * 60_000, now), 'pool 12m old');
+  assert.equal(poolAgeLabel(now - 45_000, now), 'pool 45s old');
+  assert.equal(poolAgeLabel(now - 3 * 3_600_000 - 5, now), 'pool 3h old');
+  assert.equal(poolAgeLabel(now - 3 * 86_400_000, now), 'pool 3d old');
+  assert.equal(poolAgeLabel(now - 2_000, now), 'pool just opened');
+  assert.equal(poolAgeLabel(now + 60_000, now), 'pool just opened'); // clock skew
+  assert.equal(poolAgeLabel(null, now), null);
+  assert.equal(poolAgeLabel(0, now), null);
   assert.equal(formatAgoShort(119_999), '1m');
   assert.equal(formatAgoShort(-5), '0s');
 });

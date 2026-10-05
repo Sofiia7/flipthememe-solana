@@ -9,7 +9,7 @@ import {
 } from '@solana/kit';
 import { PROGRAM_ERRORS, TransactionFailed, programErrorName, type ProgramErrorName } from '@flipthememe/client';
 
-export type TxAction = 'bet' | 'topup' | 'withdraw' | 'revoke' | 'claim' | 'airdrop' | 'connect';
+export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'claim' | 'airdrop' | 'connect';
 
 function stringify(value: unknown): string {
   try {

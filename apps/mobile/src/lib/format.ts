@@ -143,14 +143,14 @@ export function formatAgoShort(ms: number): string {
 }
 
 /**
- * "graduated 12m ago": the PumpSwap pool is created when the token graduates from pump.fun,
- * so the pool's creation time (DexScreener pairCreatedAt, ms) is the graduation time.
+ * "pool 12m old", from the pool's creation time (DexScreener pairCreatedAt, ms). For a pump.fun
+ * coin that is usually when it graduated, but the app does not claim it: it only knows the pool.
  */
-export function graduatedLabel(pairCreatedAtMs: number | null | undefined, nowMs: number): string | null {
+export function poolAgeLabel(pairCreatedAtMs: number | null | undefined, nowMs: number): string | null {
   if (pairCreatedAtMs === null || pairCreatedAtMs === undefined || !Number.isFinite(pairCreatedAtMs) || pairCreatedAtMs <= 0) return null;
   const age = nowMs - pairCreatedAtMs;
-  if (age < 10_000) return 'graduated just now';
-  return `graduated ${formatAgoShort(age)} ago`;
+  if (age < 10_000) return 'pool just opened';
+  return `pool ${formatAgoShort(age)} old`;
 }
 
 /** Web link to a round: shared in messengers, opens the app through Android App Links. */

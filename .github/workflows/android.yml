@@ -78,6 +78,9 @@ jobs:
 
       - name: Expo prebuild (android)
         working-directory: apps/mobile
+        env:
+          # app.config.js: every build gets a higher Android versionCode
+          FTM_VERSION_CODE: ${{ github.run_number }}
         run: pnpm exec expo prebuild --platform android --no-install
 
       - name: Android SDK licenses and NDK

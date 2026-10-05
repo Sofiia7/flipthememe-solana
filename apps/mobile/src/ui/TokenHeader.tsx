@@ -3,7 +3,7 @@ import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native'
 import type { Address } from '@solana/kit';
 import { explorer } from '../config';
 import { useTokenInfo } from '../chain/useTokenInfo';
-import { formatUsdCompact, graduatedLabel, shortAddress } from '../lib/format';
+import { formatUsdCompact, poolAgeLabel, shortAddress } from '../lib/format';
 import { C, MONO } from '../theme';
 
 /** The arena token: logo, ticker and one line of signals. Tap opens the price source (the mainnet pool). */
@@ -21,8 +21,8 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
     );
   }
   const symbol = info?.symbol ?? shortAddress(mint);
-  const graduated = graduatedLabel(info?.pairCreatedAt, nowMs);
-  const signals = [graduated, info?.liquidityUsd != null ? `liq ${formatUsdCompact(info.liquidityUsd)}` : null, info?.txnsM5 != null ? `${info.txnsM5} tx/5m` : null]
+  const poolAge = poolAgeLabel(info?.pairCreatedAt, nowMs);
+  const signals = [poolAge, info?.liquidityUsd != null ? `liq ${formatUsdCompact(info.liquidityUsd)}` : null, info?.txnsM5 != null ? `${info.txnsM5} tx/5m` : null]
     .filter(Boolean)
     .join(' · ');
   return (

@@ -37,6 +37,7 @@ import { PixelText } from '../ui/PixelText';
 import { ExtraRoundLine, MyRoundPanel, NextRoundBar, OpenRoundPanel } from '../ui/RoundPanel';
 import { TokenHeader } from '../ui/TokenHeader';
 import { TopUpSheet } from '../ui/TopUpSheet';
+import { maxWinProfit } from '../wallet/topUpPlan';
 
 type Mine = { round: RoundView; position: PositionView };
 type Standing = 'winning' | 'losing' | 'tie' | null;
@@ -125,7 +126,8 @@ export function ArenaScreen() {
     const st = strikeState(m.round.account, nowSec);
     if (st.kind !== 'fixed') return null;
     const p = priceOf(m.round.account.pool);
-    return p ? standingNow(m.position.account.side, st.strike, p.price) : null;
+    // An old price must not say "winning now": the panel then shows no standing until it is fresh.
+    return p && !p.stale ? standingNow(m.position.account.side, st.strike, p.price) : null;
   };
 
   // The chart follows my round, else the latest live round on this pool.
@@ -171,6 +173,8 @@ export function ArenaScreen() {
   const available = my.vault?.available ?? 0n;
   const remaining = my.session ? my.session.sessionCap - my.session.spent : 0n;
   const keyGasOk = (my.keyLamports ?? 0n) >= SESSION_RULES.gasPerBet;
+  // Money already in the game balance: fast bets come back with one approval and no deposit.
+  const canRenew = available >= minStake && (status !== 'active' || !keyGasOk);
   const inOpen = open ? mine.get(open.id) : undefined;
   const pendingHere = pending && open && pending.roundId === open.id ? pending : null;
   const working = betting.bet.phase === 'signing' || betting.bet.phase === 'sending' || betting.bet.phase === 'confirming';
@@ -184,9 +188,11 @@ export function ArenaScreen() {
     else if (!keyGasOk) topUpReason = 'The session key needs devnet SOL for fees.';
   }
 
+  const arenaStaleSec = arena.updatedAt ? Math.floor((nowMs - arena.updatedAt) / 1000) : null;
   let blocked: string | null = null;
   let blockedByFunds = false;
   if (!open) blocked = 'The next round opens on the minute.';
+  else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
@@ -199,7 +205,10 @@ export function ArenaScreen() {
   } else if (amount > open.account.maxStake || amount < open.account.minStake) blocked = "Out of this round's limits.";
   const upFits = open ? fitsDepth(open.account, Side.Up, amount) : false;
   const downFits = open ? fitsDepth(open.account, Side.Down, amount) : false;
-  const multiplier = multiplierText(open?.account.feeWinBps ?? arena.config?.feeWinBps ?? 200);
+  const feeWinBps = open?.account.feeWinBps ?? arena.config?.feeWinBps ?? 200;
+  const multiplier = multiplierText(feeWinBps);
+  // x1.96 pays on the matched part; this is the profit when the whole amount gets matched.
+  const winProfit = maxWinProfit(amount, feeWinBps);
 
   // Countdown ticks in the last 5 seconds of entry.
   const tick = owner && open && !paused ? entryTick(secondsLeft) : null;
@@ -230,7 +239,6 @@ export function ArenaScreen() {
     ).finally(() => setSharing(false));
   };
 
-  const arenaStaleSec = arena.updatedAt ? Math.floor((nowMs - arena.updatedAt) / 1000) : null;
   const lateRounds = myUnresolved.filter((m) => nowSec > Number(m.round.account.exitEnd) + OVERDUE_SECS);
   const extraRounds = panel.kind === 'mine' ? panel.others.map((r) => mine.get(r.id)).filter((m): m is Mine => !!m) : [];
 
@@ -284,6 +292,7 @@ export function ArenaScreen() {
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}
             strikeLabel={chartRound ? `STRIKE #${chartRound.id}` : undefined}
+            pairLabel={`${symbol ? symbol.toUpperCase() : 'TOKEN'} / SOL`}
             strikeWindow={strikeWindow}
             exitWindow={
               chartRound ? [chainToLocalMs(chartRound.account.exitStart, offsetSec), chainToLocalMs(chartRound.account.exitEnd, offsetSec)] : null
@@ -332,7 +341,7 @@ export function ArenaScreen() {
             />
           ))}
 
-          <ResultsStrip finals={groups.finals} mine={mine} />
+          <ResultsStrip finals={groups.finals.filter((r) => feed.pool !== null && r.account.pool === feed.pool)} mine={mine} />
 
           <Pressable onPress={() => tokenRound && void Linking.openURL(explorer.dexscreener(tokenRound.account.pool)).catch(() => undefined)}>
             <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
@@ -384,7 +393,13 @@ export function ArenaScreen() {
         ) : topUpReason && !pendingHere ? (
           <>
             <Text style={styles.reason}>{topUpReason}</Text>
-            <NeonButton title="TOP UP & PLAY" subtitle="one wallet approval" kind="gold" big onPress={() => setTopUpOpen(true)} />
+            <NeonButton
+              title={canRenew ? 'PLAY AGAIN' : 'TOP UP & PLAY'}
+              subtitle={canRenew ? `${formatSol(available)} SOL ready · no deposit` : 'one wallet approval'}
+              kind="gold"
+              big
+              onPress={() => setTopUpOpen(true)}
+            />
           </>
         ) : (
           <>
@@ -405,7 +420,7 @@ export function ArenaScreen() {
             <View style={styles.sides}>
               <NeonButton
                 title="UP ▲"
-                subtitle={upFits ? `${formatSol(amount)} SOL` : 'pool too shallow'}
+                subtitle={upFits ? `win up to +${formatSol(winProfit)}` : 'pool too shallow'}
                 kind="up"
                 big
                 badge={multiplier}
@@ -416,7 +431,7 @@ export function ArenaScreen() {
               />
               <NeonButton
                 title="DOWN ▼"
-                subtitle={downFits ? `${formatSol(amount)} SOL` : 'pool too shallow'}
+                subtitle={downFits ? `win up to +${formatSol(winProfit)}` : 'pool too shallow'}
                 kind="down"
                 big
                 badge={multiplier}
