@@ -1,0 +1,188 @@
+name: Android APKs
+
+# One job, one prebuild, two APKs:
+#   FlipTheMeme-apk            signed release APK (release key from repository secrets)
+#   FlipTheMeme-devclient-apk  debug development client: loads the JS bundle from Metro
+#                              (`pnpm --filter @flipthememe/mobile start` on the laptop, same LAN)
+on:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: "ABIs to build, comma separated (armeabi-v7a,arm64-v8a,x86,x86_64)"
+        required: false
+        default: "arm64-v8a,x86_64"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Release and dev-client APKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      # arm64-v8a: phones (Seeker, Saga, any modern Android); x86_64: the Android emulator.
+      ABIS: ${{ inputs.abis || 'arm64-v8a,x86_64' }}
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      EXPO_NO_TELEMETRY: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Runner resources
+        run: |
+          echo "cpus: $(nproc)"
+          free -h
+          df -h / "$RUNNER_TEMP"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: pnpm via corepack
+        run: |
+          npm install -g corepack@latest
+          corepack enable
+          echo "node $(node --version), pnpm $(pnpm --version)"
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          if ! pnpm install --frozen-lockfile; then
+            echo "::warning::pnpm install --frozen-lockfile failed; retrying without the frozen lockfile"
+            pnpm install --no-frozen-lockfile
+          fi
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Expo prebuild (android)
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild --platform android --no-install
+
+      - name: Android SDK licenses and NDK
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          RN_DIR=$(cd apps/mobile && node -p "require('path').dirname(require.resolve('react-native/package.json'))")
+          NDK=$(sed -n 's/^ndkVersion *= *"\(.*\)"/\1/p' "$RN_DIR/gradle/libs.versions.toml")
+          echo "react-native wants NDK ${NDK:-<unknown>}; installed: $(ls "$ANDROID_HOME/ndk" 2>/dev/null | tr '\n' ' ')"
+          if [ -n "$NDK" ] && [ ! -d "$ANDROID_HOME/ndk/$NDK" ]; then
+            "$SDKMANAGER" --install "ndk;$NDK" > /dev/null
+          fi
+
+      - name: CI Gradle settings
+        working-directory: apps/mobile/android
+        run: |
+          sed -i 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8/' gradle.properties
+          echo "kotlin.daemon.jvmargs=-Xmx2g" >> gradle.properties
+          grep -E '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|reactNativeArchitectures)=' gradle.properties
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      # ---- signed release APK ----
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_B64" ]; then
+            echo "::error::Repository secret ANDROID_KEYSTORE_B64 is not set"
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+
+      - name: Gradle assembleRelease
+        working-directory: apps/mobile/android
+        env:
+          FTM_KEYSTORE_FILE: ${{ runner.temp }}/release.p12
+          FTM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FTM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: ./gradlew assembleRelease --no-daemon --console=plain --stacktrace -PreactNativeArchitectures="$ABIS"
+
+      - name: Verify release signature, name the APK
+        id: release
+        working-directory: apps/mobile
+        env:
+          FTM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FTM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
+          GOT=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | tr -d ':' | tr 'a-f' 'A-F')
+          WANT=$(keytool -list -v -storetype pkcs12 -keystore "$RUNNER_TEMP/release.p12" -storepass:env FTM_KEYSTORE_PASSWORD -alias "$FTM_KEY_ALIAS" | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'a-f' 'A-F')
+          if [ -z "$WANT" ] || [ "$GOT" != "$WANT" ]; then
+            echo "::error::APK is not signed with the release key (apk: ${GOT:-none}, keystore: ${WANT:-none})"
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/release.p12"
+          VERSION=$(node -p "require('./app.json').expo.version")
+          OUT="$RUNNER_TEMP/FlipTheMeme-${VERSION}-${GITHUB_RUN_NUMBER}.apk"
+          cp "$APK" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $(basename "$OUT")"
+            echo "- ABIs: $ABIS"
+            echo "- size: $(stat -c %s "$OUT") bytes"
+            echo "- sha256: \`$(sha256sum "$OUT" | cut -d' ' -f1)\`"
+            echo "- signing cert SHA-256: \`$GOT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FlipTheMeme-apk
+          path: ${{ steps.release.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---- debug development client (no secrets; standard debug keystore) ----
+      - name: Gradle assembleDebug (development client)
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleDebug --no-daemon --console=plain --stacktrace -PreactNativeArchitectures="$ABIS"
+
+      - name: Name the dev-client APK
+        id: devclient
+        working-directory: apps/mobile
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          VERSION=$(node -p "require('./app.json').expo.version")
+          OUT="$RUNNER_TEMP/FlipTheMeme-devclient-${VERSION}-${GITHUB_RUN_NUMBER}.apk"
+          cp "$APK" "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $(basename "$OUT")"
+            echo "- debug build, signed with the standard Android debug key"
+            echo "- size: $(stat -c %s "$OUT") bytes"
+            echo "- sha256: \`$(sha256sum "$OUT" | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FlipTheMeme-devclient-apk
+          path: ${{ steps.devclient.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.p12"
