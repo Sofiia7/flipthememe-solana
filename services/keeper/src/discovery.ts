@@ -23,6 +23,7 @@ import {
   GECKOTERMINAL_MULTI_LIMIT,
   GeckoTerminalHttpError,
   fetchNewPumpSwapPools,
+  fetchTrendingPumpSwapPools,
   fetchPumpSwapPoolsByAddress,
   fetchTopPumpSwapPools,
   type GeckoTerminalFetch,
@@ -70,6 +71,7 @@ export class PoolDiscovery {
   private readonly fetchFn: GeckoTerminalFetch;
   private readonly maxCalls: number;
   private readonly newPoolsPages: number;
+  private readonly trending: boolean;
   private readonly tracked = new Map<Address, Tracked>();
   private readonly numbers = new Map<Address, Numbers>();
   private newestSeenMs: number | null = null;
@@ -89,6 +91,11 @@ export class PoolDiscovery {
     maxCalls?: number;
     /** `new_pools` pages per refresh at most (default 3; 0 turns tracking of new pools off). */
     newPoolsPages?: number;
+    /**
+     * Start every refresh with the 5-minute trending list (default off). When it answers, the refresh
+     * counts as usable even if a later request fails, so a busy shared IP does not freeze rotation.
+     */
+    trending?: boolean;
   }) {
     this.gate = opts.gate;
     this.logger = opts.logger;
@@ -100,6 +107,7 @@ export class PoolDiscovery {
     };
     this.maxCalls = opts.maxCalls ?? MAX_CALLS_PER_REFRESH;
     this.newPoolsPages = Math.min(opts.newPoolsPages ?? NEW_POOLS_MAX_PAGES, NEW_POOLS_MAX_PAGES);
+    this.trending = opts.trending ?? false;
   }
 
   async refresh(nowMs: number, current: Address | null): Promise<DiscoveryResult> {
@@ -110,7 +118,18 @@ export class PoolDiscovery {
     }
     let budget = this.maxCalls;
     let step = 'pools/multi';
+    let trendingOk = false;
     try {
+      if (this.trending && budget > 0) {
+        step = 'trending';
+        budget--;
+        for (const c of await fetchTrendingPumpSwapPools(this.fetchFn, nowMs)) {
+          this.track(c, nowMs);
+          this.numbers.set(c.pool, { candidate: c, atMs: nowMs });
+        }
+        trendingOk = true;
+        step = 'pools/multi';
+      }
       const ask = this.poolsToRefresh(nowMs, current);
       if (ask.length > 0 && budget > 0) {
         budget--;
@@ -159,7 +178,8 @@ export class PoolDiscovery {
         skipRefreshes: this.skips,
         keeping: current,
       });
-      return { candidates: this.candidates(nowMs), complete: false };
+      if (trendingOk) this.lastOkAtMs = nowMs;
+      return { candidates: this.candidates(nowMs), complete: trendingOk };
     }
     this.failures = 0;
     this.lastOkAtMs = nowMs;

@@ -61,6 +61,7 @@ const GECKOTERMINAL_SOLANA_URL = 'https://api.geckoterminal.com/api/v2/networks/
 const GECKOTERMINAL_POOLS_URL = `${GECKOTERMINAL_SOLANA_URL}/dexes/pumpswap/pools`;
 const GECKOTERMINAL_NEW_POOLS_URL = `${GECKOTERMINAL_SOLANA_URL}/new_pools`;
 const GECKOTERMINAL_MULTI_URL = `${GECKOTERMINAL_SOLANA_URL}/pools/multi`;
+const GECKOTERMINAL_TRENDING_URL = `${GECKOTERMINAL_SOLANA_URL}/trending_pools`;
 // GeckoTerminal pins the response format to an API version through the Accept header.
 const GECKOTERMINAL_ACCEPT = 'application/json;version=20230203';
 const DISCOVERY_PAGES = [1, 2];
@@ -357,6 +358,19 @@ export async function fetchNewPumpSwapPools(
     newestCreatedAtMs: newest,
     oldestCreatedAtMs: oldest,
   };
+}
+
+/**
+ * The hottest Solana pools of the last 5 minutes (GeckoTerminal `trending_pools?duration=5m`, all
+ * dexes, 20 rows), keeping the PumpSwap pools quoted in wSOL in API order. One request finds fresh
+ * pump.fun graduates while they trade hardest. Errors as in `fetchTopPumpSwapPools`.
+ */
+export async function fetchTrendingPumpSwapPools(
+  fetchFn: GeckoTerminalFetch = fetch,
+  nowMs: number = Date.now(),
+): Promise<PoolCandidate[]> {
+  const rows = await geckoRows(fetchFn, `${GECKOTERMINAL_TRENDING_URL}?duration=5m&page=1`);
+  return uniqueCandidates(rows, nowMs, (row) => dexOf(row) === GECKOTERMINAL_PUMPSWAP_DEX);
 }
 
 /**

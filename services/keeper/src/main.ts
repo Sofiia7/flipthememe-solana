@@ -91,7 +91,8 @@ async function main(): Promise<void> {
     persisted && !cfg.poolOverride
       ? { ...persisted, quoteReserve: 0n, reserveAtMs: 0 }
       : null;
-  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log });
+  // Trending first (one call finds the hottest fresh pools); one new_pools page keeps the tracked list growing.
+  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: true, newPoolsPages: 1 });
   const selector = new PoolSelector({
     source: discovery,
     chain: poolChain(refs, mainnet),

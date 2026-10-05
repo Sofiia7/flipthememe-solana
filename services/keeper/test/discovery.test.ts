@@ -34,6 +34,7 @@ class FakeGecko {
   readonly urls: string[] = [];
   launches: { c: PoolCandidate; dex: string }[] = [];
   top: PoolCandidate[] = [];
+  trending: { c: PoolCandidate; dex: string }[] = [];
   readonly numbers = new Map<string, PoolCandidate>();
   clock = NOW;
   failWith: number | null = null;
@@ -57,6 +58,9 @@ class FakeGecko {
     if (u.pathname.includes('/pools/multi/')) {
       const asked = (u.pathname.split('/pools/multi/')[1] ?? '').split(',');
       return { ok: true, status: 200, json: async () => ({ data: asked.flatMap((a) => (this.numbers.has(a) ? [row(this.numbers.get(a) as PoolCandidate, 'pumpswap')] : [])) }) };
+    }
+    if (u.pathname.endsWith('/trending_pools')) {
+      return { ok: true, status: 200, json: async () => ({ data: this.trending.map((l) => row(l.c, l.dex)) }) };
     }
     if (u.pathname.endsWith('/dexes/pumpswap/pools')) {
       return { ok: true, status: 200, json: async () => ({ data: this.top.slice((page - 1) * 20, page * 20).map((c) => row(c, 'pumpswap')) }) };
@@ -263,5 +267,30 @@ describe('PoolDiscovery: failures', () => {
     assert.equal(d.status(NOW + 179 * MINUTE).tracked, 1);
     await d.refresh(NOW + 179 * MINUTE + 1, null);
     assert.equal(d.status(NOW + 179 * MINUTE + 1).tracked, 0);
+  });
+});
+
+describe('PoolDiscovery: trending first', () => {
+  test('hottest PumpSwap pools become candidates at once; a later 429 still leaves a usable refresh', async () => {
+    const gecko = new FakeGecko();
+    const hot = candidate(500, 900, 20 * MINUTE);
+    gecko.trending = [
+      { c: hot, dex: 'pumpswap' },
+      { c: candidate(501, 2000, 6 * MINUTE), dex: 'raydium' },
+    ];
+    gecko.failUrl = /new_pools/;
+    const logs: LogFields[] = [];
+    const d = new PoolDiscovery({ gate: DEFAULT_GATE, logger: (f) => logs.push(f), fetchFn: gecko.fetchFn, trending: true, newPoolsPages: 1 });
+    const r = await d.refresh(NOW, null);
+    assert.ok(gecko.urls[0]?.includes('/trending_pools?duration=5m'), gecko.urls[0]);
+    assert.equal(r.complete, true);
+    assert.deepEqual(r.candidates.map((c) => c.pool), [hot.pool]);
+    assert.equal(logs.at(-1)?.event, 'pool_discovery_failed');
+  });
+
+  test('off by default: no trending request', async () => {
+    const gecko = new FakeGecko();
+    await discovery(gecko).refresh(NOW, null);
+    assert.ok(gecko.urls.every((u) => !u.includes('trending_pools')));
   });
 });
