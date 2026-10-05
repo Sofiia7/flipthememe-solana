@@ -133,7 +133,7 @@ jobs:
           test -f "$APK"
           BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
-          GOT=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | tr -d ':' | tr 'a-f' 'A-F')
+          GOT=$(sed -n -E 's/^(Signer #1|V[0-9.]+ Signer): certificate SHA-256 digest: //p' "$RUNNER_TEMP/apksigner.txt" | head -1 | tr -d ':' | tr 'a-f' 'A-F')
           WANT=$(keytool -list -v -storetype pkcs12 -keystore "$RUNNER_TEMP/release.p12" -storepass:env FTM_KEYSTORE_PASSWORD -alias "$FTM_KEY_ALIAS" | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'a-f' 'A-F')
           if [ -z "$WANT" ] || [ "$GOT" != "$WANT" ]; then
             echo "::error::APK is not signed with the release key (apk: ${GOT:-none}, keystore: ${WANT:-none})"
