@@ -629,6 +629,7 @@ fn empty_rounds_close_and_return_rent() {
     let a = env.player(SOL);
     env.create_round(0, T0, SOL).unwrap();
     env.create_round(1, T0 + 60, SOL).unwrap();
+    env.warp(T0 + 60);
     env.bet(1, &a, Side::Up, CSOL).unwrap();
     let admin = env.admin.insecure_clone();
     env.warp(T0 + 160);
