@@ -214,7 +214,7 @@ export function ArenaScreen() {
 
   const challenge = (roundId: bigint, side: number, position?: PositionView) => {
     const token = symbol ? `$${symbol}` : 'a fresh meme coin';
-    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${roundId} (Solana devnet, test SOL). Take the other side: ${roundLink(roundId)}`;
+    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${roundId} (Solana devnet, test SOL). Take the other side: ${roundLink(roundId, { side: sideName(side), token: symbol })}`;
     setSharing(true);
     void shareCard(
       {

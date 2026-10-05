@@ -6,7 +6,7 @@ import { Image, Share, StyleSheet, Text, View } from 'react-native';
 import { Side } from '@flipthememe/client';
 import { type Face } from '../face/faceModel';
 import { formatSol } from '../lib/format';
-import { sharingModule, viewShotModule } from '../lib/nativeOptional';
+import { rnShareModule, sharingModule, viewShotModule } from '../lib/nativeOptional';
 import { PixelFace } from '../PixelFace';
 import { C, GRAD, MONO } from '../theme';
 import { Gradient } from '../ui/Gradient';
@@ -175,15 +175,25 @@ export function ShareCardHost() {
 
 let sharing = false;
 
-/** Shares the card as a PNG; on any failure shares `fallbackText` (which carries the deep link) instead. */
-export async function shareCard(data: ShareCardData, fallbackText: string, dialogTitle: string): Promise<void> {
+/**
+ * Shares the card as a PNG with `text` as its caption (messengers keep the round link that way).
+ * Without the share module the image goes alone; on any failure `text` is shared instead.
+ */
+export async function shareCard(data: ShareCardData, text: string, dialogTitle: string): Promise<void> {
   if (sharing) return;
   sharing = true;
+  const fallbackText = text;
   try {
+    const rnShare = rnShareModule();
     const sharingApi = sharingModule();
-    if (!sharingApi || !viewShotModule()) throw new Error('image sharing is not in this build');
+    if ((!rnShare && !sharingApi) || !viewShotModule()) throw new Error('image sharing is not in this build');
     const uri = await captureCard(data);
-    await sharingApi.shareAsync(uri, { mimeType: 'image/png', dialogTitle });
+    if (rnShare) {
+      // failOnCancel off: closing the share sheet is not a failure, so no text share follows it.
+      await rnShare.default.open({ url: uri, type: 'image/png', message: text, title: dialogTitle, failOnCancel: false });
+    } else if (sharingApi) {
+      await sharingApi.shareAsync(uri, { mimeType: 'image/png', dialogTitle });
+    }
   } catch (error) {
     console.warn('[ftm] image share failed, sharing text', error);
     await Share.share({ message: fallbackText }).catch(() => undefined);

@@ -153,10 +153,14 @@ export function graduatedLabel(pairCreatedAtMs: number | null | undefined, nowMs
   return `graduated ${formatAgoShort(age)} ago`;
 }
 
-/** Parse "flipthememe://round/123" (also with extra slashes or a query) into a round id. */
+/** Web link to a round: shared in messengers, opens the app through Android App Links. */
+export const WEB_ROUND_LINK = 'https://sol.flipthememe.com/r/';
+
+/** Round id from the app scheme (flipthememe://round/12) or the web link (https://sol.flipthememe.com/r/12). */
 export function parseRoundLink(url: string | null | undefined): bigint | null {
   if (!url) return null;
-  const match = url.match(/^flipthememe:\/\/+round\/(\d{1,20})(?:[/?#].*)?$/i);
+  const match =
+    url.match(/^flipthememe:\/\/+round\/(\d{1,20})(?:[/?#].*)?$/i) ?? url.match(/^https:\/\/sol\.flipthememe\.com\/r\/(\d{1,20})(?:[/?#].*)?$/i);
   if (!match) return null;
   try {
     return BigInt(match[1]);

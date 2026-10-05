@@ -1,0 +1,10 @@
+{
+  // sol.flipthememe.com: landing page for shared round links and Android App Links.
+  // DNS: AAAA sol -> 100:: (proxied) in the flipthememe.com zone; this route serves it.
+  "name": "ftm-link",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": false,
+  "routes": [{ "pattern": "sol.flipthememe.com/*", "zone_name": "flipthememe.com" }],
+  "observability": { "enabled": true }
+}

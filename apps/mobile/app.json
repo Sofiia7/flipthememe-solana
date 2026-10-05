@@ -11,9 +11,29 @@
       "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#19142c"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "sol.flipthememe.com",
+              "pathPrefix": "/r/"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
     },
-    "plugins": ["expo-dev-client", "./plugins/withReleaseSigning"],
+    "plugins": [
+      "expo-dev-client",
+      "./plugins/withReleaseSigning"
+    ],
     "extra": {
       "network": "devnet",
       "apiBaseUrl": "http://10.0.2.2:8787"

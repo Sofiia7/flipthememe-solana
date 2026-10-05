@@ -1,4 +1,5 @@
 import { LAMPORTS_PER_SOL } from '@flipthememe/client';
+import { WEB_ROUND_LINK } from './lib/format';
 
 export const DEVNET_RPC = 'https://api.devnet.solana.com';
 /** Devnet endpoints in failover order: a phone whose DNS loses one host still reaches the other. */
@@ -57,4 +58,8 @@ export const explorer = {
   dexscreener: (pool: string) => `https://dexscreener.com/solana/${pool}`,
 };
 
-export const roundLink = (roundId: bigint) => `${DEEP_LINK_PREFIX}${roundId}`;
+/** Link to a round for messengers; a challenge also names the side and the token for the landing page. */
+export const roundLink = (roundId: bigint, challenge?: { side: string; token: string | null }) =>
+  `${WEB_ROUND_LINK}${roundId}${
+    challenge ? `?side=${challenge.side.toLowerCase()}${challenge.token ? `&t=${encodeURIComponent(challenge.token)}` : ''}` : ''
+  }`;

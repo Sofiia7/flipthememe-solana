@@ -47,6 +47,12 @@ export const sharingModule = load(
   () => require('expo-sharing') as typeof import('expo-sharing'),
 );
 
+/** Shares an image together with text (the caption carries the round link); expo-sharing sends the file alone. */
+export const rnShareModule = load(
+  () => turboModule('RNShare'),
+  () => require('react-native-share') as typeof import('react-native-share'),
+);
+
 export const viewShotModule = load(
   () => turboModule('RNViewShot'),
   () => require('react-native-view-shot') as typeof import('react-native-view-shot'),
