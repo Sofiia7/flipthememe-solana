@@ -28,7 +28,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
   return (
     <Pressable
       style={styles.row}
-      onPress={() => pool && void Linking.openURL(explorer.mainnetAddress(pool)).catch(() => undefined)}
+      onPress={() => pool && void Linking.openURL(explorer.dexscreener(pool)).catch(() => undefined)}
       accessibilityRole="link"
       accessibilityLabel={`$${symbol}, price source on Solana mainnet`}
     >

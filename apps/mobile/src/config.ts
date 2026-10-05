@@ -53,6 +53,8 @@ export const explorer = {
   tx: (signature: string) => `${EXPLORER}/tx/${signature}?cluster=devnet`,
   /** The price source lives on mainnet. */
   mainnetAddress: (a: string) => `${EXPLORER}/address/${a}`,
+  /** Where traders look at a token: its PumpSwap pair on DexScreener. */
+  dexscreener: (pool: string) => `https://dexscreener.com/solana/${pool}`,
 };
 
 export const roundLink = (roundId: bigint) => `${DEEP_LINK_PREFIX}${roundId}`;

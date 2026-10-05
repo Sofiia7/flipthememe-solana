@@ -332,7 +332,7 @@ export function ArenaScreen() {
 
           <ResultsStrip finals={groups.finals} mine={mine} />
 
-          <Pressable onPress={() => tokenRound && void Linking.openURL(explorer.mainnetAddress(tokenRound.account.pool)).catch(() => undefined)}>
+          <Pressable onPress={() => tokenRound && void Linking.openURL(explorer.dexscreener(tokenRound.account.pool)).catch(() => undefined)}>
             <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
           </Pressable>
         </ScrollView>
