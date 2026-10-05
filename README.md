@@ -14,7 +14,7 @@ A fresh memecoin. A shared start. One minute to prove your call, without buying 
 ## Try it on an Android phone
 
 1. Install the APK. Any Android 7+ phone works; it is built and tested on a Solana Seeker.
-2. Switch your wallet to devnet: Phantom (Settings, Developer Settings, Testnet Mode, Solana Devnet) or Solflare (network: Devnet).
+2. Install a Mobile Wallet Adapter wallet and switch it to devnet. Tested on a Seeker with **Solflare** (Settings, Network, Devnet). In our tests Phantom opened but did not return signatures over MWA.
 3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault and opens a 24-hour session. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
 4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the session key signs, no wallet pop-up.
 5. About two minutes after entry closes the result is in and winnings are in your balance. **Withdraw** sends free SOL back to your wallet.
@@ -47,7 +47,7 @@ Why these rules: an earlier version of this project backtested 743k real swaps f
 
 ## Price source and trust
 
-- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal: pools 10-120 minutes old with 50+ trades in the last 5 minutes, ranked by activity with a bonus for youth. The keeper keeps a token at least 10 minutes, then moves on when a clearly busier one appears or the current one fades, and checks the pool on chain every minute (owner, mints, at least 50 SOL reserve). If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age.
+- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal (the 5-minute trending list first): pump.fun graduates whose pools are 10-120 minutes old with 50+ trades in the last 5 minutes, ranked by activity with a bonus for youth. The keeper keeps a token at least 10 minutes, then moves on when a clearly busier one appears or the current one fades, and checks the pool on chain every minute (owner, mints, at least 50 SOL reserve). If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age.
 - Price = `quote_vault_amount * 10^12 / base_vault_amount`, read from the two vault token accounts every second at `confirmed`.
 - Every observation used (mainnet slot and price, up to 16 per window, at least 5) is passed to `set_strike` / `settle`; **the program computes the mean itself** and the samples stay in the transaction forever.
 - **Trust boundary:** on devnet the keeper is the price authority, and the app says so. Settlement math, payouts, sessions and limits are all on chain. Claims are permissionless, and after `settle_deadline` anyone can call `refund_expired`.
@@ -71,6 +71,8 @@ There is no app server: the phone reads devnet and mainnet directly; the keeper 
 - **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its budget and expiry; it has no instruction that lets it withdraw or raise its own limit.
 - **Pixel faces:** 8 bytes that ride inside every `place_bet`, so other players see your face without NFTs or extra transactions.
 - **Share:** challenge a friend to take the other side; result cards through the Android share sheet.
+- **Live X chatter:** a Cloudflare Worker (`services/chatter`) searches X for the arena token, tags each post MOON or SCAM, and the app slides them into a lane above the token. It is decoration: the game never depends on it.
+- **Wallet recovery:** when the wallet rejects a cached authorization (expired, or issued to an earlier install), the app asks again in a new MWA session instead of failing every approval.
 
 ## Program
 
@@ -88,6 +90,7 @@ Tests:
 programs/flip-the-meme   Anchor program, payout math, LiteSVM tests
 packages/client          TypeScript client on @solana/kit: PDAs, codecs, instructions, payout mirror, PumpSwap price source
 services/keeper          round crank: pool selection, sampler, scheduler, house budget, Docker deploy
+services/chatter         Cloudflare Worker: live X posts about the arena token, tagged MOON / SCAM
 apps/mobile              Expo 57 / React Native 0.86 Android app
 docs                     design, plan, submission materials
 ```
