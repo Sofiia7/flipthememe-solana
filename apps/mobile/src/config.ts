@@ -35,7 +35,7 @@ export const SESSION_RULES = {
   /** Session lifetime granted by Top up & play. */
   durationSecs: 24 * 60 * 60,
   maxPerBet: sol(10n),
-  /** The session key pays fees and the position rent (about 0.0016 SOL per bet). */
+  /** The session key pays fees and the position rent (about 0.00116 SOL per bet; not reclaimed yet). */
   gasTopUp: sol(3n),
   /** Top the key up only when it holds less than this. */
   gasMin: sol(1n),
