@@ -3,8 +3,8 @@
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "test": "node --test packages/arena-core/test/*.test.mjs",
-    "test:core": "node --test packages/arena-core/test/*.test.mjs",
+    "test": "node --test \"packages/client/test/*.test.ts\" \"services/keeper/test/*.test.ts\" \"services/chatter/test/*.test.ts\" \"services/link/test/*.test.ts\" \"apps/mobile/src/__tests__/*.test.ts\"",
+    "test:legacy": "node --test \"packages/arena-core/test/*.test.mjs\"",
     "start": "pnpm --filter @flipthememe/mobile start",
     "android": "pnpm --filter @flipthememe/mobile android",
     "build:apk": "pnpm --filter @flipthememe/mobile exec eas build --platform android --profile dapp-store"

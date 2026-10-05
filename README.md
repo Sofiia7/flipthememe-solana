@@ -1,8 +1,8 @@
 # FlipTheMeme
 
-**60-second UP/DOWN calls on fresh Solana memecoins, matched 1:1 against other players. Android app built for Seeker, money on Solana devnet, prices from mainnet PumpSwap pools.**
+**UP/DOWN calls on the next 60-second move of a fresh Solana memecoin, matched 1:1 against the other side. Android app built for Seeker, money on Solana devnet, prices from mainnet PumpSwap pools.**
 
-A fresh memecoin. A shared start. One minute to prove your call, without buying the token.
+A fresh memecoin, a shared start, one measured minute of price move. You make the call without buying the token.
 
 | | |
 |---|---|
@@ -10,47 +10,56 @@ A fresh memecoin. A shared start. One minute to prove your call, without buying 
 | Config | [`A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ`](https://explorer.solana.com/address/A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ?cluster=devnet) |
 | APK | GitHub Actions artifact `FlipTheMeme-apk` (signed release) |
 | Built for | Solana Mobile CLOCK IN · Solana Perps and Prediction Markets |
+| Status | devnet MVP, test SOL only; see [Limits](#limits) |
 
 ## Try it on an Android phone
 
-1. Install the APK. Any Android 7+ phone works; it is built and tested on a Solana Seeker.
-2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** works the same way on any Android phone. In our tests Phantom opened but did not return signatures over MWA.
-3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault and opens a 24-hour session. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
+1. Install the APK. It is built and tested on a Solana Seeker.
+2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** works too. In our tests Phantom opened but did not return signatures over MWA.
+3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault, opens a 24-hour session and, when the device key runs low, sends it 0.03 SOL for fees and position rent. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
 4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the session key signs, no wallet pop-up.
-5. About two minutes after entry closes the result is in and winnings are in your balance. **Withdraw** sends free SOL back to your wallet.
+5. The result comes roughly 100-160 seconds after your tap, plus confirmations, and the keeper credits your in-app balance (History offers a manual **Claim** if it is slow). **Withdraw** sends your available balance back to your wallet.
 
 ## How a round works
 
-A new round opens at every UTC minute. While one round measures its move, the next one takes calls.
+A new round opens at every UTC minute, so rounds overlap: while one measures its move, the next one takes calls. Times from the moment a round opens:
 
-| Phase | Length | What happens |
+| Time | Phase | What happens |
 |---|---|---|
-| Entry | 60 s | calls are accepted until `cutoff_at`, enforced by the program clock |
-| Pause | 30 s | nobody can enter; on devnet the house may match the short side |
-| Strike window | 10 s | the strike is the mean of the pool price observed in this window |
-| Move | 60 s | from the start of the strike window to the start of the exit window |
-| Exit window | 10 s | the exit price is the mean of this window |
-| Settle | seconds | the keeper posts the exit price and credits every position |
+| 0-60 s | Entry | calls are accepted until `cutoff_at`, enforced by the program clock |
+| 60-90 s | Pause | entry is closed; on devnet the house may fill the smaller side |
+| 90-100 s | Strike window | the strike is the mean of the pool price samples in this window |
+| 150-160 s | Exit window | starts 60 s after the strike window starts; the exit price is the mean of its samples |
+| after 160 s | Settle | the keeper posts the exit samples, the program decides UP, DOWN or a refund, then claims credit the vaults |
 
-You call the move from a strike that is fixed after entry closes, never the price you see when you tap.
+The 60 seconds is the measured move, from the start of the strike window to the start of the exit window. You call that move from a strike fixed after entry closes, not from the price on screen when you tap: a call at 12:00:05 in the round that opened at 12:00:00 compares the mean of 12:01:30-12:01:40 with the mean of 12:02:30-12:02:40. From a tap to the result is roughly 100-160 seconds plus transaction confirmations.
 
 ## The money rules
 
-- **Matched 1:1.** `m = min(UP, DOWN)` plays on each side. The larger side's surplus comes back pro rata without a fee.
-- **A win pays exactly 1.96x** of the stake that played, whatever the book looks like.
-- **Fees:** 2% of the matched bank `2m` on an UP/DOWN result; 1% on a refund of an activated round (tie, too few price observations, missed deadline).
-- **No match, no fee:** a round without both sides, or with a matched bank under 0.02 SOL, returns every stake in full.
-- **Depth cap:** the matched bank may not exceed the pool's SOL reserve / 2,500, so a round can never be worth moving a thin pool.
-- **House on devnet:** after entry closes, a house account may fill the short side up to a per-round cap and a daily budget, shown as `HOUSE`. It never takes the larger side.
+- **Matched 1:1.** `m = min(UP, DOWN)` plays on each side. The larger side's surplus comes back pro rata, without a fee.
+- **x1.96 on the matched part.** A win pays 1.96x the matched part of your stake (2 x (1 - 2%)); the unmatched surplus comes back without a fee, win or lose. Example: you call UP with 0.10 SOL and the DOWN side ends at 0.02 SOL in total. Then 0.02 of your stake plays and 0.08 comes back. A win credits 0.08 + 1.96 x 0.02 = 0.1192 SOL, a profit of 0.0192 SOL before rent and network fees; a loss credits 0.08.
+- **Fees.** 2% of the matched bank `2m` when a round ends UP or DOWN. Refunds are free since 5 October 2026: a tie, an unpriceable window (fewer than 5 price samples), a missed settle deadline or a round that never activated returns the full stake. The devnet config was changed to `fee_refund_bps = 0` in [this transaction](https://explorer.solana.com/tx/Cvi4ce8bW9bLnxXHQjRvsxSrQ6tKNx1dcRbxaCKDzo81urHX6bWJrupqpMvTXhpvKUtCKJCM4CBwp5SJRtvMQNv?cluster=devnet). Every round snapshots its fees when it is created, so rounds created before the change keep their 1% refund fee. The program caps fees at 2% on a result and 1% on a refund.
+- **Activation.** A round plays only if both sides are present and the matched bank `2m` is at least 0.02 SOL; otherwise every stake comes back in full.
+- **Depth cap.** When the keeper creates a round it sets a max bank: the smaller of the pool's SOL reserve / 2,500 and 1 SOL. The program refuses any bet that would push the matched bank `2m` above it. This limits what one round can win relative to the pool's depth; it does not prove that moving the price is unprofitable.
+- **House on devnet.** After entry closes, a house account may fill the smaller side, shown as `HOUSE`. The program lets it add only to the smaller side and only up to the gap. Its size limits (by default 0.05 SOL per round and 2 SOL per UTC day) are keeper policy, not on-chain limits.
 
-Why these rules: an earlier version of this project backtested 743k real swaps from 15 memecoin pools over 14 days. With a strike taken before the bet, a bot betting 2 s after a swap won 89% of 60-second matches; with odds that follow the book, two-sided bettors profited from skew and ordinary players lost 9-22%. A matched bank plus a strike after a pause bring player loss down to the fee range on 300-second rounds. Devnet uses 60-second rounds for the mobile feel, where the measured bot edge is higher (about 7%); mainnet round length will follow the measurements.
+## Research behind the rules (not a Solana backtest)
+
+The matched bank, the pause before the strike, the 1.96x payout, the 2% fee and the depth rule (K = 2,500) were carried over from research on an earlier version of this project on **Robinhood Chain**, not on Solana. Data: 743,127 swaps in 15 Uniswap v3 memecoin/WETH pools on Robinhood Chain mainnet (chain id 4663), 15-29 September 2026 (14 days). Strategies were fit on the first week and measured on the second.
+
+- **Strike taken before the bet** (a 60-second average before the match), with a fixed-payout liquidity vault as the counterparty: a bot betting 2 s after a swap won 89.4% ± 0.7 of resolved 60-second matches (78.6% at 300 s, 74.6% at 900 s; a random side won 50%). Source: `SHARP-EDGE.md`.
+- **Shared bank whose payout multiplier follows the book** (skew capped at 80:20): with simulated demand of 2-10 bets per hour per pool and bots taking up to 25% of the bank, ordinary players lost 9-22% of their accepted stake, mostly through the book's skew, which pays even a bettor with no price view. Source: `POSITIVE-EV.md`, `POOL-TOXICITY.md`.
+- **Matched 1:1 bank, 300-second rounds, a 300-second pause, a 300-second strike window, 2% fee:** under the same bots, ordinary players lost 2.0% ± 0.3 of their accepted stake at 10 bets per hour, 2.2% ± 1.4 at 5 and 4.3% ± 3.8 at 2, against about 1.8% with no bot (the fee itself). Source: `POSITIVE-EV.md`.
+
+These files and the scripts behind them are in the earlier MemePred repository (`docs/rhc/`, `scripts/rhc/`); they are not reproduced in this repository. The devnet timing here (60-second move, 30-second pause, 10-second strike window) was not part of that research, so there is no measured bot edge for it, and no Solana backtest has been run yet.
 
 ## Price source and trust
 
-- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal (the 5-minute trending list first): pump.fun graduates whose pools are 10-120 minutes old with 50+ trades in the last 5 minutes, ranked by activity with a bonus for youth. The keeper keeps a token at least 10 minutes, then moves on when a clearly busier one appears or the current one fades, and checks the pool on chain every minute (owner, mints, at least 50 SOL reserve). If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age.
-- Price = `quote_vault_amount * 10^12 / base_vault_amount`, read from the two vault token accounts every second at `confirmed`.
-- Every observation used (mainnet slot and price, up to 16 per window, at least 5) is passed to `set_strike` / `settle`; **the program computes the mean itself** and the samples stay in the transaction forever.
-- **Trust boundary:** on devnet the keeper is the price authority, and the app says so. Settlement math, payouts, sessions and limits are all on chain. Claims are permissionless, and after `settle_deadline` anyone can call `refund_expired`.
+- **Price is TOKEN/SOL.** `price = quote_vault_amount * 10^12 / base_vault_amount`: the pool's wSOL reserve over its token reserve, read from the two vault token accounts every second at `confirmed`. A round compares the token's price in SOL, not in USD: if over the measured minute the token gains 3% in USD while SOL gains 5%, TOKEN/SOL falls by about 1.9% and DOWN wins.
+- **Pool:** PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL.
+- **Token choice.** The keeper finds tokens through GeckoTerminal (the 5-minute trending list first) and prefers PumpSwap pools 10-120 minutes old, with 50+ trades in the last 5 minutes, whose base mint ends in `pump` (the pump.fun address suffix: a sign of a pump.fun graduate, not proof). It ranks them by activity with a bonus for youth, checks the pool on chain every minute (owner, mints, at least 50 SOL reserve), keeps a token at least 10 minutes, and moves on when a clearly busier one appears or the current one fades. If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age, so the arena token is not always a fresh launch. The age shown is the pool's age, not a verified graduation time.
+- **Samples.** Every observation used (mainnet slot and price, at least 5 and up to 16 per window) is passed to `set_strike` / `settle`. The program checks that the slots increase and the prices are positive, then takes the plain integer mean (not a time-weighted average). The samples stay in the transaction, so anyone can compare them with the pool's history.
+- **Trust boundary.** On devnet one keeper key is the price authority, admin, house and treasury. The devnet program cannot read mainnet, so it cannot prove that the samples came from that pool at those slots: the outcome depends on trusting the keeper. The money side is on chain: settlement math, payouts, session limits and the depth cap. Claims are permissionless and always pay into the position owner's vault, and if a round is not settled within 600 s after its exit window, anyone can call `refund_expired`.
 
 ## Architecture
 
@@ -63,20 +72,20 @@ flowchart LR
   K -. "price samples every 1 s" .-> M
 ```
 
-There is no app server: the phone reads devnet and mainnet directly; the keeper only cranks.
+There is no game server: the phone polls devnet and mainnet RPC directly (no indexer), and the keeper only cranks. Two Cloudflare Workers sit on the side: `services/link` serves shared round pages and Android App Links, `services/chatter` serves X posts about the arena token.
 
 ## Mobile-first details
 
-- **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (24 h, max 0.1 SOL per bet, budget = top-up) and a small SOL transfer to the device key for fees.
-- **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its budget and expiry; it has no instruction that lets it withdraw or raise its own limit.
+- **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (24 h, max 0.1 SOL per bet, budget = top-up) and, when the device key runs low, a 0.03 SOL transfer to it for fees and position rent.
+- **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its per-bet limit, budget and expiry, and has no instruction that lets a session key withdraw or raise its own limit. **Revoke session** in the Wallet tab ends it on chain.
 - **Pixel faces:** 8 bytes that ride inside every `place_bet`, so other players see your face without NFTs or extra transactions.
-- **Share:** challenge a friend to take the other side. The card goes out as an image with a caption link, `https://sol.flipthememe.com/r/<round>`; Android App Links open the app straight on that round, and without the app the page offers the APK.
-- **Live X chatter:** a Cloudflare Worker (`services/chatter`) searches X for the arena token, tags each post MOON or SCAM, and the app slides them into a lane above the token. It is decoration: the game never depends on it.
+- **Share:** challenge a friend to take the other side. The card goes out as an image with a link, `https://sol.flipthememe.com/r/<round>` (served by `services/link`); Android App Links open the app on that round, and without the app the page offers the APK. Entry closes within a minute, so a friend who still has to install will usually meet you in a later round.
+- **Live X chatter:** a Cloudflare Worker (`services/chatter`) searches X for the arena token and the app slides the posts into a lane above the token. The MOON and SCAM tags come from the app's own keyword rules, not from the authors, so they can misread a post. It is decoration: nothing in the game or in settlement reads it.
 - **Wallet recovery:** when the wallet rejects a cached authorization (expired, or issued to an earlier install), the app asks again in a new MWA session instead of failing every approval.
 
 ## Program
 
-`programs/flip-the-meme` (Anchor 1.1.2): `initialize_config`, `update_config`, `set_pause`, `open_vault`, `deposit`, `withdraw`, `start_session`, `revoke_session`, `create_round`, `place_bet`, `house_fill`, `set_strike`, `settle`, `refund_expired`, `claim`, `sweep_fees`, `close_empty_round`. Pause stops new bets only; settlement, refunds, claims and withdrawals keep working.
+`programs/flip-the-meme` (Anchor 1.1.2): `initialize_config`, `update_config`, `set_pause`, `open_vault`, `deposit`, `withdraw`, `start_session`, `revoke_session`, `create_round`, `place_bet`, `house_fill`, `set_strike`, `settle`, `refund_expired`, `claim`, `sweep_fees`, `close_empty_round`. Pause stops new bets only; settlement, refunds, claims and withdrawals keep working. Stake limits, the minimum bank and the fees are copied into each round when it is created, so a config update changes them only for later rounds.
 
 Tests:
 
@@ -89,11 +98,12 @@ Tests:
 ```
 programs/flip-the-meme   Anchor program, payout math, LiteSVM tests
 packages/client          TypeScript client on @solana/kit: PDAs, codecs, instructions, payout mirror, PumpSwap price source
+packages/arena-core      legacy: the September pari-mutuel model, not used by the program (kept for history)
 services/keeper          round crank: pool selection, sampler, scheduler, house budget, Docker deploy
-services/chatter         Cloudflare Worker: live X posts about the arena token, tagged MOON / SCAM
+services/chatter         Cloudflare Worker: live X posts about the arena token, tagged MOON / SCAM by keyword rules
 services/link            Cloudflare Worker on sol.flipthememe.com: round link pages and Android App Links
 apps/mobile              Expo 57 / React Native 0.86 Android app
-docs                     design, plan, submission materials
+docs                     design, plan, submission materials (older documents are marked superseded)
 ```
 
 ## Build and test from source
@@ -102,15 +112,25 @@ Prerequisites: Node 22+, pnpm 11 (`corepack enable`), Rust, Agave 3.1.14 for `ca
 
 ```bash
 corepack pnpm install
-corepack pnpm --filter @flipthememe/client test
-corepack pnpm --filter @flipthememe/keeper test
+corepack pnpm test
 corepack pnpm --filter @flipthememe/mobile typecheck
 cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml
 cargo test --manifest-path programs/flip-the-meme/Cargo.toml
 ```
 
+`corepack pnpm test` runs the current TypeScript suites with `node --test`: the client, keeper, chatter and link services, and the mobile helper tests (`apps/mobile/src/__tests__`, no device or UI tests). `corepack pnpm run test:legacy` runs the tests of the legacy `packages/arena-core` model, which says nothing about the current economics.
+
 The APK is built by `.github/workflows/android.yml` (`expo prebuild` + Gradle, release signing from repository secrets) and also produces a debug development client.
 
 ## Limits
 
-Devnet only, test SOL only. No external audit. The price authority is trusted on devnet. 60-second rounds give bots more edge than the measured 300-second design. The house fill is a devnet bootstrap with a budget, not a mainnet feature.
+Devnet only, test SOL only, no external audit. Known limits of this build:
+
+- **Trusted price.** One keeper key is price authority, admin, house and treasury, so the account that can fill the short side also signs the prices. The program averages the samples it is given and checks that their slots increase, but it cannot prove they came from the mainnet pool. The mean is plain, not time-weighted.
+- **House limits are policy.** The house's per-round cap and daily budget are enforced by the keeper, not on chain; on chain it can only fill the smaller side up to the gap.
+- **Position rent.** Every bet opens a 100-byte position account (about 0.00116 SOL of rent, paid by the session key) that is not closed or reclaimed yet. On a 0.01 SOL stake that is about 11.6%.
+- **Uncertain transactions.** If an RPC response is lost after a transaction is sent, the outcome is not fully reconciled yet: the app can show an error for a bet or top-up that landed. The program refuses a second position in the same round; check your balance before repeating a top-up.
+- **Sessions are per install.** The session key lives in one app install, so a reinstall needs a new top-up or session. The wallet that owns the vault can still withdraw.
+- **Reads.** The app polls RPC (no indexer), and the chart history starts when the app opens.
+- **Round timing.** The devnet timing (60-second move, 30-second pause, 10-second strike window) was chosen for the mobile feel and has not been measured against bots (see the research section). Round length for real money should come from measurements on Solana data.
+- **Chatter.** X posts are decoration, and their MOON/SCAM tags come from keyword rules.

@@ -122,7 +122,7 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 
 ### A4. Деплой devnet
 - [ ] `solana program deploy target/deploy/flip_the_meme.so --program-id program-id.json -u devnet -k keeper.json`.
-- [ ] Скрипт `services/keeper/scripts/init-config.ts`: `initialize_config` с параметрами devnet (min_stake 0.01, max_stake 0.1, min_bank 0.02 SOL, 200/100 bps), `open_vault` + `deposit 3 SOL` для дома.
+- [ ] Скрипт `services/keeper/scripts/init-config.ts`: `initialize_config` с параметрами devnet (min_stake 0.01, max_stake 0.1, min_bank 0.02 SOL, 200/100 bps), `open_vault` + `deposit 3 SOL` для дома. Поправка 5.10: возврат переведён в 0 bps (`services/keeper/scripts/set-fees.ts --refund-bps 0`, `DEVNET_PARAMS.feeRefundBps = 0`), см. спецификацию, раздел 2.
 - [ ] Записать program id и адреса в `docs/implementation/deployments.md`.
 
 ## Трек B. Клиент `packages/client`
@@ -136,7 +136,7 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 ## Трек C. Keeper `services/keeper`
 
 - [ ] C1. Конфиг из env: `DEVNET_RPC`, `MAINNET_RPCS` (список), `KEEPER_KEYPAIR`, `STATE_FILE`, `HOUSE_DAILY_BUDGET`, `HOUSE_ROUND_CAP`.
-- [ ] C2. `selector.ts`: выбор пула раз в 60 с, удержание 15 минут, проверка на цепочке.
+- [ ] C2. `selector.ts`: выбор пула раз в 60 с, удержание не меньше 10 минут (`POOL_HOLD_MIN`), проверка на цепочке.
 - [ ] C3. `sampler.ts`: опрос токен-счетов раз в 1 с, кольцо наблюдений на пул, выборка окна `[start, end)` по времени сервера; лог отставания часов devnet.
 - [ ] C4. `scheduler.ts`: на каждом тике для раундов `next_round_id - 3 .. next_round_id` выполнить первый невыполненный шаг: create (за 10 с до minute boundary), house_fill (cutoff + 2 с), set_strike (strike_end + 1 с), settle (exit_end + 1 с), claim пачками по 6, sweep, close_empty. Каждый шаг идемпотентен по состоянию аккаунта, ошибки не роняют цикл.
 - [ ] C5. `house.ts`: сумма заполнения `min(разница, кап раунда, max_bank/2 - меньшая сторона, остаток бюджета)`; бюджет по суткам UTC в файле состояния.

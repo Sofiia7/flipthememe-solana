@@ -52,13 +52,16 @@ export type Outcome = (typeof Outcome)[keyof typeof Outcome];
 export const RefundReason = { None: 0, Tie: 1, Unpriceable: 2, Expired: 3 } as const;
 export type RefundReason = (typeof RefundReason)[keyof typeof RefundReason];
 
-/** Devnet economics (also snapshotted into every Round). */
+/**
+ * Devnet economics (also snapshotted into every Round). Refunds are free since 5 October 2026
+ * (update_config set fee_refund_bps to 0); rounds created before keep the 1% they were created with.
+ */
 export const DEVNET_PARAMS = {
   minStake: LAMPORTS_PER_SOL / 100n,
   maxStake: LAMPORTS_PER_SOL / 10n,
   minBank: (2n * LAMPORTS_PER_SOL) / 100n,
   feeWinBps: 200,
-  feeRefundBps: 100,
+  feeRefundBps: 0,
 } as const;
 
 /** Pool-depth rule from the Robinhood Chain rounds: accepted bank <= quote reserve / K. */

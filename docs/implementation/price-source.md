@@ -1,8 +1,10 @@
+> Status: superseded on 2026-10-05 by [README.md](../../README.md) ("Price source and trust") and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md) (section 4). Kept for history; the `MOCK_ONLY` mode, the mock keeper API and `services/keeper/src/price-adapter.mjs` described here no longer exist.
+
 # Источник цены: инженерное состояние
 
 **Статус на 15 сентября 2026:** для денежного раунда источник ещё не утверждён. В приложении и keeper сейчас используется `MOCK_ONLY`; это не live-рынок и не может открыть раунд с реальными средствами. Программа также инициализирует `Config.mock_only = true` и отклоняет `deposit` и `create_round`, поэтому этот запрет обеспечен не только интерфейсом.
 
-Такой запрет намеренный: pump.fun bonding curve, мигрировавший Raydium-пул и Meteora DLMM — разные состояния токена. Нельзя подставить одно вместо другого только потому, что у них есть цена.
+Такой запрет намеренный: pump.fun bonding curve, мигрировавший Raydium-пул и Meteora DLMM - разные состояния токена. Нельзя подставить одно вместо другого только потому, что у них есть цена.
 
 ## Контракт адаптера
 
