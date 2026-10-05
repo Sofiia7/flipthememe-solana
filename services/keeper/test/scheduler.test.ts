@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import {
+  DEPTH_K,
   Outcome,
   RoundStatus,
   Side,
@@ -112,6 +113,44 @@ describe('scheduler', () => {
     const noPool = await harness({ pool: false });
     await tick(noPool, MINUTE + 50);
     assert.equal(noPool.chain.sent.length, 0);
+  });
+
+  test('opens no round on a pool too shallow to activate it, and keeps serving the rounds in flight', async () => {
+    const h = await harness();
+    const now = MINUTE + 50;
+    // Audit A12: the pool fell to 1 SOL, max_bank 1 SOL / 2500 = 0.0004 SOL against min_bank 0.02 SOL.
+    h.store.add(POOL, { ...obs(now * 1000 - 400, 1), quoteAmount: SOL });
+    h.chain.rounds.set(8n, makeRound(8n, BigInt(now - 102), POOL, MINT)); // strike
+    h.chain.rounds.set(7n, makeRound(7n, BigInt(now - 400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.NotActivated })); // close
+    h.chain.rounds.set(6n, makeRound(6n, BigInt(now - 162), POOL, MINT, { status: RoundStatus.Live, rawUp: 50_000_000n, rawDown: 50_000_000n, positionCount: 2 })); // settle
+    await tick(h, now);
+    await tick(h, now + 1);
+    assert.deepEqual(h.chain.sent.map((tx) => tx[0]?.name).sort(), ['closeEmptyRound', 'setStrike', 'settle']);
+    assert.deepEqual(h.logs.find((l) => l.event === 'round_skipped_shallow_pool'), {
+      event: 'round_skipped_shallow_pool',
+      pool: POOL,
+      reserve: SOL,
+      maxBank: 400_000n,
+      minBank: 20_000_000n,
+    });
+  });
+
+  test('max_bank must reach min_bank as Config sets it: K x min_bank opens a round, one lamport less does not', async () => {
+    const now = MINUTE + 50;
+    const minBank = SOL / 10n; // not the 0.02 SOL default: the check reads Config
+    const open = async (reserve: bigint): Promise<Harness> => {
+      const h = await harness();
+      if (!h.chain.config) throw new Error('no config');
+      h.chain.config = { ...h.chain.config, minBank };
+      h.store.add(POOL, { ...obs(now * 1000 - 400, 1), quoteAmount: reserve });
+      await tick(h, now);
+      return h;
+    };
+    const below = await open(DEPTH_K * minBank - 1n);
+    assert.equal(below.chain.sent.length, 0);
+    assert.equal(below.logs.find((l) => l.event === 'round_skipped_shallow_pool')?.maxBank, minBank - 1n);
+    const at = await open(DEPTH_K * minBank);
+    assert.equal(readU64(only(at).data, 136), minBank); // max_bank
   });
 
   test('house fill: tops up the empty side of a lone bet and books it against the daily budget', async () => {

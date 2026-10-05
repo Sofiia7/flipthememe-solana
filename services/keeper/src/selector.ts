@@ -2,7 +2,9 @@
  * Token choice, once a minute (rules and defaults in poolgate.ts, candidates from discovery.ts):
  *
  * 1. the current pool's SOL depth is read on chain every refresh; below K x min_bank (50 SOL) it
- *    is replaced at once, even inside its hold;
+ *    is replaced at once, even inside its hold. With no deep enough replacement it is dropped: no
+ *    pool, so no new round opens until one qualifies (its max_bank would be below min_bank). A
+ *    failed read only replaces it: the scheduler checks the depth again before every round;
  * 2. otherwise it stays for its hold (10 minutes), and after that while it passes the keep gate
  *    (20+ trades in 5 minutes, at most 180 minutes old on the fresh rung) unless a deep enough
  *    candidate is clearly better: a lower rung of the ladder, or the same rung with 1.5x the score;
@@ -79,7 +81,7 @@ export class PoolSelector {
   private readonly logger: Logger;
   private readonly override: Address | null;
   private readonly minBank: () => bigint;
-  private readonly onChange: (s: Selection) => void;
+  private readonly onChange: (s: Selection | null) => void;
 
   constructor(opts: {
     source: CandidateSource;
@@ -89,7 +91,8 @@ export class PoolSelector {
     override: Address | null;
     minBank: () => bigint;
     initial: Selection | null;
-    onChange: (s: Selection) => void;
+    /** Every new selection or rung; null when the current pool is dropped. */
+    onChange: (s: Selection | null) => void;
   }) {
     this.source = opts.source;
     this.chain = opts.chain;
@@ -113,7 +116,8 @@ export class PoolSelector {
     }
     const current = this.current;
     const { candidates, complete } = await this.source.refresh(nowMs, current?.pool ?? null);
-    const depth = new Map<Address, bigint | null>();
+    /** Per pool read: the reserve when deep enough, null when too shallow, 'unreadable' when the read failed. */
+    const depth = new Map<Address, bigint | null | 'unreadable'>();
     let checks = 0;
     /** The reserve when deep enough, else null; at most MAX_DEPTH_CHECKS candidates besides the current pool. */
     const deepEnough = async (pool: Address): Promise<bigint | null | undefined> => {
@@ -124,7 +128,8 @@ export class PoolSelector {
         }
         depth.set(pool, await this.reserveIfDeep(pool));
       }
-      return depth.get(pool) ?? null;
+      const reserve = depth.get(pool);
+      return typeof reserve === 'bigint' ? reserve : null;
     };
 
     let reason: string;
@@ -158,6 +163,16 @@ export class PoolSelector {
       const deep = await deepEnough(r.candidate.pool);
       if (deep === undefined) break;
       if (deep !== null) return this.select(r, deep, nowMs, reason);
+    }
+    if (current && depth.get(current.pool) === null) {
+      // Read and below the depth gate. Kept, it would get new rounds whose max_bank (reserve / K) is
+      // below min_bank: rounds that can never activate. A failed read does not drop it (public RPCs
+      // often answer 429): the scheduler checks the depth again on a fresh sample before each round.
+      // Rounds in flight keep their pool and are served as before.
+      this.current = null;
+      this.logger({ event: 'pool_dropped', pool: current.pool, name: current.name, reason, candidates: candidates.length, depthChecks: checks, complete });
+      this.onChange(null);
+      return;
     }
     this.logger({
       event: 'pool_none_qualifies',
@@ -197,14 +212,14 @@ export class PoolSelector {
     this.onChange(this.current);
   }
 
-  /** The quote reserve in lamports when the pool is a wSOL PumpSwap pool deep enough, else null. */
-  private async reserveIfDeep(pool: Address): Promise<bigint | null> {
+  /** The quote reserve in lamports when the pool is a wSOL PumpSwap pool deep enough, null when too shallow, 'unreadable' when the read fails. */
+  private async reserveIfDeep(pool: Address): Promise<bigint | null | 'unreadable'> {
     try {
       const reserve = await this.chain.quoteReserve(pool);
       return reserve >= this.minReserve() ? reserve : null;
     } catch (error) {
       this.logger({ event: 'pool_check_failed', pool, error: shortError(error) });
-      return null;
+      return 'unreadable';
     }
   }
 

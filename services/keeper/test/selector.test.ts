@@ -18,7 +18,7 @@ type Harness = {
   reserves: Map<Address, bigint>;
   reads: Address[];
   logs: LogFields[];
-  changes: Selection[];
+  changes: (Selection | null)[];
 };
 
 /** Every candidate is 80 SOL deep unless `reserves` says otherwise; unknown pools throw on read. */
@@ -27,7 +27,7 @@ function harness(
   opts: { initial?: Selection | null; override?: Address | null; reserves?: [number, bigint][]; complete?: boolean } = {},
 ): Harness {
   const logs: LogFields[] = [];
-  const changes: Selection[] = [];
+  const changes: (Selection | null)[] = [];
   const reads: Address[] = [];
   const reserves = new Map<Address, bigint>();
   for (const c of candidates) reserves.set(c.pool, DEEP);
@@ -90,7 +90,7 @@ describe('PoolSelector: first choice', () => {
     assert.equal(h.selector.current?.selectedAtMs, NOW);
     assert.equal(h.selector.current?.quoteReserve, DEEP);
     assert.deepEqual(h.reads, [testAddress(2), testAddress(3)]);
-    assert.deepEqual(h.changes.map((s) => s.pool), [testAddress(3)]);
+    assert.deepEqual(h.changes.map((s) => s?.pool), [testAddress(3)]);
     assert.deepEqual(
       { ...last(h), baseMint: undefined },
       { event: 'pool_selected', rung: 'fresh', reason: 'no pool yet', pool: testAddress(3), name: 'T3 / SOL', txM5: 100, ageMin: 20, score: 183.3, quoteReserve: DEEP, baseMint: undefined, previous: null },
@@ -220,11 +220,61 @@ describe('PoolSelector: rotation', () => {
     assert.deepEqual(unreadable.logs[0], { event: 'pool_check_failed', pool: testAddress(1), error: `account ${testAddress(1)} is not a wSOL PumpSwap pool` });
   });
 
-  test('no candidates at all: the current pool stays and the reason is logged', async () => {
+  test('no candidates at all: the current pool, still deep enough, stays and the reason is logged', async () => {
     const h = harness([], { initial: selection(1, 0, NOW - 30 * MINUTE) });
     await h.selector.refresh(NOW);
     assert.equal(h.selector.current?.pool, testAddress(1));
     assert.deepEqual(last(h), { event: 'pool_none_qualifies', reason: 'unlisted', candidates: 0, depthChecks: 0, complete: true, keeping: testAddress(1) });
+  });
+
+  test('the reserve falls and the candidates are gone: the pool is dropped, no pool until one qualifies', async () => {
+    const h = harness([candidate(1, 100, 30 * MINUTE)]);
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(1));
+    // Audit A12: 80 SOL fell to 1 SOL, max_bank 1 SOL / 2500 = 0.0004 SOL against min_bank 0.02 SOL.
+    h.reserves.set(testAddress(1), SOL);
+    h.source.result = { candidates: [], complete: true };
+
+    await h.selector.refresh(NOW + MINUTE);
+    assert.equal(h.selector.current, null, 'no pool, so the scheduler opens no round');
+    assert.deepEqual(h.changes.map((s) => s?.pool ?? null), [testAddress(1), null], 'the state file drops it too');
+    assert.deepEqual(last(h), { event: 'pool_dropped', pool: testAddress(1), name: 'T1 / SOL', reason: 'quote reserve below 50000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete: true });
+
+    await h.selector.refresh(NOW + 2 * MINUTE);
+    assert.equal(h.selector.current, null);
+    assert.deepEqual(last(h), { event: 'pool_none_qualifies', reason: 'no pool yet', candidates: 0, depthChecks: 0, complete: true, keeping: null });
+
+    h.reserves.set(testAddress(2), DEEP);
+    h.source.result = { candidates: [candidate(2, 60, 20 * MINUTE)], complete: true };
+    await h.selector.refresh(NOW + 3 * MINUTE);
+    assert.deepEqual(h.changes.map((s) => s?.pool ?? null), [testAddress(1), null, testAddress(2)], 'a pool that qualifies is picked again');
+    assert.equal(last(h)?.event, 'pool_selected');
+    assert.equal(last(h)?.previous, null);
+  });
+
+  test('a shallow pool is dropped also while it is still listed and the other candidates are too shallow', async () => {
+    const h = harness([candidate(1, 100, 30 * MINUTE), candidate(2, 300, 40 * MINUTE)], { initial: selection(1, 0, NOW - 30 * MINUTE), reserves: [[1, SOL], [2, SHALLOW]] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current, null);
+    assert.deepEqual(h.reads, [testAddress(1), testAddress(2)], 'the current pool is read once');
+    assert.equal(last(h)?.event, 'pool_dropped');
+    assert.equal(last(h)?.depthChecks, 1);
+  });
+
+  test('a failed reserve read with no candidates keeps the pool: only a reserve read below the gate drops it', async () => {
+    // Public mainnet RPCs and GeckoTerminal often answer 429 together; the scheduler still checks the
+    // depth on a fresh sample before every round.
+    const keptAfterFailedRead = async (complete: boolean) => {
+      const h = harness([], { initial: selection(1, 0, NOW - 30 * MINUTE), complete });
+      h.reserves.delete(testAddress(1)); // its reserve read throws
+      await h.selector.refresh(NOW);
+      assert.equal(h.selector.current?.pool, testAddress(1));
+      assert.deepEqual(h.changes, [], 'onChange is not called, so never with null');
+      assert.deepEqual(h.logs.map((l) => l.event), ['pool_check_failed', 'pool_none_qualifies']);
+      assert.deepEqual(last(h), { event: 'pool_none_qualifies', reason: 'quote reserve below 50000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete, keeping: testAddress(1) });
+    };
+    await keptAfterFailedRead(true);
+    await keptAfterFailedRead(false); // GeckoTerminal failed as well
   });
 });
 

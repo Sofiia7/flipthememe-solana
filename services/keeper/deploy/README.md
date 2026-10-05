@@ -139,10 +139,17 @@ Once a minute (`src/poolgate.ts`, `src/discovery.ts`, `src/selector.ts`):
   `txM5 * (1 + (120 - age_min) / 120)`: activity, with up to twice the weight for the youngest.
 - The current pool stays at least 10 minutes. After that it is replaced when a deep enough candidate
   scores 1.5x higher, or when it drops below 20 trades in 5 minutes or gets older than 180 minutes.
-  Below 50 SOL it is replaced at once. Only rounds created after a switch use the new pool.
+  Below 50 SOL it is replaced at once, or dropped when no deep enough pool is left: then no new round
+  opens until one qualifies. A failed reserve read (RPC errors) replaces it but never drops it. Only
+  rounds created after a switch use the new pool; rounds in flight are still struck, settled and
+  claimed.
+- Right before each round the scheduler checks the depth again on the newest observation (with
+  `POOL_OVERRIDE` too): max_bank = reserve / 2500 must reach Config's min_bank, or the round could
+  never activate and is not created (`round_skipped_shallow_pool`).
 - Nothing fresh: the ladder widens the age to 6 h, then 24 h, then takes the most active pool of any
   age. Log events `pool_selected` (rung `fresh`) and `pool_selected_fallback` (rung `within-6h`,
-  `within-24h` or `any-age`), plus `pool_kept_on_rung`, `pool_none_qualifies`, `pool_check_failed`.
+  `within-24h` or `any-age`), plus `pool_kept_on_rung`, `pool_none_qualifies`, `pool_dropped`,
+  `pool_check_failed`.
 - GeckoTerminal (free API, about 30 requests per minute per IP): at most 4 requests per minute.
   It has no creation-time sort for one dex, so the keeper reads `new_pools` (every dex, newest
   first) every minute and tracks its PumpSwap pools for 180 minutes; `pools/multi` refreshes up to

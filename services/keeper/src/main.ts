@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     initial,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
     onChange: (s) => {
-      state.state.pool = { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback };
+      state.state.pool = s ? { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback } : null;
       state.save();
     },
   });

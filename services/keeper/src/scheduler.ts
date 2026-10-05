@@ -355,8 +355,11 @@ export class Scheduler {
     const reserve = latest.quoteAmount;
     const byDepth = reserve / DEPTH_K;
     const maxBank = byDepth < MAX_BANK_CEILING ? byDepth : MAX_BANK_CEILING;
-    if (maxBank <= 0n) {
-      this.warn('no-depth', { event: 'create_skipped', reason: 'pool too shallow', pool: pool.pool, reserve });
+    // The depth gate again, on the newest reserve and Config's min_bank. A round activates once
+    // 2 x its smaller side reaches min_bank, and the depth rule keeps that at most max_bank: with
+    // max_bank below min_bank it never activates, and a one-sided bet only waits for its refund.
+    if (maxBank <= 0n || maxBank < config.minBank) {
+      this.warn('shallow-pool', { event: 'round_skipped_shallow_pool', pool: pool.pool, reserve, maxBank, minBank: config.minBank });
       return;
     }
     const roundId = config.nextRoundId;
