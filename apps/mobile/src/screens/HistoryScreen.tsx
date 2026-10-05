@@ -7,6 +7,8 @@ import type { MyPosition } from '../chain/useMyAccount';
 import { useTokenInfo } from '../chain/useTokenInfo';
 import { changeMicroPct, formatDateTime, formatMicroPct, formatSol, shortAddress, sol } from '../lib/format';
 import { useNow } from '../lib/usePolling';
+import { faceFromBytes } from '../face/faceModel';
+import { shareCard } from '../share/ShareCard';
 import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink } from '../ui/common';
@@ -86,10 +88,25 @@ function HistoryRow({ item, nowMs }: { item: MyPosition; nowMs: number }) {
   const claimingThis = betting.claiming === item.address;
   const claimError = betting.claimError?.position === item.address ? betting.claimError.message : null;
   const share = () => {
-    const text =
-      result.kind === 'won'
-        ? `I called ${side} on ${symbol} in FlipTheMeme round #${round.id} and won ${sol(result.payout ?? 0n)} (Solana devnet test SOL). ${roundLink(round.id)}`
-        : `Round #${round.id} on ${symbol} went ${label} in FlipTheMeme (Solana devnet). ${roundLink(round.id)}`;
+    if (result.kind === 'won') {
+      // Wins go out as the picture card; the text (with the round link) is the fallback.
+      const text = `I called ${side} on ${symbol} in FlipTheMeme round #${round.id} and won ${sol(result.payout ?? 0n)} (Solana devnet test SOL). ${roundLink(round.id)}`;
+      void shareCard(
+        {
+          kind: 'win',
+          face: faceFromBytes(p.face),
+          side: p.side,
+          roundId: round.id,
+          symbol: info?.symbol ?? null,
+          imageUrl: info?.imageUrl ?? null,
+          payout: result.payout ?? 0n,
+        },
+        text,
+        'Share your win',
+      );
+      return;
+    }
+    const text = `Round #${round.id} on ${symbol} went ${label} in FlipTheMeme (Solana devnet). ${roundLink(round.id)}`;
     void Share.share({ message: text }).catch(() => undefined);
   };
   return (

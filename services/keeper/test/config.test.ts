@@ -6,7 +6,8 @@ import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { describeError, TransactionTooLarge, isRateLimited, isTooLarge } from '../src/chain.ts';
-import { DEFAULT_MAINNET_RPCS, loadConfig } from '../src/config.ts';
+import { DEFAULT_MAINNET_RPCS, loadConfig, loadPoolGate } from '../src/config.ts';
+import { DEFAULT_GATE } from '../src/poolgate.ts';
 import { loadKeypairSigner } from '../src/keypair.ts';
 import { backoffMs } from '../src/rpc.ts';
 import { parseState } from '../src/state.ts';
@@ -28,6 +29,7 @@ describe('loadConfig', () => {
     assert.equal(cfg.houseDailyBudget, 2_000_000_000n);
     assert.equal(cfg.poolOverride, null);
     assert.match(cfg.keypairPath, /\.flipthememe[\\/]keeper\.json$/);
+    assert.deepEqual(cfg.poolGate, DEFAULT_GATE);
   });
 
   test('env values', () => {
@@ -53,6 +55,27 @@ describe('loadConfig', () => {
     assert.equal(cfg.poolOverride, '11111111111111111111111111111112');
   });
 
+  test('pool gate from the environment, in minutes', () => {
+    const gate = loadPoolGate({
+      POOL_MIN_AGE_MIN: '5',
+      POOL_MAX_AGE_MIN: ' 60 ',
+      POOL_MIN_TX_M5: '30',
+      POOL_HOLD_MIN: '7.5',
+      POOL_SWITCH_RATIO: '2',
+      POOL_KEEP_MIN_TX_M5: '10',
+      POOL_KEEP_MAX_AGE_MIN: '90',
+    });
+    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000 });
+    assert.deepEqual(loadPoolGate({ POOL_MAX_AGE_MIN: '', POOL_SWITCH_RATIO: ' ' }), DEFAULT_GATE);
+    assert.throws(() => loadPoolGate({ POOL_MIN_TX_M5: '50.5' }), /POOL_MIN_TX_M5 must be a whole number/);
+    assert.throws(() => loadPoolGate({ POOL_MAX_AGE_MIN: '-5' }), /POOL_MAX_AGE_MIN must be a non-negative number/);
+    assert.throws(() => loadPoolGate({ POOL_MIN_AGE_MIN: '120' }), /POOL_MAX_AGE_MIN must be greater than POOL_MIN_AGE_MIN/);
+    assert.throws(() => loadPoolGate({ POOL_KEEP_MAX_AGE_MIN: '100' }), /POOL_KEEP_MAX_AGE_MIN must not be below POOL_MAX_AGE_MIN/);
+    assert.throws(() => loadPoolGate({ POOL_KEEP_MIN_TX_M5: '60' }), /POOL_KEEP_MIN_TX_M5 must not exceed POOL_MIN_TX_M5/);
+    assert.throws(() => loadPoolGate({ POOL_SWITCH_RATIO: '0.9' }), /POOL_SWITCH_RATIO must be at least 1/);
+    assert.throws(() => loadConfig({ POOL_HOLD_MIN: 'ten' }, cwd), /POOL_HOLD_MIN/);
+  });
+
   test('rejects malformed values', () => {
     assert.throws(() => loadConfig({ HOUSE_ROUND_CAP_LAMPORTS: '0.05' }, cwd), /whole number of lamports/);
     assert.throws(() => loadConfig({ HOUSE_DAILY_BUDGET_LAMPORTS: '-1' }, cwd), /whole number of lamports/);
@@ -76,8 +99,19 @@ describe('state file', () => {
     );
     assert.deepEqual(state.house, { day: '2026-10-05', spent: 50_000_000n, rounds: ['1', '3'] });
     assert.equal(state.pool?.fallback, true);
+    assert.equal(state.pool?.rung, 3, 'a file without a rung maps fallback to the any-age rung');
     assert.deepEqual(parseState('nonsense', now), { house: { day: '2026-10-05', spent: 0n, rounds: [] }, pool: null });
     assert.equal(parseState({ house: { day: 'x', spent: '1', rounds: [] }, pool: { pool: 'bad' } }, now).pool, null);
+  });
+
+  test('the ladder rung of the pool survives a restart', () => {
+    const pool = { pool: '11111111111111111111111111111112', baseMint: '11111111111111111111111111111113', name: 'X', selectedAtMs: now };
+    const rungs = [
+      parseState({ pool: { ...pool, rung: 1, fallback: true } }, now).pool,
+      parseState({ pool: { ...pool, fallback: false } }, now).pool,
+      parseState({ pool: { ...pool, rung: 7 } }, now).pool,
+    ].map((p) => [p?.rung, p?.fallback]);
+    assert.deepEqual(rungs, [[1, true], [0, false], [0, false]]);
   });
 });
 

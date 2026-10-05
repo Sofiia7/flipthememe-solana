@@ -7,6 +7,11 @@
  * - `windowMean` turns the observations of one window into the strike or exit price.
  * - `discoverPumpSwapPools` + `passesGate` rank candidate pools from the free GeckoTerminal API;
  *   the SOL depth gate stays on chain (`quoteReserveLamports`).
+ * - `fetchNewPumpSwapPools` (the network-wide `new_pools` list, newest first, filtered to PumpSwap),
+ *   `fetchPumpSwapPoolsByAddress` (`pools/multi`, up to 30 pools) and `fetchTopPumpSwapPools` (one
+ *   page by 24 h transactions) are single GeckoTerminal requests for callers that track fresh pools
+ *   over time. GeckoTerminal has no creation-time sort for one dex: `dexes/pumpswap/pools` accepts
+ *   only `h24_tx_count_desc` and `h24_volume_usd_desc` (HTTP 400 otherwise, checked 2026-10-05).
  *
  * Units: base amounts are raw base-token units (pump.fun tokens use 6 decimals), quote amounts are
  * wSOL lamports, and `price = quote * PRICE_SCALE / base`, i.e. lamports per raw base unit scaled
@@ -52,12 +57,19 @@ const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 const WINDOW_MIN_SAMPLES = 5;
 const WINDOW_MAX_SAMPLES = 16;
 
-const GECKOTERMINAL_POOLS_URL =
-  'https://api.geckoterminal.com/api/v2/networks/solana/dexes/pumpswap/pools';
+const GECKOTERMINAL_SOLANA_URL = 'https://api.geckoterminal.com/api/v2/networks/solana';
+const GECKOTERMINAL_POOLS_URL = `${GECKOTERMINAL_SOLANA_URL}/dexes/pumpswap/pools`;
+const GECKOTERMINAL_NEW_POOLS_URL = `${GECKOTERMINAL_SOLANA_URL}/new_pools`;
+const GECKOTERMINAL_MULTI_URL = `${GECKOTERMINAL_SOLANA_URL}/pools/multi`;
 // GeckoTerminal pins the response format to an API version through the Accept header.
 const GECKOTERMINAL_ACCEPT = 'application/json;version=20230203';
 const DISCOVERY_PAGES = [1, 2];
 const GECKOTERMINAL_SOLANA_PREFIX = 'solana_';
+const GECKOTERMINAL_PUMPSWAP_DEX = 'pumpswap';
+/** Pools per `pools/multi` request on the free API. */
+export const GECKOTERMINAL_MULTI_LIMIT = 30;
+/** Pages beyond 10 need a paid plan; every list endpoint serves 20 pools per page. */
+export const GECKOTERMINAL_MAX_PAGE = 10;
 // Rows whose pool_created_at lies further in the future than this are treated as malformed.
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
@@ -115,6 +127,33 @@ export type GeckoTerminalFetch = (
   url: string,
   init: { headers: Record<string, string> },
 ) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+
+/**
+ * A GeckoTerminal request answered with a non-2xx status. 429 means rate limited (the free API
+ * allows about 30 calls per minute per IP).
+ */
+export class GeckoTerminalHttpError extends Error {
+  readonly status: number;
+  readonly url: string;
+
+  constructor(url: string, status: number) {
+    super(`GeckoTerminal ${url} answered HTTP ${status}`);
+    this.name = 'GeckoTerminalHttpError';
+    this.status = status;
+    this.url = url;
+  }
+}
+
+/** One page of the network-wide `new_pools` list: its PumpSwap pools plus the time span of the page. */
+export type NewPoolsPage = {
+  /** PumpSwap pools quoted in wSOL, in API order (newest first). */
+  pumpSwap: PoolCandidate[];
+  /** Rows on the page, every dex. */
+  rows: number;
+  /** Newest and oldest `pool_created_at` on the page, every dex (null when no row carries a valid date). */
+  newestCreatedAtMs: number | null;
+  oldestCreatedAtMs: number | null;
+};
 
 type Base64Account = AccountInfoBase & AccountInfoWithBase64EncodedData;
 
@@ -269,23 +308,81 @@ export async function discoverPumpSwapPools(
 ): Promise<PoolCandidate[]> {
   const byPool = new Map<Address, PoolCandidate>();
   for (const page of DISCOVERY_PAGES) {
-    const url = `${GECKOTERMINAL_POOLS_URL}?page=${page}&sort=h24_tx_count_desc`;
-    const res = await fetchFn(url, { headers: { accept: GECKOTERMINAL_ACCEPT } });
-    if (!res.ok) {
-      throw new Error(`GeckoTerminal ${url} answered HTTP ${res.status}`);
-    }
-    const rows = field(await res.json(), 'data');
-    if (!Array.isArray(rows)) {
-      throw new Error(`GeckoTerminal ${url} returned no data array`);
-    }
-    for (const row of rows) {
-      const candidate = parseCandidate(row, nowMs);
-      if (candidate !== null && !byPool.has(candidate.pool)) {
+    for (const candidate of await fetchTopPumpSwapPools(fetchFn, page, nowMs)) {
+      if (!byPool.has(candidate.pool)) {
         byPool.set(candidate.pool, candidate);
       }
     }
   }
   return [...byPool.values()].sort((a, b) => b.txM5 - a.txM5);
+}
+
+/**
+ * One page (1..10) of PumpSwap pools by 24 h transactions, in API order. Rows that are malformed,
+ * not quoted in wSOL, or dated more than 5 minutes after `nowMs` are skipped. Throws
+ * `GeckoTerminalHttpError` on an HTTP error and an `Error` when the body has no `data` array.
+ */
+export async function fetchTopPumpSwapPools(
+  fetchFn: GeckoTerminalFetch = fetch,
+  page: number = 1,
+  nowMs: number = Date.now(),
+): Promise<PoolCandidate[]> {
+  const rows = await geckoRows(fetchFn, `${GECKOTERMINAL_POOLS_URL}?page=${checkPage(page)}&sort=h24_tx_count_desc`);
+  return uniqueCandidates(rows, nowMs, () => true);
+}
+
+/**
+ * One page (1..10) of GeckoTerminal `new_pools` for Solana: the newest pools of every dex, newest
+ * first, 20 per page (cached up to 60 s by the API). Keeps the PumpSwap pools quoted in wSOL and
+ * reports the creation-time span of the whole page, so a caller can tell whether consecutive reads
+ * overlap. Errors as in `fetchTopPumpSwapPools`.
+ */
+export async function fetchNewPumpSwapPools(
+  fetchFn: GeckoTerminalFetch = fetch,
+  page: number = 1,
+  nowMs: number = Date.now(),
+): Promise<NewPoolsPage> {
+  const rows = await geckoRows(fetchFn, `${GECKOTERMINAL_NEW_POOLS_URL}?page=${checkPage(page)}`);
+  let newest: number | null = null;
+  let oldest: number | null = null;
+  for (const row of rows) {
+    const createdAtMs = createdAtOf(row, nowMs);
+    if (createdAtMs === null) continue;
+    if (newest === null || createdAtMs > newest) newest = createdAtMs;
+    if (oldest === null || createdAtMs < oldest) oldest = createdAtMs;
+  }
+  return {
+    pumpSwap: uniqueCandidates(rows, nowMs, (row) => dexOf(row) === GECKOTERMINAL_PUMPSWAP_DEX),
+    rows: rows.length,
+    newestCreatedAtMs: newest,
+    oldestCreatedAtMs: oldest,
+  };
+}
+
+/**
+ * Current GeckoTerminal data of up to 30 pools in one `pools/multi` request, in the order asked
+ * (duplicates asked once). Pools that GeckoTerminal does not return, lists under another dex, or
+ * that are not quoted in wSOL are left out. No request for an empty list. Errors as in
+ * `fetchTopPumpSwapPools`; more than 30 distinct pools throw a `RangeError`.
+ */
+export async function fetchPumpSwapPoolsByAddress(
+  fetchFn: GeckoTerminalFetch = fetch,
+  pools: readonly Address[],
+  nowMs: number = Date.now(),
+): Promise<PoolCandidate[]> {
+  const wanted = [...new Set(pools)];
+  if (wanted.length === 0) return [];
+  if (wanted.length > GECKOTERMINAL_MULTI_LIMIT) {
+    throw new RangeError(`pools/multi takes at most ${GECKOTERMINAL_MULTI_LIMIT} pools, got ${wanted.length}`);
+  }
+  const rows = await geckoRows(fetchFn, `${GECKOTERMINAL_MULTI_URL}/${wanted.join(',')}`);
+  // A row without dex information is kept: the pool was asked for by address, and the caller
+  // checks the PumpSwap owner on chain anyway.
+  const found = new Map<Address, PoolCandidate>();
+  for (const c of uniqueCandidates(rows, nowMs, (row) => (dexOf(row) ?? GECKOTERMINAL_PUMPSWAP_DEX) === GECKOTERMINAL_PUMPSWAP_DEX)) {
+    found.set(c.pool, c);
+  }
+  return wanted.flatMap((pool) => found.get(pool) ?? []);
 }
 
 /**
@@ -322,6 +419,50 @@ function readVault(
   return amount;
 }
 
+async function geckoRows(fetchFn: GeckoTerminalFetch, url: string): Promise<unknown[]> {
+  const res = await fetchFn(url, { headers: { accept: GECKOTERMINAL_ACCEPT } });
+  if (!res.ok) {
+    throw new GeckoTerminalHttpError(url, res.status);
+  }
+  const rows = field(await res.json(), 'data');
+  if (!Array.isArray(rows)) {
+    throw new Error(`GeckoTerminal ${url} returned no data array`);
+  }
+  return rows;
+}
+
+function checkPage(page: number): number {
+  if (!Number.isSafeInteger(page) || page < 1 || page > GECKOTERMINAL_MAX_PAGE) {
+    throw new RangeError(`GeckoTerminal page must be 1..${GECKOTERMINAL_MAX_PAGE}, got ${page}`);
+  }
+  return page;
+}
+
+/** Parsed candidates of the rows that `keep` accepts, first occurrence of each pool, API order. */
+function uniqueCandidates(rows: readonly unknown[], nowMs: number, keep: (row: unknown) => boolean): PoolCandidate[] {
+  const seen = new Set<Address>();
+  const out: PoolCandidate[] = [];
+  for (const row of rows) {
+    if (!keep(row)) continue;
+    const candidate = parseCandidate(row, nowMs);
+    if (candidate === null || seen.has(candidate.pool)) continue;
+    seen.add(candidate.pool);
+    out.push(candidate);
+  }
+  return out;
+}
+
+function dexOf(row: unknown): string | null {
+  const id = field(row, 'relationships', 'dex', 'data', 'id');
+  return typeof id === 'string' ? id : null;
+}
+
+function createdAtOf(row: unknown, nowMs: number): number | null {
+  const createdAt = field(row, 'attributes', 'pool_created_at');
+  const createdAtMs = typeof createdAt === 'string' ? Date.parse(createdAt) : Number.NaN;
+  return Number.isFinite(createdAtMs) && createdAtMs <= nowMs + MAX_CLOCK_SKEW_MS ? createdAtMs : null;
+}
+
 function field(value: unknown, ...path: string[]): unknown {
   let current = value;
   for (const key of path) {
@@ -356,9 +497,8 @@ function parseCandidate(row: unknown, nowMs: number): PoolCandidate | null {
   if (baseMint === null || baseMint === WSOL_MINT || quoteMint !== WSOL_MINT) return null;
   const name = field(row, 'attributes', 'name');
   if (typeof name !== 'string') return null;
-  const createdAt = field(row, 'attributes', 'pool_created_at');
-  const createdAtMs = typeof createdAt === 'string' ? Date.parse(createdAt) : Number.NaN;
-  if (!Number.isFinite(createdAtMs) || createdAtMs > nowMs + MAX_CLOCK_SKEW_MS) return null;
+  const createdAtMs = createdAtOf(row, nowMs);
+  if (createdAtMs === null) return null;
   const buys = txCount(field(row, 'attributes', 'transactions', 'm5', 'buys'));
   const sells = txCount(field(row, 'attributes', 'transactions', 'm5', 'sells'));
   if (buys === null || sells === null) return null;

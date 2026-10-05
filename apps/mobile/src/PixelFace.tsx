@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { PixelRatio, StyleSheet, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
-import { GRID, faceGrid, faceKey, gridToPaths, houseGrid, type Face } from './face/faceModel';
+import { GRID, faceGrid, faceKey, gridToPaths, houseGrid, type Expression, type Face } from './face/faceModel';
 
 export {
   FACE_OPTIONS,
@@ -9,6 +9,7 @@ export {
   faceToBytes,
   normalizeFace,
   randomFace,
+  type Expression,
   type Face,
 } from './face/faceModel';
 
@@ -26,10 +27,11 @@ function snappedSize(size: number): number {
   return (k * GRID) / ratio;
 }
 
-function facePaths(face: Face, key: string): Paths {
+function facePaths(face: Face, expression: Expression | undefined): Paths {
+  const key = `${faceKey(face)}${expression ?? ''}`;
   let paths = pathCache.get(key);
   if (!paths) {
-    paths = gridToPaths(faceGrid(face));
+    paths = gridToPaths(faceGrid(face, expression));
     pathCache.set(key, paths);
   }
   return paths;
@@ -48,11 +50,23 @@ function PixelCanvas({ paths, size, tile }: { paths: Paths; size: number; tile: 
   );
 }
 
-/** A compact pixel head (16x16 logical pixels): hair, face, accessory. Never a body. */
-export const PixelFace = memo(function PixelFace({ face, size = 32, tile = true }: { face: Face; size?: number; tile?: boolean }) {
-  // Paths are cached per face key, so re-renders cost a map lookup.
-  const paths = facePaths(face, faceKey(face));
-  return <PixelCanvas paths={paths} size={size} tile={tile} />;
+/**
+ * A compact pixel head (16x16 logical pixels): hair, face, accessory. Never a body.
+ * `expression` (happy / sad) swaps the mouth for results; it is not part of the saved face.
+ */
+export const PixelFace = memo(function PixelFace({
+  face,
+  size = 32,
+  tile = true,
+  expression,
+}: {
+  face: Face;
+  size?: number;
+  tile?: boolean;
+  expression?: Expression;
+}) {
+  // Paths are cached per face key and expression, so re-renders cost a map lookup.
+  return <PixelCanvas paths={facePaths(face, expression)} size={size} tile={tile} />;
 });
 
 /** The house's marker in player lists: a pixel house, so it never reads as a person. */

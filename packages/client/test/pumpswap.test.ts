@@ -12,8 +12,13 @@ import {
   PRICE_SCALE,
   PUMPSWAP_PROGRAM_ID,
   WSOL_MINT,
+  GECKOTERMINAL_MULTI_LIMIT,
+  GeckoTerminalHttpError,
   decodePumpSwapPool,
   discoverPumpSwapPools,
+  fetchNewPumpSwapPools,
+  fetchPumpSwapPoolsByAddress,
+  fetchTopPumpSwapPools,
   loadPool,
   observePrice,
   passesGate,
@@ -34,6 +39,10 @@ import {
 //   (slot 453526170, identical amounts): the RPC node's own token parser, used as the reference
 // - geckoterminal-pumpswap-pools-page{1,2}.json: GET .../dexes/pumpswap/pools?page=N&sort=h24_tx_count_desc
 //   at 2026-10-05T08:32:13Z (JSON re-indented, values unchanged)
+// - geckoterminal-new-pools-page1.json: GET .../networks/solana/new_pools?page=1 at 2026-10-05T13:15:41Z
+//   (served from the API cache, 54 s old; 20 rows spanning 35 s, every dex; re-indented)
+// - geckoterminal-pools-multi-john.json: GET .../networks/solana/pools/multi/G1jURgdS... at 2026-10-05T13:35:27Z,
+//   the PumpSwap pool of that page 22 minutes later: drained (re-indented)
 
 type RpcAccountJson = { data: [string, string]; owner: string; lamports: number; space: number };
 type RpcResponseJson<T> = { jsonrpc: '2.0'; id: number; result: { context: { slot: number }; value: T } };
@@ -52,6 +61,9 @@ const VAULTS_PARSED_JSON = fixture<RpcResponseJson<ParsedTokenAccountJson[]>>('p
 const GECKO_PAGE_1 = fixture<GeckoPageJson>('geckoterminal-pumpswap-pools-page1.json');
 const GECKO_PAGE_2 = fixture<GeckoPageJson>('geckoterminal-pumpswap-pools-page2.json');
 const GECKO_SNAPSHOT_MS = Date.parse('2026-10-05T08:32:13Z');
+const GECKO_NEW_POOLS = fixture<GeckoPageJson>('geckoterminal-new-pools-page1.json');
+const NEW_POOLS_FETCHED_MS = Date.parse('2026-10-05T13:15:41Z');
+const GECKO_API = 'https://api.geckoterminal.com/api/v2/networks/solana';
 
 const HIGGS_POOL = address('BFrSZakeqNzVtM3EFhroo4eRhagmmWN8BRntiQKFH6Ru');
 const HIGGS_MINT = address('DoVAVzViX8Bjy3r15nwikSaSbzE6dV4ovd28aWpJpump');
@@ -481,5 +493,100 @@ describe('discoverPumpSwapPools', () => {
     await assert.rejects(discoverPumpSwapPools(limited.fetchFn, GECKO_SNAPSHOT_MS), /HTTP 429/);
     const noData = geckoFetch({ 1: GECKO_PAGE_1, 2: { errors: [{ status: '401' }] } });
     await assert.rejects(discoverPumpSwapPools(noData.fetchFn, GECKO_SNAPSHOT_MS), /page=2.*no data array/);
+  });
+});
+
+describe('single-request GeckoTerminal readers', () => {
+  const JOHN_POOL = address('G1jURgdSVJXnFSjj1s3cPXowj7ERsTGnz27mtXpSUnc3');
+  const PUMP_FUN_POOL = address('svuuMBPGFQznDEVHDk5G2J5dZKEAnbfdDfd1JmUYa7Q'); // bonding curve, dex pump-fun
+  const JOHN: PoolCandidate = {
+    pool: JOHN_POOL,
+    baseMint: address('EtGKPxsypmvZfqRHT4y5d7JintuaHTwcShJcazDdjups'),
+    name: 'John / SOL',
+    reserveUsd: 20589.4486,
+    createdAtMs: Date.parse('2026-10-05T13:13:44Z'),
+    txM5: 111, // 106 buys + 5 sells, two minutes after graduating
+    volumeH1Usd: 42.5182270926,
+  };
+
+  function serve(body: unknown, status = 200) {
+    const urls: string[] = [];
+    const fetchFn: GeckoTerminalFetch = async (url, init) => {
+      urls.push(url);
+      assert.match(init.headers.accept ?? '', /^application\/json;version=/);
+      return { ok: status >= 200 && status < 300, status, json: async () => structuredClone(body) };
+    };
+    return { fetchFn, urls };
+  }
+  const rowOf = (page: GeckoPageJson, pool: string): Record<string, unknown> => {
+    const row = page.data.find((r) => r.id === `solana_${pool}`);
+    assert.ok(row, pool);
+    return structuredClone(row);
+  };
+
+  test('fetchNewPumpSwapPools: the PumpSwap pool of a real page and the time span of the whole page', async () => {
+    const { fetchFn, urls } = serve(GECKO_NEW_POOLS);
+    const page = await fetchNewPumpSwapPools(fetchFn, 1, NEW_POOLS_FETCHED_MS);
+    assert.deepEqual(urls, [`${GECKO_API}/new_pools?page=1`]);
+    assert.equal(page.rows, 20);
+    assert.equal(page.newestCreatedAtMs, Date.parse('2026-10-05T13:14:17Z'));
+    assert.equal(page.oldestCreatedAtMs, Date.parse('2026-10-05T13:13:42Z'));
+    assert.deepEqual(page.pumpSwap, [JOHN]);
+  });
+
+  test('fetchNewPumpSwapPools: pages 1..10 only, errors carry the HTTP status', async () => {
+    const { fetchFn, urls } = serve(GECKO_NEW_POOLS);
+    await assert.rejects(fetchNewPumpSwapPools(fetchFn, 0, NEW_POOLS_FETCHED_MS), RangeError);
+    await assert.rejects(fetchNewPumpSwapPools(fetchFn, 11, NEW_POOLS_FETCHED_MS), RangeError);
+    assert.deepEqual(urls, []);
+    const limited = serve({ errors: [{ status: '429', title: 'Too Many Requests' }] }, 429);
+    await assert.rejects(
+      fetchNewPumpSwapPools(limited.fetchFn, 3, NEW_POOLS_FETCHED_MS),
+      (e: unknown) => e instanceof GeckoTerminalHttpError && e.status === 429 && /new_pools\?page=3 answered HTTP 429$/.test(e.message),
+    );
+    const empty = serve({ data: [] });
+    assert.deepEqual(await fetchNewPumpSwapPools(empty.fetchFn, 2, NEW_POOLS_FETCHED_MS), { pumpSwap: [], rows: 0, newestCreatedAtMs: null, oldestCreatedAtMs: null });
+  });
+
+  test('fetchPumpSwapPoolsByAddress: one pools/multi request, asked order, other dexes dropped', async () => {
+    const higgs = rowOf(GECKO_PAGE_1, HIGGS_POOL);
+    const johnWithoutDex = rowOf(GECKO_NEW_POOLS, JOHN_POOL);
+    delete (johnWithoutDex.relationships as Record<string, unknown>).dex;
+    const { fetchFn, urls } = serve({ data: [higgs, rowOf(GECKO_NEW_POOLS, PUMP_FUN_POOL), johnWithoutDex] });
+    const unknown = address('11111111111111111111111111111112');
+    const pools = await fetchPumpSwapPoolsByAddress(fetchFn, [JOHN_POOL, PUMP_FUN_POOL, HIGGS_POOL, unknown, JOHN_POOL], NEW_POOLS_FETCHED_MS);
+    assert.deepEqual(urls, [`${GECKO_API}/pools/multi/${JOHN_POOL},${PUMP_FUN_POOL},${HIGGS_POOL},${unknown}`]);
+    assert.deepEqual(pools.map((p) => p.name), ['John / SOL', 'HIGGS / SOL']);
+    assert.deepEqual(pools[0], JOHN);
+  });
+
+  test('fetchPumpSwapPoolsByAddress: the real answer for the same pool 22 minutes later', async () => {
+    const { fetchFn } = serve(fixture<GeckoPageJson>('geckoterminal-pools-multi-john.json'));
+    const at = Date.parse('2026-10-05T13:35:27Z');
+    assert.deepEqual(await fetchPumpSwapPoolsByAddress(fetchFn, [JOHN_POOL], at), [
+      { ...JOHN, reserveUsd: 0.0000006150608462, txM5: 0, volumeH1Usd: 2907.7481442464 },
+    ]);
+  });
+
+  test('fetchPumpSwapPoolsByAddress: no request for an empty list, at most 30 pools', async () => {
+    const { fetchFn, urls } = serve({ data: [] });
+    assert.deepEqual(await fetchPumpSwapPoolsByAddress(fetchFn, [], NEW_POOLS_FETCHED_MS), []);
+    const many = GECKO_PAGE_1.data.concat(GECKO_PAGE_2.data).map((r) => (r.attributes as { address: string }).address as ReturnType<typeof address>);
+    assert.equal(GECKOTERMINAL_MULTI_LIMIT, 30);
+    await assert.rejects(fetchPumpSwapPoolsByAddress(fetchFn, many.slice(0, 31), NEW_POOLS_FETCHED_MS), RangeError);
+    assert.deepEqual(urls, []);
+    await fetchPumpSwapPoolsByAddress(fetchFn, many.slice(0, 30), NEW_POOLS_FETCHED_MS);
+    assert.equal(urls.length, 1);
+  });
+
+  test('fetchTopPumpSwapPools: one page by 24 h transactions, in API order', async () => {
+    const { fetchFn, urls } = serve(GECKO_PAGE_2);
+    const pools = await fetchTopPumpSwapPools(fetchFn, 2, GECKO_SNAPSHOT_MS);
+    assert.deepEqual(urls, [`${GECKO_API}/dexes/pumpswap/pools?page=2&sort=h24_tx_count_desc`]);
+    assert.equal(pools.length, 20);
+    assert.deepEqual(
+      pools.map((p) => p.pool),
+      GECKO_PAGE_2.data.map((r) => (r.attributes as { address: string }).address),
+    );
   });
 });

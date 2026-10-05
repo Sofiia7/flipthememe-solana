@@ -7,8 +7,10 @@ import { dirname } from 'node:path';
 import { isAddress, type Address } from '@solana/kit';
 import { emptyLedger, type HouseLedger } from './house.ts';
 import { toJson } from './log.ts';
+import { isRung, type Rung } from './poolgate.ts';
 
-export type PersistedPool = { pool: Address; baseMint: Address; name: string; selectedAtMs: number; fallback: boolean };
+/** `rung` is the fallback-ladder rung (0 = fresh); files written before it existed map fallback to 3. */
+export type PersistedPool = { pool: Address; baseMint: Address; name: string; selectedAtMs: number; rung: Rung; fallback: boolean };
 export type KeeperState = { house: HouseLedger; pool: PersistedPool | null };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -41,12 +43,14 @@ export function parseState(raw: unknown, nowMs: number): KeeperState {
     typeof pool.selectedAtMs === 'number' &&
     Number.isFinite(pool.selectedAtMs)
   ) {
+    const rung: Rung = isRung(pool.rung) ? pool.rung : pool.fallback === true ? 3 : 0;
     state.pool = {
       pool: pool.pool,
       baseMint: pool.baseMint,
       name: typeof pool.name === 'string' ? pool.name : '',
       selectedAtMs: pool.selectedAtMs,
-      fallback: pool.fallback === true,
+      rung,
+      fallback: rung > 0,
     };
   }
   return state;

@@ -17,7 +17,9 @@ import {
 import { positionResult } from '../chain/phase';
 import { chainNowSec } from '../chain/useChainClock';
 import { formatSol, shortAddress } from '../lib/format';
+import { chatterOn, soundMuted, useBoolStore } from '../lib/prefs';
 import { PixelFace } from '../PixelFace';
+import { playSound } from '../sound/sound';
 import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
 import { Btn, KV } from '../ui/common';
@@ -31,8 +33,25 @@ const FIELDS: { field: FaceField; title: string; names: readonly string[] }[] = 
   { field: 'accessory', title: 'ACCESSORY', names: ACCESSORY_NAMES },
 ];
 
+function Toggle({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.toggle}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: on }}
+      accessibilityLabel={label}
+    >
+      <Text style={styles.toggleLabel}>{label}</Text>
+      <Text style={[styles.togglePill, on ? styles.toggleOn : styles.toggleOff]}>{on ? 'ON' : 'OFF'}</Text>
+    </Pressable>
+  );
+}
+
 export function ProfileScreen() {
   const { face, setFace, wallet, my, myReady, offsetSec } = useApp();
+  const muted = useBoolStore(soundMuted);
+  const chatter = useBoolStore(chatterOn);
   const bytes = faceToBytes(face);
   const stats = useMemo(() => {
     const now = chainNowSec(offsetSec);
@@ -69,6 +88,18 @@ export function ProfileScreen() {
           <Text style={styles.bytes}>[{Array.from(bytes).join(', ')}]</Text>
           <Btn small kind="ghost" title="RANDOMIZE" onPress={() => setFace(randomFace())} />
         </View>
+      </View>
+
+      <View style={styles.toggles}>
+        <Toggle
+          label="SOUND"
+          on={!muted.value}
+          onPress={() => {
+            soundMuted.toggle();
+            if (!soundMuted.get()) playSound('bet');
+          }}
+        />
+        <Toggle label="LIVE CHATTER FROM X" on={chatter.value} onPress={() => chatterOn.toggle()} />
       </View>
 
       {FIELDS.map(({ field, title, names }) => (
@@ -128,4 +159,19 @@ const styles = StyleSheet.create({
   options: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   option: { borderWidth: 2, borderColor: 'transparent', padding: 1 },
   optionSelected: { borderColor: C.accent },
+  toggles: { gap: 8 },
+  toggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.panel,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  toggleLabel: { color: C.white, fontSize: 13, fontWeight: '900', fontFamily: MONO },
+  togglePill: { fontSize: 12, fontWeight: '900', fontFamily: MONO, paddingHorizontal: 10, paddingVertical: 3, borderWidth: 2, minWidth: 54, textAlign: 'center' },
+  toggleOn: { color: C.bg, backgroundColor: C.neonGreen, borderColor: C.neonGreen },
+  toggleOff: { color: C.subtle, borderColor: C.border },
 });

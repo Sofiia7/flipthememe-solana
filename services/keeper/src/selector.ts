@@ -1,98 +1,104 @@
 /**
- * Token choice: the most active fresh PumpSwap pool with enough SOL depth, held at least 15
- * minutes while it keeps passing; the most active deep pool of any age as a fallback.
+ * Token choice, once a minute (rules and defaults in poolgate.ts, candidates from discovery.ts):
+ *
+ * 1. the current pool's SOL depth is read on chain every refresh; below K x min_bank (50 SOL) it
+ *    is replaced at once, even inside its hold;
+ * 2. otherwise it stays for its hold (10 minutes), and after that while it passes the keep gate
+ *    (20+ trades in 5 minutes, at most 180 minutes old on the fresh rung) unless a deep enough
+ *    candidate is clearly better: a lower rung of the ladder, or the same rung with 1.5x the score;
+ * 3. a new pool is the best deep enough candidate: fresh first (10-120 minutes old, 50+ trades in
+ *    5 minutes, best score), else the fallback ladder (up to 6 h old, up to 24 h, then the most
+ *    active pool of any age). The rung is logged and kept in the state file;
+ * 4. after a failed or skipped discovery refresh the current pool is not rotated (its depth still
+ *    is checked); a replacement then comes from the last good candidate list.
+ *
+ * Rounds take the pool selected when they are created; rounds in flight keep theirs.
  */
-import {
-  DEPTH_K,
-  discoverPumpSwapPools,
-  passesGate,
-  quoteReserveLamports,
-  type GeckoTerminalFetch,
-  type PoolCandidate,
-} from '@flipthememe/client';
+import { DEPTH_K, quoteReserveLamports, type PoolCandidate } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
+import type { DiscoveryResult } from './discovery.ts';
 import type { Logger } from './log.ts';
+import {
+  MINUTE_MS,
+  RUNG_NAMES,
+  beats,
+  keepFailure,
+  rankCandidates,
+  scoreOf,
+  type PoolGate,
+  type Ranked,
+  type Rung,
+} from './poolgate.ts';
 import { shortError, type FailoverRpc } from './rpc.ts';
 import type { PoolRefs } from './sampler.ts';
 
-export const HOLD_MS = 15 * 60 * 1000;
-/** Depth checks per refresh (2 mainnet reads each, the first one cached). */
+/** Depth checks of candidates per refresh (2 mainnet reads each, the first one cached). */
 export const MAX_DEPTH_CHECKS = 6;
-/** After a GeckoTerminal failure, skip this many refreshes (2 requests each, ~30 allowed per minute). */
-export const DISCOVERY_FAILURE_SKIPS = 2;
 
 export type Selection = {
   pool: Address;
   baseMint: Address;
   name: string;
   selectedAtMs: number;
-  /** True when no fresh pool qualified and the keeper fell back to an older one. */
+  /** Rung of the fallback ladder the pool was picked on (0 = fresh, see RUNG_NAMES). */
+  rung: Rung;
+  /** True when rung > 0: no fresh pool qualified and the keeper fell back to an older one. */
   fallback: boolean;
   quoteReserve: bigint;
   reserveAtMs: number;
 };
 
-export type PoolPlan = {
-  /** A fresh current pool inside its hold time that still passes the age/activity gate. */
-  keepCurrent: boolean;
-  /** A fallback current pool inside its hold time that is still listed (used only when no fresh pool qualifies). */
-  keepFallback: boolean;
-  /** Fresh candidates (age and activity gate), most active first. */
-  fresh: PoolCandidate[];
-  /** Every candidate, most active first, for the fallback. */
-  any: PoolCandidate[];
+/** The mainnet reads the selector needs. */
+export type PoolChain = {
+  /** wSOL in the quote vault, lamports; throws when the account is not a wSOL PumpSwap pool. */
+  quoteReserve(pool: Address): Promise<bigint>;
+  baseMint(pool: Address): Promise<Address>;
 };
 
-/**
- * Order of preference for one refresh; the depth check (on chain) is the caller's:
- * 1. keep the current fresh pool while it is held (15 min) and still passes;
- * 2. else the most active fresh pool that is deep enough;
- * 3. else keep the current fallback pool while it is held and still listed;
- * 4. else the most active pool of any age that is deep enough (fallback).
- */
-export function poolPlan(
-  candidates: readonly PoolCandidate[],
-  current: Pick<Selection, 'pool' | 'selectedAtMs' | 'fallback'> | null,
-  nowMs: number,
-  holdMs: number = HOLD_MS,
-): PoolPlan {
-  const any = [...candidates].sort((a, b) => b.txM5 - a.txM5);
-  const fresh = any.filter((c) => passesGate(c, nowMs));
-  const held = current !== null && nowMs - current.selectedAtMs < holdMs;
-  const keepCurrent = held && !current.fallback && fresh.some((c) => c.pool === current.pool);
-  const keepFallback = held && current.fallback && any.some((c) => c.pool === current.pool);
-  return { keepCurrent, keepFallback, fresh, any };
+export function poolChain(refs: PoolRefs, mainnet: FailoverRpc): PoolChain {
+  return {
+    async quoteReserve(pool) {
+      const ref = await refs.get(pool);
+      return mainnet.call('quoteReserve', (rpc) => quoteReserveLamports(rpc, ref));
+    },
+    async baseMint(pool) {
+      return (await refs.get(pool)).baseMint;
+    },
+  };
 }
+
+export type CandidateSource = { refresh(nowMs: number, current: Address | null): Promise<DiscoveryResult> };
+
+const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 export class PoolSelector {
   current: Selection | null;
-  private readonly refs: PoolRefs;
-  private readonly mainnet: FailoverRpc;
+  private readonly source: CandidateSource;
+  private readonly chain: PoolChain;
+  private readonly gate: PoolGate;
   private readonly logger: Logger;
   private readonly override: Address | null;
-  private readonly fetchFn: GeckoTerminalFetch;
   private readonly minBank: () => bigint;
   private readonly onChange: (s: Selection) => void;
-  private skips = 0;
 
   constructor(opts: {
-    refs: PoolRefs;
-    mainnet: FailoverRpc;
+    source: CandidateSource;
+    chain: PoolChain;
+    gate: PoolGate;
     logger: Logger;
     override: Address | null;
     minBank: () => bigint;
     initial: Selection | null;
     onChange: (s: Selection) => void;
-    fetchFn?: GeckoTerminalFetch;
   }) {
-    this.refs = opts.refs;
-    this.mainnet = opts.mainnet;
+    this.source = opts.source;
+    this.chain = opts.chain;
+    this.gate = opts.gate;
     this.logger = opts.logger;
     this.override = opts.override;
     this.minBank = opts.minBank;
     this.current = opts.initial;
     this.onChange = opts.onChange;
-    this.fetchFn = opts.fetchFn ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(10_000) }));
   }
 
   /** Minimum quote reserve for a pool to qualify: K x min_bank (50 SOL at the devnet params). */
@@ -105,76 +111,96 @@ export class PoolSelector {
       await this.refreshOverride(this.override, nowMs);
       return;
     }
-    if (this.skips > 0) {
-      this.skips--;
-      return;
-    }
-    let candidates: PoolCandidate[];
-    try {
-      candidates = await discoverPumpSwapPools(this.fetchFn, nowMs);
-    } catch (error) {
-      this.skips = DISCOVERY_FAILURE_SKIPS;
-      this.logger({ event: 'pool_discovery_failed', error: shortError(error), keeping: this.current?.pool ?? null });
-      return;
-    }
-    const plan = poolPlan(candidates, this.current, nowMs);
-    const depth = new Map<string, bigint | null>();
-    const deepEnough = async (pool: Address): Promise<bigint | null> => {
-      if (!depth.has(pool)) depth.set(pool, await this.reserveIfDeep(pool));
+    const current = this.current;
+    const { candidates, complete } = await this.source.refresh(nowMs, current?.pool ?? null);
+    const depth = new Map<Address, bigint | null>();
+    let checks = 0;
+    /** The reserve when deep enough, else null; at most MAX_DEPTH_CHECKS candidates besides the current pool. */
+    const deepEnough = async (pool: Address): Promise<bigint | null | undefined> => {
+      if (!depth.has(pool)) {
+        if (pool !== current?.pool) {
+          if (checks >= MAX_DEPTH_CHECKS) return undefined;
+          checks++;
+        }
+        depth.set(pool, await this.reserveIfDeep(pool));
+      }
       return depth.get(pool) ?? null;
     };
 
-    const keep = async (): Promise<boolean> => {
-      if (!this.current) return false;
-      const reserve = await deepEnough(this.current.pool);
-      if (reserve === null) return false;
-      this.current = { ...this.current, quoteReserve: reserve, reserveAtMs: Date.now() };
-      return true;
-    };
+    let reason: string;
+    if (current) {
+      const reserve = await deepEnough(current.pool);
+      if (typeof reserve === 'bigint') {
+        this.current = { ...current, quoteReserve: reserve, reserveAtMs: Date.now() };
+        if (nowMs - current.selectedAtMs < this.gate.holdMs || !complete) return;
+        const stats = candidates.find((c) => c.pool === current.pool);
+        const failure = keepFailure(stats, current.rung, nowMs, this.gate);
+        if (failure === null && stats) {
+          const mine = { rung: current.rung, score: scoreOf(stats, nowMs, this.gate) };
+          for (const r of rankCandidates(candidates, nowMs, this.gate)) {
+            if (r.candidate.pool === current.pool) continue;
+            if (!beats(r, mine, this.gate)) break; // ranked best first: nothing later beats it either
+            const deep = await deepEnough(r.candidate.pool);
+            if (deep === undefined) break;
+            if (deep !== null) return this.select(r, deep, nowMs, `better than ${RUNG_NAMES[mine.rung]} score ${round1(mine.score)}`);
+          }
+          return;
+        }
+        reason = failure ?? 'unlisted';
+      } else {
+        reason = `quote reserve below ${this.minReserve()} lamports or unreadable`;
+      }
+    } else {
+      reason = 'no pool yet';
+    }
 
-    if (plan.keepCurrent && (await keep())) return;
-    for (const c of plan.fresh.slice(0, MAX_DEPTH_CHECKS)) {
-      const reserve = await deepEnough(c.pool);
-      if (reserve !== null) return this.select(c, false, reserve, nowMs);
+    for (const r of rankCandidates(candidates, nowMs, this.gate)) {
+      const deep = await deepEnough(r.candidate.pool);
+      if (deep === undefined) break;
+      if (deep !== null) return this.select(r, deep, nowMs, reason);
     }
-    if (plan.keepFallback && (await keep())) return;
-    for (const c of plan.any.slice(0, MAX_DEPTH_CHECKS)) {
-      const reserve = await deepEnough(c.pool);
-      if (reserve !== null) return this.select(c, true, reserve, nowMs);
-    }
-    this.logger({ event: 'pool_none_qualifies', candidates: candidates.length, fresh: plan.fresh.length, keeping: this.current?.pool ?? null });
+    this.logger({
+      event: 'pool_none_qualifies',
+      reason,
+      candidates: candidates.length,
+      depthChecks: checks,
+      complete,
+      keeping: current?.pool ?? null,
+    });
   }
 
-  private select(c: PoolCandidate, fallback: boolean, reserve: bigint, nowMs: number): void {
+  private select(r: Ranked, reserve: bigint, nowMs: number, reason: string): void {
+    const c: PoolCandidate = r.candidate;
+    const fallback = r.rung > 0;
+    const facts = {
+      rung: RUNG_NAMES[r.rung],
+      reason,
+      pool: c.pool,
+      name: c.name,
+      txM5: c.txM5,
+      ageMin: round1((nowMs - c.createdAtMs) / MINUTE_MS),
+      score: round1(r.score),
+      quoteReserve: reserve,
+    };
     if (this.current && this.current.pool === c.pool) {
-      const flagChanged = this.current.fallback !== fallback;
-      this.current = { ...this.current, name: c.name, fallback, quoteReserve: reserve, reserveAtMs: Date.now() };
-      if (flagChanged) {
-        this.logger({ event: fallback ? 'pool_kept_as_fallback' : 'pool_kept_as_fresh', pool: c.pool, name: c.name });
+      const rungChanged = this.current.rung !== r.rung;
+      this.current = { ...this.current, name: c.name, rung: r.rung, fallback, quoteReserve: reserve, reserveAtMs: Date.now() };
+      if (rungChanged) {
+        this.logger({ event: 'pool_kept_on_rung', ...facts });
         this.onChange(this.current);
       }
       return;
     }
     const previous = this.current?.pool ?? null;
-    this.current = { pool: c.pool, baseMint: c.baseMint, name: c.name, selectedAtMs: nowMs, fallback, quoteReserve: reserve, reserveAtMs: Date.now() };
-    this.logger({
-      event: fallback ? 'pool_selected_fallback' : 'pool_selected',
-      pool: c.pool,
-      baseMint: c.baseMint,
-      name: c.name,
-      txM5: c.txM5,
-      ageHours: Math.round((nowMs - c.createdAtMs) / 360_000) / 10,
-      quoteReserve: reserve,
-      previous,
-    });
+    this.current = { pool: c.pool, baseMint: c.baseMint, name: c.name, selectedAtMs: nowMs, rung: r.rung, fallback, quoteReserve: reserve, reserveAtMs: Date.now() };
+    this.logger({ event: fallback ? 'pool_selected_fallback' : 'pool_selected', ...facts, baseMint: c.baseMint, previous });
     this.onChange(this.current);
   }
 
   /** The quote reserve in lamports when the pool is a wSOL PumpSwap pool deep enough, else null. */
   private async reserveIfDeep(pool: Address): Promise<bigint | null> {
     try {
-      const ref = await this.refs.get(pool);
-      const reserve = await this.mainnet.call('quoteReserve', (rpc) => quoteReserveLamports(rpc, ref));
+      const reserve = await this.chain.quoteReserve(pool);
       return reserve >= this.minReserve() ? reserve : null;
     } catch (error) {
       this.logger({ event: 'pool_check_failed', pool, error: shortError(error) });
@@ -184,14 +210,14 @@ export class PoolSelector {
 
   private async refreshOverride(pool: Address, nowMs: number): Promise<void> {
     try {
-      const ref = await this.refs.get(pool);
-      const reserve = await this.mainnet.call('quoteReserve', (rpc) => quoteReserveLamports(rpc, ref));
+      const reserve = await this.chain.quoteReserve(pool);
       if (this.current?.pool === pool) {
         this.current = { ...this.current, quoteReserve: reserve, reserveAtMs: Date.now() };
         return;
       }
-      this.current = { pool, baseMint: ref.baseMint, name: 'POOL_OVERRIDE', selectedAtMs: nowMs, fallback: false, quoteReserve: reserve, reserveAtMs: Date.now() };
-      this.logger({ event: 'pool_selected_override', pool, baseMint: ref.baseMint, quoteReserve: reserve, belowDepthGate: reserve < this.minReserve() });
+      const baseMint = await this.chain.baseMint(pool);
+      this.current = { pool, baseMint, name: 'POOL_OVERRIDE', selectedAtMs: nowMs, rung: 0, fallback: false, quoteReserve: reserve, reserveAtMs: Date.now() };
+      this.logger({ event: 'pool_selected_override', pool, baseMint, quoteReserve: reserve, belowDepthGate: reserve < this.minReserve() });
       this.onChange(this.current);
     } catch (error) {
       this.logger({ event: 'pool_check_failed', pool, error: shortError(error) });

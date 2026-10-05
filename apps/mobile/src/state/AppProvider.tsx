@@ -1,10 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking } from 'react-native';
-import * as Haptics from 'expo-haptics';
 import type { Address, Signature } from '@solana/kit';
 import { RoundStatus, Side, type SessionAccount } from '@flipthememe/client';
 import { roundLink } from '../config';
-import { positionResult, roundResultLabel } from '../chain/phase';
+import { positionResult, roundResultLabel, type PositionResult, type ResultLabel } from '../chain/phase';
 import type { RoundView } from '../chain/fetch';
 import { devnetRpc, type SolanaRpc } from '../chain/rpc';
 import { useArena, type ArenaData } from '../chain/useArena';
@@ -22,12 +21,21 @@ import { useWalletActions, type WalletActions } from '../wallet/useWalletActions
 
 export type Tab = 'arena' | 'wallet' | 'history' | 'profile';
 
+/** One of my rounds turned final while the app was open: drives the win / rekt / refund overlays. */
 export type Toast = {
   id: string;
   roundId: bigint;
+  kind: Exclude<PositionResult['kind'], 'pending'>;
+  tone: 'win' | 'loss' | 'neutral';
+  side: number;
+  stake: bigint;
+  /** Credited to the game balance by this round (lamports). */
+  payout: bigint;
+  tokenMint: string;
+  label: ResultLabel;
   title: string;
   body: string;
-  tone: 'win' | 'loss' | 'neutral';
+  /** Text share with the round's deep link (also the fallback when the picture share fails). */
   shareText: string;
 };
 
@@ -199,7 +207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const feed = usePoolPrice(pools.chartPool);
   const myFeed = usePoolPrice(pools.myPool);
 
-  // Result toasts with haptics when one of my rounds turns final during this session.
+  // Result overlays when one of my rounds turns final during this session (they play their own haptics and sound).
   const [toasts, setToasts] = useState<Toast[]>([]);
   const seen = useRef<{ owner: string | null; status: Map<string, number> }>({ owner: null, status: new Map() });
   // Local ms when this app first saw each of my rounds final (the manual Claim waits 20 s after it).
@@ -226,17 +234,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (before === undefined || before === RoundStatus.Final || round.account.status !== RoundStatus.Final) continue;
       fresh.push(resultToast(p.account.side, p.account.stake, p.account.claimed, p.account.payout, round, chainNow()));
     }
-    if (fresh.length > 0) {
-      setToasts((prev) => [...prev, ...fresh]);
-      const best = fresh.some((t) => t.tone === 'win') ? 'win' : fresh.some((t) => t.tone === 'loss') ? 'loss' : 'neutral';
-      void Haptics.notificationAsync(
-        best === 'win'
-          ? Haptics.NotificationFeedbackType.Success
-          : best === 'loss'
-            ? Haptics.NotificationFeedbackType.Error
-            : Haptics.NotificationFeedbackType.Warning,
-      ).catch(() => undefined);
-    }
+    if (fresh.length > 0) setToasts((prev) => [...prev, ...fresh]);
   }, [myReady, owner, myRaw.positions, chainNow]);
   const dismissToast = useCallback(() => setToasts((prev) => prev.slice(1)), []);
   const finalSeenAt = useCallback((roundAddress: string) => finalSeen.current.get(roundAddress) ?? null, []);
@@ -303,43 +301,43 @@ function resultToast(
   const amount = r.payout ?? 0n;
   const symbol = peekTokenInfo(a.tokenMint)?.symbol;
   const token = symbol ? `$${symbol}` : 'a fresh meme coin';
-  const id = `${round.id}`;
+  const base = { id: `${round.id}`, roundId: round.id, side, stake, payout: amount, tokenMint: a.tokenMint, label };
   if (r.kind === 'won') {
     return {
-      id,
-      roundId: round.id,
-      title: `Round #${round.id}: ${label} - you won`,
-      body: `${sol(amount)} credited to your balance (1.96x of the matched part).`,
+      ...base,
+      kind: 'won',
       tone: 'win',
+      title: 'YOU WON',
+      body: `+${sol(amount)}`,
       shareText: `I called ${sideName(side)} on ${token} in FlipTheMeme round #${round.id} and won ${sol(amount)} (Solana devnet test SOL). ${roundLink(round.id)}`,
     };
   }
   if (r.kind === 'lost') {
-    const lost = stake - amount;
     return {
-      id,
-      roundId: round.id,
-      title: `Round #${round.id}: ${label} - your ${sideName(side)} lost`,
-      body: amount > 0n ? `Lost ${sol(lost)}; ${sol(amount)} of unmatched stake returned.` : `Lost ${sol(lost)}.`,
+      ...base,
+      kind: 'lost',
       tone: 'loss',
+      title: 'REKT',
+      body: amount > 0n ? `-${sol(stake - amount)}, ${sol(amount)} unmatched back` : `-${sol(stake - amount)}`,
       shareText: `Round #${round.id} on ${token} went ${label} in FlipTheMeme. Rematch? ${roundLink(round.id)}`,
     };
   }
-  const why =
+  const title =
     r.kind === 'full-refund'
-      ? 'No matched bank - full refund, no fee.'
+      ? 'No match - stake back'
       : label === 'TIE'
-        ? 'Exit equal to strike - refund minus 1%.'
+        ? 'Tie - stake back'
         : label === 'NO PRICE'
-          ? 'Too few price samples - refund minus 1%.'
-          : 'Refund minus 1%.';
+          ? 'No price - stake back'
+          : label === 'EXPIRED'
+            ? 'Expired - stake back'
+            : 'Refund - stake back';
   return {
-    id,
-    roundId: round.id,
-    title: `Round #${round.id}: ${label}`,
-    body: `${why} ${sol(amount)} back in your balance.`,
+    ...base,
+    kind: r.kind === 'full-refund' ? 'full-refund' : 'refund',
     tone: 'neutral',
+    title,
+    body: r.kind === 'full-refund' ? `+${sol(amount)}` : `+${sol(amount)} (1% fee)`,
     shareText: `Round #${round.id} on ${token} ended ${label} in FlipTheMeme (Solana devnet). ${roundLink(round.id)}`,
   };
 }
-

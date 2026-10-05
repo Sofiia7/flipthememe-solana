@@ -160,6 +160,82 @@ export function standingNow(side: number, strike: bigint, price: bigint): 'winni
   return (side === Side.Up) === upAhead ? 'winning' : 'losing';
 }
 
+/** Where an in-flight round (entry closed, not final) is: fixing the strike, live against it, or settling. */
+export type InFlightStage = 'fixing' | 'live' | 'settling';
+
+export function inFlightStage(a: Pick<RoundAccount, 'status' | 'exitEnd'>, nowSec: number): InFlightStage {
+  if (nowSec >= Number(a.exitEnd)) return 'settling';
+  return a.status === RoundStatus.Live ? 'live' : 'fixing';
+}
+
+/**
+ * The arena's main panel. My earliest in-flight round wins (the same round the timer follows);
+ * without one the open round's players, then the upcoming round.
+ */
+export type PanelView<T extends RoundRef> =
+  | { kind: 'mine'; round: T; stage: InFlightStage; /** My other in-flight rounds, oldest first. */ others: T[] }
+  | { kind: 'open'; round: T }
+  | { kind: 'upcoming'; round: T }
+  | { kind: 'empty' };
+
+export function selectPanel<T extends RoundRef>(input: {
+  nowSec: number;
+  open: T | null;
+  upcoming: T | null;
+  /** Rounds where I hold a confirmed position and the round is not final. */
+  myUnresolved: readonly T[];
+}): PanelView<T> {
+  const now = input.nowSec;
+  const flying = input.myUnresolved
+    .filter(
+      (r) =>
+        r.account.status !== RoundStatus.Final &&
+        now >= Number(r.account.cutoffAt) &&
+        // Same rule as the timer: a round the keeper left unsettled 2 minutes after its exit window stops holding the panel.
+        now <= Number(r.account.exitEnd) + OVERDUE_SECS,
+    )
+    .sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  const [focus, ...others] = flying;
+  if (focus) return { kind: 'mine', round: focus, stage: inFlightStage(focus.account, now), others };
+  if (input.open) return { kind: 'open', round: input.open };
+  if (input.upcoming) return { kind: 'upcoming', round: input.upcoming };
+  return { kind: 'empty' };
+}
+
+/** The strike of an in-flight round as the chart shows it. */
+export type StrikeState =
+  | { kind: 'pending'; /** Until the strike window starts ("fixed 30 s after entry closes"). */ secondsLeft: number }
+  | { kind: 'fixing' }
+  | { kind: 'fixed'; strike: bigint }
+  | { kind: 'none' };
+
+export function strikeState(a: Pick<RoundAccount, 'status' | 'strikePrice' | 'strikeStart'>, nowSec: number): StrikeState {
+  if (a.strikePrice > 0n && a.status !== RoundStatus.Open) return { kind: 'fixed', strike: a.strikePrice };
+  if (a.status === RoundStatus.Final) return { kind: 'none' };
+  // Pending until the strike window opens; fixing while it runs and until the keeper posts the strike.
+  const left = Number(a.strikeStart) - nowSec;
+  return left > 0 ? { kind: 'pending', secondsLeft: left } : { kind: 'fixing' };
+}
+
+/**
+ * Whose strike the chart draws: my focus round when it is on the charted pool, else the latest
+ * live round there (strike fixed), else the latest round there still fixing its strike.
+ */
+export function selectChartRound<T extends RoundRef>(input: { pool: string | null; focus: T | null; inFlight: readonly T[] }): T | null {
+  const { pool, focus } = input;
+  if (!pool) return null;
+  if (focus && focus.account.pool === pool) return focus;
+  const newestFirst = [...input.inFlight].filter((r) => r.account.pool === pool).sort((x, y) => (x.id > y.id ? -1 : x.id < y.id ? 1 : 0));
+  return newestFirst.find((r) => r.account.status === RoundStatus.Live) ?? newestFirst.find((r) => r.account.status === RoundStatus.Open) ?? null;
+}
+
+/** The countdown tick: the whole second (5..1) while entry has 5 s or less left, else null. */
+export function entryTick(secondsLeft: number): number | null {
+  if (!Number.isFinite(secondsLeft) || secondsLeft <= 0) return null;
+  const s = Math.ceil(secondsLeft);
+  return s <= 5 ? s : null;
+}
+
 /** Matched amount per side: min(rawUp, rawDown). */
 export function matchedPerSide(a: Pick<RoundAccount, 'rawUp' | 'rawDown'>): bigint {
   return a.rawUp < a.rawDown ? a.rawUp : a.rawDown;

@@ -1,19 +1,39 @@
+import { useEffect, useRef } from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MobileWalletProvider } from '@wallet-ui/react-native-kit';
 import { APP_IDENTITY, CLUSTER } from './src/config';
+import { loadPrefs } from './src/lib/prefs';
 import { ArenaScreen } from './src/screens/ArenaScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { WalletScreen } from './src/screens/WalletScreen';
+import { ShareCardHost } from './src/share/ShareCard';
+import { playSound, preloadSounds } from './src/sound/sound';
 import { AppProvider, useApp } from './src/state/AppProvider';
 import { C } from './src/theme';
+import { ResultLayer } from './src/ui/ResultLayer';
 import { TabBar } from './src/ui/TabBar';
-import { ResultToast } from './src/ui/Toast';
 
 function Shell() {
   const insets = useSafeAreaInsets();
-  const { tab, setTab, toasts, dismissToast } = useApp();
+  const { tab, setTab, toasts, dismissToast, betting } = useApp();
+
+  useEffect(() => {
+    loadPrefs();
+    preloadSounds();
+  }, []);
+
+  // The "bet placed" coin, once per confirmed bet, whichever tab is open.
+  const lastBetAt = useRef(0);
+  const { phase, at } = betting.bet;
+  useEffect(() => {
+    if (phase === 'confirmed' && at !== lastBetAt.current) {
+      lastBetAt.current = at;
+      playSound('bet');
+    }
+  }, [phase, at]);
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" />
@@ -23,8 +43,9 @@ function Shell() {
         {tab === 'history' ? <HistoryScreen /> : null}
         {tab === 'profile' ? <ProfileScreen /> : null}
       </View>
-      {toasts[0] ? <ResultToast toast={toasts[0]} onClose={dismissToast} top={insets.top + 8} /> : null}
       <TabBar tab={tab} onChange={setTab} bottomInset={insets.bottom} />
+      {toasts[0] ? <ResultLayer toast={toasts[0]} onClose={dismissToast} top={insets.top + 8} /> : null}
+      <ShareCardHost />
     </View>
   );
 }

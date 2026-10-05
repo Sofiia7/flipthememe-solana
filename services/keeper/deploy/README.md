@@ -76,7 +76,30 @@ CMD
 
 Updates: build again and run the same command without
 `/c/Users/sofia/.flipthememe/keeper.json` in the file list; the key stays where it is. To roll back,
-push the previous `dist/keeper.mjs` the same way.
+push the previous `dist/keeper.mjs` the same way. The update, spelled out:
+
+```bash
+cd /c/Server/memepred_solana/services/keeper
+bash /c/Server/twitter_hermes/tools/vps.sh push dist/keeper.mjs deploy/Dockerfile deploy/docker-compose.yml .dockerignore /home/openclaw/ftm-sol-keeper/incoming <<'CMD'
+set -e
+cd /home/openclaw/ftm-sol-keeper
+mkdir -p dist deploy/data deploy/secrets
+mv incoming/keeper.mjs dist/keeper.mjs
+mv incoming/Dockerfile incoming/docker-compose.yml deploy/
+mv incoming/.dockerignore .dockerignore
+if [ -f incoming/keeper.json ]; then mv incoming/keeper.json deploy/secrets/keeper.json; fi
+rm -rf incoming
+test -f deploy/secrets/keeper.json || { echo "deploy/secrets/keeper.json is missing"; exit 3; }
+chmod 600 deploy/secrets/keeper.json
+sudo chown 1000:1000 deploy/data deploy/secrets/keeper.json
+cd deploy
+docker compose up -d --build
+sleep 20
+docker compose ps
+docker compose logs --tail 40
+cat data/status.json
+CMD
+```
 
 ## 3. Operate (one `vps.sh run` per check)
 
@@ -98,13 +121,44 @@ CMD
 | start again | `docker compose up -d` |
 
 `status.json` is rewritten every second: last round id, last successful action, keeper SOL balance,
-house vault available, house budget of the UTC day, current pool, age of the newest price
+house vault available, house budget of the UTC day, current pool and its rung, GeckoTerminal
+discovery (tracked pools, candidates, last good refresh, failures), age of the newest price
 observation per pool, devnet clock offset. The container health check fails when it is older than
 30 s.
 
 Log lines are JSON: one per action, `{"t","round","step","sig"}` or `{"t","round","step","error"}`
 with step `create`, `fill`, `strike`, `settle`, `claim`, `sweep`, `close` or `expire`; everything
 else carries an `event` field (`pool_selected`, `chain_clock`, `mainnet_rpc_error`, ...).
+
+## Token choice
+
+Once a minute (`src/poolgate.ts`, `src/discovery.ts`, `src/selector.ts`):
+
+- Entry gate: pool 10-120 minutes old, 50+ trades in the last 5 minutes, quote wSOL, owner
+  PumpSwap, at least 50 SOL in the quote vault on chain (K x min_bank). Score
+  `txM5 * (1 + (120 - age_min) / 120)`: activity, with up to twice the weight for the youngest.
+- The current pool stays at least 10 minutes. After that it is replaced when a deep enough candidate
+  scores 1.5x higher, or when it drops below 20 trades in 5 minutes or gets older than 180 minutes.
+  Below 50 SOL it is replaced at once. Only rounds created after a switch use the new pool.
+- Nothing fresh: the ladder widens the age to 6 h, then 24 h, then takes the most active pool of any
+  age. Log events `pool_selected` (rung `fresh`) and `pool_selected_fallback` (rung `within-6h`,
+  `within-24h` or `any-age`), plus `pool_kept_on_rung`, `pool_none_qualifies`, `pool_check_failed`.
+- GeckoTerminal (free API, about 30 requests per minute per IP): at most 4 requests per minute.
+  It has no creation-time sort for one dex, so the keeper reads `new_pools` (every dex, newest
+  first) every minute and tracks its PumpSwap pools for 180 minutes; `pools/multi` refreshes up to
+  30 of them plus the current pool; the PumpSwap top list (pages 1-2 every 5 minutes) feeds the
+  ladder. A failed request skips the next 1, 2, 4, then 8 minutes (`pool_discovery_failed`), and
+  numbers up to 15 minutes old stay in use meanwhile.
+- The tracked set lives in memory. After a restart pools qualify again once they are 10 minutes
+  old, so for the first 10 minutes or so the ladder (or the restored pool, if it still passes)
+  plays.
+
+Read-only check of the choice on live data (2 GeckoTerminal requests, mainnet reads, no key, no
+devnet; it does not race the VPS keeper):
+
+```
+node services/keeper/scripts/select-dry-run.ts packages/client/test/fixtures/geckoterminal-new-pools-page1.json
+```
 
 ## Configuration
 
@@ -117,6 +171,13 @@ Optional `deploy/.env` next to `docker-compose.yml`:
 | `HOUSE_ROUND_CAP_LAMPORTS` | `50000000` (0.05 SOL) | most the house adds to one round |
 | `HOUSE_DAILY_BUDGET_LAMPORTS` | `2000000000` (2 SOL) | most the house adds per UTC day |
 | `POOL_OVERRIDE` | empty | force one PumpSwap pool address instead of the GeckoTerminal choice |
+| `POOL_MIN_AGE_MIN` | `10` | entry gate: youngest pool age, minutes |
+| `POOL_MAX_AGE_MIN` | `120` | entry gate: oldest pool age, minutes (also where the youth bonus ends) |
+| `POOL_MIN_TX_M5` | `50` | entry gate: trades in the last 5 minutes |
+| `POOL_HOLD_MIN` | `10` | minutes the current pool stays at least |
+| `POOL_SWITCH_RATIO` | `1.5` | after the hold, a candidate needs this many times the current score |
+| `POOL_KEEP_MIN_TX_M5` | `20` | after the hold, fewer trades in 5 minutes replace the current pool |
+| `POOL_KEEP_MAX_AGE_MIN` | `180` | after the hold, an older fresh pool is replaced |
 
 `KEEPER_KEYPAIR=/secrets/keeper.json` and `STATE_FILE=/data/state.json` are set by the image.
 RPC URLs may carry API keys: the keeper logs only their host names.

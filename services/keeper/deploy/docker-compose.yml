@@ -23,6 +23,14 @@ services:
       HOUSE_ROUND_CAP_LAMPORTS: ${HOUSE_ROUND_CAP_LAMPORTS:-50000000}
       HOUSE_DAILY_BUDGET_LAMPORTS: ${HOUSE_DAILY_BUDGET_LAMPORTS:-2000000000}
       POOL_OVERRIDE: ${POOL_OVERRIDE:-}
+      # Token choice; empty = the keeper's defaults (deploy/README.md, Configuration).
+      POOL_MIN_AGE_MIN: ${POOL_MIN_AGE_MIN:-}
+      POOL_MAX_AGE_MIN: ${POOL_MAX_AGE_MIN:-}
+      POOL_MIN_TX_M5: ${POOL_MIN_TX_M5:-}
+      POOL_HOLD_MIN: ${POOL_HOLD_MIN:-}
+      POOL_SWITCH_RATIO: ${POOL_SWITCH_RATIO:-}
+      POOL_KEEP_MIN_TX_M5: ${POOL_KEEP_MIN_TX_M5:-}
+      POOL_KEEP_MAX_AGE_MIN: ${POOL_KEEP_MAX_AGE_MIN:-}
     volumes:
       - ./data:/data
       - ./secrets/keeper.json:/secrets/keeper.json:ro

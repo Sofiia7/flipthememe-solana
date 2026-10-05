@@ -1,6 +1,6 @@
 /**
  * FlipTheMeme keeper (devnet). One process, no HTTP server:
- * - pool selection every 60 s (GeckoTerminal + mainnet depth check),
+ * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth check),
  * - mainnet price sampling every 1 s,
  * - round scheduler every 1 s (create, house fill, strike, settle, claim, sweep, close, expire),
  * - devnet clock estimate every 60 s, scan for old unfinished rounds every 10 min,
@@ -10,14 +10,16 @@ import { DEVNET_PARAMS } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
 import { ChainClock, describeError } from './chain.ts';
 import { loadConfig } from './config.ts';
+import { PoolDiscovery } from './discovery.ts';
 import { remainingBudget, rollover } from './house.ts';
 import { loadKeypairSigner } from './keypair.ts';
 import { hostOf, log, throttled } from './log.ts';
 import { ObservationStore } from './observations.ts';
+import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
 import { FailoverRpc, makeRpc, shortError } from './rpc.ts';
 import { PoolRefs, Sampler } from './sampler.ts';
 import { Scheduler } from './scheduler.ts';
-import { PoolSelector, type Selection } from './selector.ts';
+import { PoolSelector, poolChain, type Selection } from './selector.ts';
 import { StateStore, writeJsonAtomic } from './state.ts';
 
 type Loop = { stop(): void; idle(): Promise<void> };
@@ -73,6 +75,14 @@ async function main(): Promise<void> {
     houseRoundCap: cfg.houseRoundCap,
     houseDailyBudget: cfg.houseDailyBudget,
     poolOverride: cfg.poolOverride,
+    poolGate: {
+      ageMin: [cfg.poolGate.minAgeMs / MINUTE_MS, cfg.poolGate.maxAgeMs / MINUTE_MS],
+      minTxM5: cfg.poolGate.minTxM5,
+      holdMin: cfg.poolGate.holdMs / MINUTE_MS,
+      switchRatio: cfg.poolGate.switchRatio,
+      keepMinTxM5: cfg.poolGate.keepMinTxM5,
+      keepMaxAgeMin: cfg.poolGate.keepMaxAgeMs / MINUTE_MS,
+    },
   });
 
   let scheduler: Scheduler | null = null;
@@ -81,19 +91,21 @@ async function main(): Promise<void> {
     persisted && !cfg.poolOverride
       ? { ...persisted, quoteReserve: 0n, reserveAtMs: 0 }
       : null;
+  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log });
   const selector = new PoolSelector({
-    refs,
-    mainnet,
+    source: discovery,
+    chain: poolChain(refs, mainnet),
+    gate: cfg.poolGate,
     logger: log,
     override: cfg.poolOverride,
     initial,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
     onChange: (s) => {
-      state.state.pool = { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, fallback: s.fallback };
+      state.state.pool = { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback };
       state.save();
     },
   });
-  if (initial) log({ event: 'pool_restored', pool: initial.pool, name: initial.name, fallback: initial.fallback });
+  if (initial) log({ event: 'pool_restored', pool: initial.pool, name: initial.name, rung: RUNG_NAMES[initial.rung] });
 
   try {
     await clock.refresh(devnet);
@@ -134,11 +146,13 @@ async function main(): Promise<void> {
             pool: pool.pool,
             baseMint: pool.baseMint,
             name: pool.name,
+            rung: RUNG_NAMES[pool.rung],
             fallback: pool.fallback,
             selectedAt: new Date(pool.selectedAtMs).toISOString(),
             quoteReserve: pool.quoteReserve,
           }
         : null,
+      discovery: cfg.poolOverride ? null : discovery.status(now),
       sampler: sampler.freshness(now),
       mainnetRpc: mainnet.lastHost,
     });

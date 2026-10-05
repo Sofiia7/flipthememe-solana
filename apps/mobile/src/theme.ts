@@ -26,6 +26,26 @@ export const C = {
   warn: '#ffb347',
   danger: '#ff5d73',
   house: '#c9a7ff',
+  // Neon accents on the dark background.
+  neonGreen: '#3dff8b',
+  neonRed: '#ff3d6e',
+  neonYellow: '#ffe14d',
+  neonPurple: '#b46cff',
+  neonPink: '#ff4fd8',
+  tintUp: 'rgba(53, 223, 108, 0.10)',
+  tintDown: 'rgba(251, 96, 124, 0.10)',
+} as const;
+
+/** Gradient stops (top to bottom). */
+export const GRAD = {
+  up: ['#6dffa2', '#22c95c', '#119140'],
+  down: ['#ff8aa2', '#f23f66', '#b81840'],
+  gold: ['#ffe680', '#f6b62d', '#d9870f'],
+  purple: ['#c58bff', '#8a3dff', '#5a1fc2'],
+  panel: ['#241c40', '#19142d'],
+  win: ['#3b0f73', '#1a0b3a', '#07050f'],
+  rekt: ['#4a0b1f', '#1d0712', '#07050f'],
+  card: ['#34106a', '#160b33', '#07050f'],
 } as const;
 
 export const MONO = 'monospace';

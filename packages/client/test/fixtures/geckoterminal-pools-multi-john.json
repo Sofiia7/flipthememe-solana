@@ -1,0 +1,99 @@
+{
+  "data": [
+    {
+      "id": "solana_G1jURgdSVJXnFSjj1s3cPXowj7ERsTGnz27mtXpSUnc3",
+      "type": "pool",
+      "attributes": {
+        "base_token_price_usd": "0.0000631850759012849404750098482175855525437607233573152323454454016",
+        "base_token_price_native_currency": "0.00000047901629818236",
+        "quote_token_price_usd": "120.575611426891407940298103812695398884996443512",
+        "quote_token_price_native_currency": "1.0",
+        "base_token_price_quote_token": "0.0000004790162982",
+        "quote_token_price_base_token": "2087611.64034403",
+        "address": "G1jURgdSVJXnFSjj1s3cPXowj7ERsTGnz27mtXpSUnc3",
+        "name": "John / SOL",
+        "pool_name": "John / SOL",
+        "pool_fee_percentage": null,
+        "pool_created_at": "2026-10-05T13:13:44Z",
+        "fdv_usd": "63139.5882",
+        "market_cap_usd": null,
+        "price_change_percentage": {
+          "m5": "0",
+          "m15": "31.483",
+          "m30": "33.796",
+          "h1": "33.796",
+          "h6": "33.796",
+          "h24": "33.796"
+        },
+        "transactions": {
+          "m5": {
+            "buys": 0,
+            "sells": 0,
+            "buyers": 0,
+            "sellers": 0
+          },
+          "m15": {
+            "buys": 1821,
+            "sells": 207,
+            "buyers": 201,
+            "sellers": 132
+          },
+          "m30": {
+            "buys": 2070,
+            "sells": 229,
+            "buyers": 214,
+            "sellers": 138
+          },
+          "h1": {
+            "buys": 2070,
+            "sells": 229,
+            "buyers": 214,
+            "sellers": 138
+          },
+          "h6": {
+            "buys": 2070,
+            "sells": 229,
+            "buyers": 214,
+            "sellers": 138
+          },
+          "h24": {
+            "buys": 2070,
+            "sells": 229,
+            "buyers": 214,
+            "sellers": 138
+          }
+        },
+        "volume_usd": {
+          "m5": "0.0",
+          "m15": "2806.9665388676",
+          "m30": "2907.7481442464",
+          "h1": "2907.7481442464",
+          "h6": "2907.7481442464",
+          "h24": "2907.7481442464"
+        },
+        "reserve_in_usd": "0.0000006150608462",
+        "locked_liquidity_percentage": "0.00000000234751595708782"
+      },
+      "relationships": {
+        "base_token": {
+          "data": {
+            "id": "solana_EtGKPxsypmvZfqRHT4y5d7JintuaHTwcShJcazDdjups",
+            "type": "token"
+          }
+        },
+        "quote_token": {
+          "data": {
+            "id": "solana_So11111111111111111111111111111111111111112",
+            "type": "token"
+          }
+        },
+        "dex": {
+          "data": {
+            "id": "pumpswap",
+            "type": "dex"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -113,6 +113,46 @@ export function formatMicroPct(micro: bigint | null): string {
   return `${negative ? '-' : '+'}${whole}.${frac}%`;
 }
 
+export type DeltaView = {
+  /** Millionths of a percent, as changeMicroPct. */
+  micro: bigint;
+  /** "+0.42%", "-0.31%", "0.00%" */
+  text: string;
+  arrow: '▲' | '▼' | '=';
+  tone: 'up' | 'down' | 'flat';
+};
+
+/** The big "price vs strike" readout: "+0.42% ▲". Integer math, so the sign never comes from float noise. */
+export function deltaView(strike: bigint | null | undefined, price: bigint | null | undefined): DeltaView | null {
+  if (strike === null || strike === undefined || price === null || price === undefined) return null;
+  const micro = changeMicroPct(strike, price);
+  if (micro === null) return null;
+  const tone = micro > 0n ? 'up' : micro < 0n ? 'down' : 'flat';
+  return { micro, text: formatMicroPct(micro), arrow: tone === 'up' ? '▲' : tone === 'down' ? '▼' : '=', tone };
+}
+
+/** Compact age: "45s", "12m", "3h", "2d". */
+export function formatAgoShort(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * "graduated 12m ago": the PumpSwap pool is created when the token graduates from pump.fun,
+ * so the pool's creation time (DexScreener pairCreatedAt, ms) is the graduation time.
+ */
+export function graduatedLabel(pairCreatedAtMs: number | null | undefined, nowMs: number): string | null {
+  if (pairCreatedAtMs === null || pairCreatedAtMs === undefined || !Number.isFinite(pairCreatedAtMs) || pairCreatedAtMs <= 0) return null;
+  const age = nowMs - pairCreatedAtMs;
+  if (age < 10_000) return 'graduated just now';
+  return `graduated ${formatAgoShort(age)} ago`;
+}
+
 /** Parse "flipthememe://round/123" (also with extra slashes or a query) into a round id. */
 export function parseRoundLink(url: string | null | undefined): bigint | null {
   if (!url) return null;

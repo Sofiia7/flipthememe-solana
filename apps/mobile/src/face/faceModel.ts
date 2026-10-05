@@ -123,6 +123,8 @@ const CAP = '#d8344a';
 const CAP_SHADE = '#9e1f37';
 const GOLD = '#f2c14e';
 const BAND = '#35df6c';
+const TEAR = '#7fd8ff';
+const BLUSH = '#ff8fab';
 
 const EMPTY = '................';
 
@@ -286,6 +288,26 @@ function mouthPixels(mouth: number): Pixel[] {
   }
 }
 
+/**
+ * Render-time expressions for results (big win, rekt). They replace the mouth and add a detail;
+ * the face itself and its 8 on-chain bytes stay the same.
+ */
+export type Expression = 'happy' | 'sad';
+export const EXPRESSIONS: readonly Expression[] = ['happy', 'sad'];
+
+function expressionPixels(expression: Expression): Pixel[] {
+  if (expression === 'happy') {
+    // Wide open grin with teeth and tongue, plus blushing cheeks.
+    return [
+      [5, 11, MOUTH], [6, 11, TEETH], [7, 11, TEETH], [8, 11, TEETH], [9, 11, TEETH], [10, 11, MOUTH],
+      [6, 12, MOUTH], [7, 12, TONGUE], [8, 12, TONGUE], [9, 12, MOUTH],
+      [4, 11, BLUSH], [11, 11, BLUSH],
+    ];
+  }
+  // Frown (an upside-down smile) and a tear under the right eye.
+  return [[6, 12, MOUTH], [7, 11, MOUTH], [8, 11, MOUTH], [9, 12, MOUTH], [11, 10, TEAR], [11, 11, TEAR]];
+}
+
 function row(y: number, x0: number, x1: number, color: string): Pixel[] {
   const out: Pixel[] = [];
   for (let x = x0; x <= x1; x++) out.push([x, y, color]);
@@ -321,8 +343,8 @@ function accessoryPixels(accessory: number): Pixel[] {
   }
 }
 
-/** 256 colors (row-major), null for transparent. */
-export function faceGrid(input: Face): (string | null)[] {
+/** 256 colors (row-major), null for transparent. `expression` overrides the mouth at render time only. */
+export function faceGrid(input: Face, expression?: Expression): (string | null)[] {
   const face = normalizeFace(input);
   const grid: (string | null)[] = new Array(GRID * GRID).fill(null);
   const put = (x: number, y: number, color: string) => {
@@ -351,7 +373,7 @@ export function faceGrid(input: Face): (string | null)[] {
     }
   });
   for (const [x, y, c] of eyePixels(face.eyes)) put(x, y, c);
-  for (const [x, y, c] of mouthPixels(face.mouth)) put(x, y, c);
+  for (const [x, y, c] of expression ? expressionPixels(expression) : mouthPixels(face.mouth)) put(x, y, c);
   // Front hair.
   hair.forEach((line, y) => {
     for (let x = 0; x < GRID; x++) {

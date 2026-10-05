@@ -47,7 +47,7 @@ Why these rules: an earlier version of this project backtested 743k real swaps f
 
 ## Price source and trust
 
-- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal; the keeper keeps a token at least 15 minutes and checks the pool on chain (owner, mints, at least 50 SOL reserve).
+- Pool type: PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL. Fresh tokens are discovered through GeckoTerminal: pools 10-120 minutes old with 50+ trades in the last 5 minutes, ranked by activity with a bonus for youth. The keeper keeps a token at least 10 minutes, then moves on when a clearly busier one appears or the current one fades, and checks the pool on chain every minute (owner, mints, at least 50 SOL reserve). If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age.
 - Price = `quote_vault_amount * 10^12 / base_vault_amount`, read from the two vault token accounts every second at `confirmed`.
 - Every observation used (mainnet slot and price, up to 16 per window, at least 5) is passed to `set_strike` / `settle`; **the program computes the mean itself** and the samples stay in the transaction forever.
 - **Trust boundary:** on devnet the keeper is the price authority, and the app says so. Settlement math, payouts, sessions and limits are all on chain. Claims are permissionless, and after `settle_deadline` anyone can call `refund_expired`.

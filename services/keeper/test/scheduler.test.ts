@@ -49,7 +49,7 @@ async function harness(opts: { pool?: boolean } = {}): Promise<Harness> {
   const state = new StateStore(cfg.stateFile, Date.now());
   const store = new ObservationStore();
   const logs: LogFields[] = [];
-  const selection: Selection = { pool: POOL, baseMint: MINT, name: 'TEST / SOL', selectedAtMs: Date.now(), fallback: false, quoteReserve: 400n * SOL, reserveAtMs: Date.now() };
+  const selection: Selection = { pool: POOL, baseMint: MINT, name: 'TEST / SOL', selectedAtMs: Date.now(), rung: 0, fallback: false, quoteReserve: 400n * SOL, reserveAtMs: Date.now() };
   const selector = { current: opts.pool === false ? null : selection } as unknown as PoolSelector;
   const scheduler = new Scheduler({ rpc: chain.rpc(), signer, cfg, state, selector, store, clock: new ChainClock(0), logger: (f) => logs.push(f) });
   return { chain, scheduler, signer, store, state, logs };
