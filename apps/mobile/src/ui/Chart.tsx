@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
-import Svg, { Circle, ClipPath, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import type { PricePoint } from '../chain/usePoolPrice';
 import { C, MONO } from '../theme';
+import { splitAtLevel } from './chartPath';
 
 type Props = {
   points: readonly PricePoint[];
@@ -11,8 +12,11 @@ type Props = {
   strike?: bigint | null;
   /** "STRIKE #101" */
   strikeLabel?: string;
-  /** The strike window while the strike is not fixed yet, with its label ("STRIKE IN 0:12"). */
-  strikeWindow?: { range: readonly [number, number]; label: string } | null;
+  /**
+   * The strike window with its label ("STRIKE IN 0:12"): strong while the strike is being fixed,
+   * faint afterwards to show where the strike line comes from.
+   */
+  strikeWindow?: { range: readonly [number, number]; label: string; strong?: boolean } | null;
   /** Exit window of the followed round (local ms): the price there decides the result. */
   exitWindow?: readonly [number, number] | null;
   /** Local ms when the open round's entry closes. */
@@ -62,9 +66,10 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
   const above = strikeValue !== null && lastValue !== null ? (lastValue > strikeValue ? true : lastValue < strikeValue ? false : null) : null;
   const dotColor = stale ? C.dim : above === true ? C.neonGreen : above === false ? C.neonRed : strikeValue !== null ? C.neonYellow : C.accentText;
 
+  const xy = visible.map((p) => ({ x: x(p.atMs), y: y(Number(p.price)) }));
   let d = '';
-  visible.forEach((p, i) => {
-    d += `${i === 0 ? 'M' : 'L'}${x(p.atMs).toFixed(1)} ${y(Number(p.price)).toFixed(1)}`;
+  xy.forEach((p, i) => {
+    d += `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
   });
   const first = visible[0];
   const area = d && first && last ? `${d}L${x(last.atMs).toFixed(1)} ${PAD_TOP + plotH}L${x(first.atMs).toFixed(1)} ${PAD_TOP + plotH}Z` : '';
@@ -100,6 +105,7 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
   };
 
   const sy = strikeValue !== null ? y(strikeValue) : null;
+  const split = sy !== null ? splitAtLevel(xy, sy) : null;
   const ticks = [-60_000, 0].map((offset) => ({ ms: nowMs + offset, label: offset === 0 ? 'now' : '-1m' }));
   const strikeTag = strikeLabel ?? 'STRIKE';
   const tagW = strikeTag.length * 6 + 8;
@@ -110,16 +116,6 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
       {width > 0 ? (
         <Svg width={width} height={height}>
           <Defs>
-            {sy !== null ? (
-              <>
-                <ClipPath id="ftmAbove">
-                  <Rect x={0} y={0} width={width} height={sy} />
-                </ClipPath>
-                <ClipPath id="ftmBelow">
-                  <Rect x={0} y={sy} width={width} height={height - sy} />
-                </ClipPath>
-              </>
-            ) : null}
             <LinearGradient id="ftmArea" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={C.neonPurple} stopOpacity={0.35} />
               <Stop offset="1" stopColor={C.neonPurple} stopOpacity={0} />
@@ -136,7 +132,7 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
             <Line key={f} x1={0} x2={width} y1={PAD_TOP + plotH * f} y2={PAD_TOP + plotH * f} stroke={C.borderSoft} strokeWidth={1} opacity={0.6} />
           ))}
 
-          {band(strikeWindow?.range, C.neonYellow, strikeWindow?.label ?? '', true)}
+          {band(strikeWindow?.range, C.neonYellow, strikeWindow?.label ?? '', strikeWindow?.strong ?? true)}
           {band(exitWindow, C.neonPurple, 'RESULT', false)}
           {cutoffMs && cutoffMs > start && cutoffMs < end ? (
             <>
@@ -148,10 +144,10 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, strikeWindow, e
           ) : null}
           <Line x1={x(nowMs)} x2={x(nowMs)} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={C.border} strokeWidth={1} />
 
-          {d && sy !== null ? (
+          {d && split ? (
             <>
-              <Path d={d} stroke={stale ? C.dim : C.neonGreen} strokeWidth={2.5} fill="none" strokeLinejoin="round" clipPath="url(#ftmAbove)" />
-              <Path d={d} stroke={stale ? C.dim : C.neonRed} strokeWidth={2.5} fill="none" strokeLinejoin="round" clipPath="url(#ftmBelow)" />
+              {split.above ? <Path d={split.above} stroke={stale ? C.dim : C.neonGreen} strokeWidth={2.5} fill="none" strokeLinejoin="round" /> : null}
+              {split.below ? <Path d={split.below} stroke={stale ? C.dim : C.neonRed} strokeWidth={2.5} fill="none" strokeLinejoin="round" /> : null}
             </>
           ) : d ? (
             <>

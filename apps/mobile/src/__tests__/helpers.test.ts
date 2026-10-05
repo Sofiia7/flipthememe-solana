@@ -239,3 +239,21 @@ test('no em or en dash characters in the app sources', () => {
   const banned = new RegExp(`[${String.fromCharCode(0x2013)}${String.fromCharCode(0x2014)}]`);
   for (const file of files) assert.equal(banned.test(readFileSync(file, 'utf8')), false, file);
 });
+
+test('chart line splits exactly at the strike level, so its colour always follows the strike line', async () => {
+  const { splitAtLevel } = await import('../ui/chartPath.ts');
+  // Screen y: smaller is higher. Level 50: the line starts below, crosses up, stays above.
+  const parts = splitAtLevel(
+    [
+      { x: 0, y: 80 },
+      { x: 10, y: 60 },
+      { x: 20, y: 40 },
+      { x: 30, y: 10 },
+    ],
+    50,
+  );
+  assert.equal(parts.below, 'M0.0 80.0L10.0 60.0L15.0 50.0');
+  assert.equal(parts.above, 'M15.0 50.0L20.0 40.0L30.0 10.0');
+  // All above: nothing red at all, however far the strike sits below.
+  assert.deepEqual(splitAtLevel([{ x: 0, y: 5 }, { x: 1, y: 9 }], 100), { above: 'M0.0 5.0L1.0 9.0', below: '' });
+});

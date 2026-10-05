@@ -132,11 +132,14 @@ export function ArenaScreen() {
   const chartRound = selectChartRound({ pool: feed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
   const chartStrike = chartRound ? strikeState(chartRound.account, nowSec) : null;
   const priceStale = isFeedStale(feed, nowMs);
+  // The strike window: bright while the strike is measured, faint once the strike line is drawn.
   const strikeWindow =
-    chartRound && (chartStrike?.kind === 'pending' || chartStrike?.kind === 'fixing')
+    chartRound && chartStrike && chartStrike.kind !== 'none'
       ? {
           range: [chainToLocalMs(chartRound.account.strikeStart, offsetSec), chainToLocalMs(chartRound.account.strikeEnd, offsetSec)] as const,
-          label: chartStrike.kind === 'pending' ? `STRIKE IN ${formatCountdown(chartStrike.secondsLeft)}` : 'FIXING STRIKE',
+          label:
+            chartStrike.kind === 'pending' ? `STRIKE IN ${formatCountdown(chartStrike.secondsLeft)}` : chartStrike.kind === 'fixing' ? 'FIXING STRIKE' : '',
+          strong: chartStrike.kind === 'pending' || chartStrike.kind === 'fixing',
         }
       : null;
 
