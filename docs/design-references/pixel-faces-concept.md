@@ -1,0 +1,11 @@
+# Референс пиксельных лиц
+
+Файл: [pixel-faces-concept.png](pixel-faces-concept.png).
+
+Создан 11 сентября 2026 встроенным ImageGen, затем сохранён в проект для передачи разработчику. Это концепт направления, не production-атлас. Подтверждённое пользователем требование — пиксельный стиль Pixels / MattleFun и только лица. Отдельного утверждения каждого из восьми нарисованных вариантов нет.
+
+Референсом генерации был исходный пользовательский пиксельный экран. Ранее созданный гладкий концепт с фигурами в полный рост отвергнут и в разработку не передаётся.
+
+## Точный prompt
+
+Use case: stylized-concept. Create a NEW visual style sheet for compact customizable PIXEL FACE avatars for this mobile game. The attached screenshot is a STYLE REFERENCE ONLY: keep its actual pixel-art game spirit, dark aubergine background and small character charm. The user explicitly wants the pixel-game direction of Pixels and MattleFun, with Sims-like customization ONLY, NOT Sims artwork. Output precisely EIGHT different HEAD-ONLY pixel avatars in a balanced 4-column by 2-row grid on a plain dark aubergine background. NO BODIES, NO SHOULDERS, NO TORSOS, NO FULL PEOPLE. Each portrait is a face plus hair, clearly assembled from chunky square pixels with coherent low native resolution, roughly 32x32 logical pixels, enlarged by nearest-neighbor so individual pixels remain obvious. Strict true 2D pixel art, crisp single-pixel outlines at native size, restrained 3-shade ramps, no smooth curves or antialiasing, no gradients, no realistic illustration, no 3D or voxel render. The eight faces demonstrate selectable skin tones, distinct short/long/curly/bob/braided hairstyles, hair colors and a couple of small accessories such as glasses or a cap. Diverse adult-looking expressive faces, cute arcade RPG proportions. Hair and faces must remain legible as tiny in-game icons; do not make richly detailed portrait paintings. Comparable compact character readability to the people in the supplied screenshot, but more distinct hairstyles and faces. Each head has its own identical-size square dark-purple tile with restrained pixel border and consistent padding. No names, no text, no logo, no phones, no charts, no UI editor, no display stands, no neck extending downward. These are concept options for a future face customizer, not complete production sprite assets.

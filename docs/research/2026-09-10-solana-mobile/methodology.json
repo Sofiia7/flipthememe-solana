@@ -1,0 +1,16 @@
+{
+  "retrieved_date": "2026-09-10",
+  "catalog_retrieved_utc": "2026-09-10T18:33:26Z",
+  "catalog_source": "https://seekertracker.com/api/dappstore",
+  "unique_active_packages": 1365,
+  "deduplication_key": "androidPackage",
+  "ratings_count": "sum(rating.reviewsByRating)",
+  "limitations": [
+    "Third-party index; not a direct device store ranking",
+    "No APK installations or end-to-end competitor transactions tested",
+    "No independently verified DAU, retention or paying-user data",
+    "Updated date is lastRelease.updatedOn and may not reflect server updates"
+  ],
+  "rules_source": "https://solanamobile.radiant.nexus/legal/clock-in-terms.pdf",
+  "review": "review.md"
+}

@@ -1,0 +1,17 @@
+{
+  "name": "flip-the-meme",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "test": "node --test packages/arena-core/test/*.test.mjs",
+    "test:core": "node --test packages/arena-core/test/*.test.mjs",
+    "start": "pnpm --filter @flipthememe/mobile start",
+    "android": "pnpm --filter @flipthememe/mobile android",
+    "build:apk": "pnpm --filter @flipthememe/mobile exec eas build --platform android --profile dapp-store"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ]
+}

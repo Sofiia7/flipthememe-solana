@@ -1,0 +1,17 @@
+node_modules/
+.expo/
+dist/
+coverage/
+target/
+.anchor/
+test-ledger/
+*.log
+.env
+.env.*
+!.env.example
+*.apk
+*.aab
+*.keystore
+.pnpm-store/
+# third-party raw catalog dump, contains other apps' listing text; kept locally only
+docs/research/2026-09-10-solana-mobile/dappstore-snapshot.json

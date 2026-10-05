@@ -1,0 +1,27 @@
+{
+  "name": "@flipthememe/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@flipthememe/arena-core": "workspace:*",
+    "@solana/kit": "^8.3.0",
+    "@wallet-ui/react-native-kit": "^4.3.0",
+    "expo": "~57.0.22",
+    "expo-dev-client": "~57.0.19",
+    "expo-haptics": "~57.0.3",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-nitro-modules": "^0.37.1",
+    "react-native-quick-crypto": "^1.1.7"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.0",
+    "typescript": "~5.9.0"
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "flip-the-meme"
+version = "0.1.0"
+description = "Shared-round parimutuel prediction arena"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "flip_the_meme"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+
+[dependencies]
+anchor-lang = { version = "=1.1.2", features = ["init-if-needed"] }

@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "FlipTheMeme",
+    "slug": "flip-the-meme",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "flipthememe",
+    "android": {
+      "package": "com.flipthememe.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#19142c"
+      }
+    },
+    "plugins": ["expo-dev-client"],
+    "extra": {
+      "network": "devnet",
+      "apiBaseUrl": "http://10.0.2.2:8787"
+    }
+  }
+}
