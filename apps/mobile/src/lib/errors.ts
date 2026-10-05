@@ -116,9 +116,18 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   NotDue: 'Too early for this step - wait a few seconds.',
 };
 
+/** Raw MWA error fields, shown next to the human sentence so wallet problems can be diagnosed on a phone. */
+export function walletDetail(error: unknown): string {
+  const e = error as { name?: string; code?: unknown; message?: string; cause?: unknown } | null;
+  if (!e) return '';
+  const cause = e.cause instanceof Error ? ` / cause: ${e.cause.message}` : '';
+  return ` [${(e.name ?? typeof error).replace('SolanaMobileWalletAdapter', 'MWA')} ${String(e.code ?? '')}: ${String(e.message ?? error).slice(0, 160)}${cause.slice(0, 100)}]`;
+}
+
 /** One human sentence for a failed action. */
 export function humanError(error: unknown, action: TxAction): string {
-  if (isWalletDecline(error)) return 'Request declined in the wallet.';
+  console.warn('[ftm] action failed', action, error);
+  if (isWalletDecline(error)) return `Request declined in the wallet.${walletDetail(error)}`;
   const e = error as { name?: string; code?: unknown } | null;
   if (e?.name === 'SolanaMobileWalletAdapterError' && e.code === 'ERROR_WALLET_NOT_FOUND') {
     return 'No Solana wallet app found on this phone. Install one that supports Mobile Wallet Adapter.';
