@@ -33,6 +33,8 @@ export type PoolGate = {
   keepMinTxM5: number;
   /** ... or when it is older than this (fresh rung). */
   keepMaxAgeMs: number;
+  /** Only pump.fun graduates (vanity mints ending in "pump"); pools created on PumpSwap directly get drained fast. */
+  pumpOnly: boolean;
 };
 
 export const DEFAULT_GATE: Readonly<PoolGate> = Object.freeze({
@@ -43,7 +45,14 @@ export const DEFAULT_GATE: Readonly<PoolGate> = Object.freeze({
   switchRatio: 1.5,
   keepMinTxM5: 20,
   keepMaxAgeMs: 180 * MINUTE_MS,
+  // On in production through POOL_PUMP_ONLY=true (deploy/docker-compose.yml); off here so fixtures stay plain.
+  pumpOnly: false,
 });
+
+/** pump.fun mints are vanity addresses ending in "pump". */
+export function isPumpFunMint(mint: string): boolean {
+  return mint.endsWith('pump');
+}
 
 /** 0 fresh, 1 up to 6 h old, 2 up to 24 h old, 3 any age. */
 export type Rung = 0 | 1 | 2 | 3;
@@ -59,6 +68,7 @@ export function isRung(value: unknown): value is Rung {
 
 /** The best rung a pool qualifies for by its numbers, or null while it is too young (or undated). */
 export function rungOf(c: PoolCandidate, nowMs: number, gate: PoolGate): Rung | null {
+  if (gate.pumpOnly && !isPumpFunMint(c.baseMint)) return null;
   const age = nowMs - c.createdAtMs;
   if (!(age >= gate.minAgeMs)) return null;
   if (c.txM5 >= gate.minTxM5) {

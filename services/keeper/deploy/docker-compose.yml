@@ -31,6 +31,8 @@ services:
       POOL_SWITCH_RATIO: ${POOL_SWITCH_RATIO:-}
       POOL_KEEP_MIN_TX_M5: ${POOL_KEEP_MIN_TX_M5:-}
       POOL_KEEP_MAX_AGE_MIN: ${POOL_KEEP_MAX_AGE_MIN:-}
+      # pump.fun graduates only (mint ends in "pump"); pools made on PumpSwap directly get drained fast.
+      POOL_PUMP_ONLY: ${POOL_PUMP_ONLY:-true}
     volumes:
       - ./data:/data
       - ./secrets/keeper.json:/secrets/keeper.json:ro

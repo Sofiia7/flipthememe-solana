@@ -19,7 +19,7 @@ describe('pool gate defaults', () => {
   test('10-120 minutes, 50 trades in 5 minutes, hold 10 minutes, 1.5x, keep at 20 trades and 180 minutes', () => {
     assert.deepEqual(
       { ...DEFAULT_GATE },
-      { minAgeMs: 10 * MINUTE_MS, maxAgeMs: 120 * MINUTE_MS, minTxM5: 50, holdMs: 10 * MINUTE_MS, switchRatio: 1.5, keepMinTxM5: 20, keepMaxAgeMs: 180 * MINUTE_MS },
+      { minAgeMs: 10 * MINUTE_MS, maxAgeMs: 120 * MINUTE_MS, minTxM5: 50, holdMs: 10 * MINUTE_MS, switchRatio: 1.5, keepMinTxM5: 20, keepMaxAgeMs: 180 * MINUTE_MS, pumpOnly: false },
     );
     assert.deepEqual(RUNG_NAMES, ['fresh', 'within-6h', 'within-24h', 'any-age']);
   });
@@ -119,4 +119,13 @@ describe('beats', () => {
     assert.equal(beats({ rung: 2, score: 9_000 }, { rung: 1, score: 50 }, gate), false);
     assert.equal(beats({ rung: 3, score: 0 }, { rung: 3, score: 0 }, gate), false, 'equal scores never switch');
   });
+});
+
+test('pump.fun graduates only when pumpOnly is set', () => {
+  const gate = { ...DEFAULT_GATE, pumpOnly: true };
+  const plain = pool(1, 100, 20 * MINUTE_MS);
+  const graduate = { ...plain, baseMint: '8nKp4JkesNtDgu3PiSjdTdNSrtBt8YCHhW8BU14wpump' as typeof plain.baseMint };
+  assert.equal(rungOf(plain, NOW, gate), null);
+  assert.equal(rungOf(graduate, NOW, gate), 0);
+  assert.equal(rungOf(plain, NOW, DEFAULT_GATE), 0);
 });

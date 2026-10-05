@@ -88,6 +88,7 @@ export function loadPoolGate(env: Env): PoolGate {
     switchRatio: parseNumber('POOL_SWITCH_RATIO', text(env, 'POOL_SWITCH_RATIO'), DEFAULT_GATE.switchRatio),
     keepMinTxM5: count('POOL_KEEP_MIN_TX_M5', DEFAULT_GATE.keepMinTxM5),
     keepMaxAgeMs: minutes('POOL_KEEP_MAX_AGE_MIN', DEFAULT_GATE.keepMaxAgeMs),
+    pumpOnly: text(env, 'POOL_PUMP_ONLY') === undefined ? DEFAULT_GATE.pumpOnly : text(env, 'POOL_PUMP_ONLY') === 'true',
   };
   if (gate.maxAgeMs <= gate.minAgeMs) throw new Error('POOL_MAX_AGE_MIN must be greater than POOL_MIN_AGE_MIN');
   if (gate.keepMaxAgeMs < gate.maxAgeMs) throw new Error('POOL_KEEP_MAX_AGE_MIN must not be below POOL_MAX_AGE_MIN');

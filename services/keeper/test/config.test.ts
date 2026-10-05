@@ -65,7 +65,7 @@ describe('loadConfig', () => {
       POOL_KEEP_MIN_TX_M5: '10',
       POOL_KEEP_MAX_AGE_MIN: '90',
     });
-    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000 });
+    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000, pumpOnly: false });
     assert.deepEqual(loadPoolGate({ POOL_MAX_AGE_MIN: '', POOL_SWITCH_RATIO: ' ' }), DEFAULT_GATE);
     assert.throws(() => loadPoolGate({ POOL_MIN_TX_M5: '50.5' }), /POOL_MIN_TX_M5 must be a whole number/);
     assert.throws(() => loadPoolGate({ POOL_MAX_AGE_MIN: '-5' }), /POOL_MAX_AGE_MIN must be a non-negative number/);
