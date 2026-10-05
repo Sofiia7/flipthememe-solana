@@ -70,7 +70,7 @@ There is no app server: the phone reads devnet and mainnet directly; the keeper 
 - **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (24 h, max 0.1 SOL per bet, budget = top-up) and a small SOL transfer to the device key for fees.
 - **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its budget and expiry; it has no instruction that lets it withdraw or raise its own limit.
 - **Pixel faces:** 8 bytes that ride inside every `place_bet`, so other players see your face without NFTs or extra transactions.
-- **Share:** challenge a friend to take the other side; result cards through the Android share sheet.
+- **Share:** challenge a friend to take the other side. The card goes out as an image with a caption link, `https://sol.flipthememe.com/r/<round>`; Android App Links open the app straight on that round, and without the app the page offers the APK.
 - **Live X chatter:** a Cloudflare Worker (`services/chatter`) searches X for the arena token, tags each post MOON or SCAM, and the app slides them into a lane above the token. It is decoration: the game never depends on it.
 - **Wallet recovery:** when the wallet rejects a cached authorization (expired, or issued to an earlier install), the app asks again in a new MWA session instead of failing every approval.
 
@@ -91,6 +91,7 @@ programs/flip-the-meme   Anchor program, payout math, LiteSVM tests
 packages/client          TypeScript client on @solana/kit: PDAs, codecs, instructions, payout mirror, PumpSwap price source
 services/keeper          round crank: pool selection, sampler, scheduler, house budget, Docker deploy
 services/chatter         Cloudflare Worker: live X posts about the arena token, tagged MOON / SCAM
+services/link            Cloudflare Worker on sol.flipthememe.com: round link pages and Android App Links
 apps/mobile              Expo 57 / React Native 0.86 Android app
 docs                     design, plan, submission materials
 ```
