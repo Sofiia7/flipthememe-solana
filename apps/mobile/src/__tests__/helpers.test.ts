@@ -276,3 +276,18 @@ test('top up plan lists every lamport leaving the wallet; win profit is 0.96x of
   assert.equal(maxWinProfit(SOL / 50n, 200), 19_200_000n); // 0.02 SOL wins +0.0192
   assert.equal(maxWinProfit(SOL / 100n, 200), 9_600_000n);
 });
+
+test('away summary counts results once and reports the net in SOL', async () => {
+  const { awaySummary, awayText } = await import('../state/away.ts');
+  const { formatSol } = await import('../lib/format.ts');
+  const SOL = 1_000_000_000n;
+  assert.equal(awaySummary([]), null);
+  const s = awaySummary([
+    { id: 7n, kind: 'won', stake: SOL / 50n, payout: (SOL * 392n) / 10_000n },
+    { id: 9n, kind: 'lost', stake: SOL / 100n, payout: 0n },
+    { id: 8n, kind: 'full-refund', stake: SOL / 100n, payout: SOL / 100n },
+  ])!;
+  assert.deepEqual([s.won, s.lost, s.refunded, s.lastId], [1, 1, 1, 9n]);
+  assert.equal(s.net, (SOL * 192n) / 10_000n - SOL / 100n);
+  assert.equal(awayText(s, formatSol), 'While you were away: 1 won, 1 lost, 1 refunded · net +0.0092 SOL');
+});

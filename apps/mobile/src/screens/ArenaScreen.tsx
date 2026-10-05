@@ -26,6 +26,7 @@ import { useNow } from '../lib/usePolling';
 import { shareCard } from '../share/ShareCard';
 import { playSound } from '../sound/sound';
 import { sessionStatusOf, useApp, type SessionStatus } from '../state/AppProvider';
+import { awayText } from '../state/away';
 import { C, MONO } from '../theme';
 import { ArenaClock, type ClockSide } from '../ui/ArenaClock';
 import { PriceChart } from '../ui/Chart';
@@ -282,6 +283,7 @@ export function ArenaScreen() {
             />
           ) : null}
           {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
+          {app.away ? <Banner tone="info" text={awayText(app.away, formatSol)} action={{ label: 'OK', onPress: app.ackAway }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />

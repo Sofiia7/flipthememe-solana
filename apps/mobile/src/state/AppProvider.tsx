@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Linking } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Address, Signature } from '@solana/kit';
 import { RoundStatus, Side, type SessionAccount } from '@flipthememe/client';
 import { roundLink } from '../config';
@@ -18,6 +19,7 @@ import { clearPendingBet, loadPendingBet, type PendingBet } from '../session/pen
 import { loadOrCreateSessionKey, type SessionKey } from '../session/sessionKey';
 import { useBetting, type Betting } from '../session/useBetting';
 import { useWalletActions, type WalletActions } from '../wallet/useWalletActions';
+import { awaySummary, type AwayItem, type AwaySummary } from './away';
 
 export type Tab = 'arena' | 'wallet' | 'history' | 'profile';
 
@@ -70,6 +72,9 @@ type AppValue = {
   myFeed: PoolFeed;
   toasts: Toast[];
   dismissToast: () => void;
+  /** My rounds that turned final while the app was closed, until acknowledged. */
+  away: AwaySummary | null;
+  ackAway: () => void;
   /** Local ms when this app first saw my round (by address) final, or null. */
   finalSeenAt: (roundAddress: string) => number | null;
   tab: Tab;
@@ -209,6 +214,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Result overlays when one of my rounds turns final during this session (they play their own haptics and sound).
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [away, setAway] = useState<AwaySummary | null>(null);
+  const ackRef = useRef<{ owner: string | null; id: bigint | null }>({ owner: null, id: null });
+  const saveAck = useCallback((forOwner: string, id: bigint) => {
+    const cur = ackRef.current;
+    if (cur.owner === forOwner && cur.id !== null && id <= cur.id) return;
+    ackRef.current = { owner: forOwner, id };
+    AsyncStorage.setItem(ackKey(forOwner), id.toString()).catch(() => undefined);
+  }, []);
   const seen = useRef<{ owner: string | null; status: Map<string, number> }>({ owner: null, status: new Map() });
   // Local ms when this app first saw each of my rounds final (the manual Claim waits 20 s after it).
   const finalSeen = useRef(new Map<string, number>());
@@ -223,6 +236,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (memory.owner !== owner) {
       memory.owner = owner;
       memory.status = new Map(myRaw.positions.filter((p) => p.round).map((p) => [p.round!.address, p.round!.account.status]));
+      // Results that arrived while the app was closed: one summary, against the last acknowledged round.
+      setAway(null);
+      const finals = myRaw.positions.filter((p) => p.round?.account.status === RoundStatus.Final);
+      const nowSec = chainNow();
+      const forOwner = owner;
+      AsyncStorage.getItem(ackKey(forOwner))
+        .then((raw) => {
+          const newest = finals.reduce((m, p) => (p.round!.id > m ? p.round!.id : m), 0n);
+          const ack = raw !== null && /^\d+$/.test(raw) ? BigInt(raw) : null;
+          // A first launch on this phone starts from now: old history is not news.
+          if (ack === null) return saveAck(forOwner, newest);
+          ackRef.current = { owner: forOwner, id: ack };
+          const items: AwayItem[] = [];
+          for (const p of finals) {
+            if (p.round!.id <= ack) continue;
+            const r = positionResult(p.account, p.round!.account, nowSec);
+            if (r.kind !== 'pending') items.push({ id: p.round!.id, kind: r.kind, stake: p.account.stake, payout: r.payout ?? 0n });
+          }
+          if (seen.current.owner === forOwner) setAway(awaySummary(items));
+        })
+        .catch(() => undefined);
       return;
     }
     const fresh: Toast[] = [];
@@ -234,9 +268,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (before === undefined || before === RoundStatus.Final || round.account.status !== RoundStatus.Final) continue;
       fresh.push(resultToast(p.account.side, p.account.stake, p.account.claimed, p.account.payout, round, chainNow()));
     }
-    if (fresh.length > 0) setToasts((prev) => [...prev, ...fresh]);
-  }, [myReady, owner, myRaw.positions, chainNow]);
+    if (fresh.length > 0) {
+      setToasts((prev) => [...prev, ...fresh]);
+      // Seen here, so not news on the next launch.
+      saveAck(owner, fresh.reduce((m, t) => (t.roundId > m ? t.roundId : m), 0n));
+    }
+  }, [myReady, owner, myRaw.positions, chainNow, saveAck]);
   const dismissToast = useCallback(() => setToasts((prev) => prev.slice(1)), []);
+  const ackAway = useCallback(() => {
+    if (away && owner) saveAck(owner, away.lastId);
+    setAway(null);
+  }, [away, owner, saveAck]);
   const finalSeenAt = useCallback((roundAddress: string) => finalSeen.current.get(roundAddress) ?? null, []);
 
   const [tab, setTab] = useState<Tab>('arena');
@@ -277,6 +319,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     myFeed,
     toasts,
     dismissToast,
+    away,
+    ackAway,
     finalSeenAt,
     tab,
     setTab,
@@ -286,6 +330,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
+
+const ackKey = (owner: string) => `ftm.resultsAck.v1.${owner}`;
 
 function resultToast(
   side: number,
