@@ -8,7 +8,7 @@ A fresh memecoin, a shared start, one measured minute of price move. You make th
 |---|---|
 | Program (devnet) | [`5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`](https://explorer.solana.com/address/5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz?cluster=devnet) |
 | Config | [`A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ`](https://explorer.solana.com/address/A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ?cluster=devnet) |
-| APK | GitHub Actions artifact `FlipTheMeme-apk` (signed release) |
+| APK | [FlipTheMeme.apk](https://github.com/Sofiia7/flipthememe-solana/releases/latest/download/FlipTheMeme.apk), signed release (install page: https://sol.flipthememe.com/get) |
 | Built for | Solana Mobile CLOCK IN · Solana Perps and Prediction Markets |
 | Status | devnet MVP, test SOL only; see [Limits](#limits) |
 
