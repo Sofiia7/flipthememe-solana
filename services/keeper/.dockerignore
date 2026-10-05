@@ -1,0 +1,4 @@
+# The image needs the bundle only. Everything else (sources, node_modules, deploy/data,
+# deploy/secrets with the keeper key) stays out of the build context.
+*
+!dist/keeper.mjs

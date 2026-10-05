@@ -1,0 +1,33 @@
+# FlipTheMeme keeper (devnet) on the VPS. Deploy steps: README.md in this folder.
+# Outbound connections only (devnet RPC, mainnet RPC, GeckoTerminal); no ports, no DNS, no Caddy.
+# Optional overrides go into a .env file next to this one (compose reads it automatically).
+#
+# The explicit project name matters: without it compose names the project after this folder,
+# "deploy", which is the name of the memepred compose project on the same VPS.
+name: ftm-sol-keeper
+
+services:
+  ftm-sol-keeper:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ftm-sol-keeper:latest
+    container_name: ftm-sol-keeper
+    restart: unless-stopped
+    mem_limit: 256m
+    # The keeper waits for transactions in flight before it exits on SIGTERM.
+    stop_grace_period: 40s
+    environment:
+      DEVNET_RPC: ${DEVNET_RPC:-https://api.devnet.solana.com}
+      MAINNET_RPCS: ${MAINNET_RPCS:-https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com}
+      HOUSE_ROUND_CAP_LAMPORTS: ${HOUSE_ROUND_CAP_LAMPORTS:-50000000}
+      HOUSE_DAILY_BUDGET_LAMPORTS: ${HOUSE_DAILY_BUDGET_LAMPORTS:-2000000000}
+      POOL_OVERRIDE: ${POOL_OVERRIDE:-}
+    volumes:
+      - ./data:/data
+      - ./secrets/keeper.json:/secrets/keeper.json:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

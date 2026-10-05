@@ -1,0 +1,11 @@
+# runtime files of a locally running keeper
+keeper-state.json
+keeper-state.json.tmp
+status.json
+status.json.tmp
+*.log
+# bundle (npm run build)
+dist/
+# VPS-side folders: state and the keeper key never belong in git
+deploy/data/
+deploy/secrets/
