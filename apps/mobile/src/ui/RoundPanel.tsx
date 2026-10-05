@@ -3,6 +3,7 @@ import { Animated, StyleSheet, Text, View } from 'react-native';
 import { Side, acceptedStake, isActivated, type PositionAccount } from '@flipthememe/client';
 import type { PositionView, RoundView } from '../chain/fetch';
 import { matchedPerSide, type InFlightStage } from '../chain/phase';
+import { useSkrNames } from '../chain/skr';
 import { faceFromBytes, type Expression } from '../face/faceModel';
 import { formatCountdown, formatSol } from '../lib/format';
 import { HouseFace, PixelFace } from '../PixelFace';
@@ -53,6 +54,8 @@ export function SideColumn({
   const shown = sorted.slice(0, MAX_CHIPS);
   const more = sorted.length - shown.length;
   const hasMe = me !== null && positions.some((p) => p.account.authority === me && !p.account.isHouse);
+  // Seeker ID names (.skr) of the players shown; a player without one stays a face.
+  const names = useSkrNames(shown.filter((p) => !p.account.isHouse).map((p) => p.account.authority));
   return (
     <View style={[styles.column, hasMe && { borderColor: color, backgroundColor: up ? 'rgba(53,223,108,0.08)' : 'rgba(251,96,124,0.08)' }]}>
       <View style={styles.colHead}>
@@ -84,6 +87,10 @@ export function SideColumn({
                 <Text style={[styles.youTag, { backgroundColor: color }]}>YOU</Text>
               ) : house ? (
                 <Text style={styles.houseTag}>HOUSE</Text>
+              ) : names.get(p.account.authority) ? (
+                <Text style={styles.nickTag} numberOfLines={1}>
+                  {names.get(p.account.authority)!.replace(/\.skr$/, '')}
+                </Text>
               ) : null}
               <Text style={[styles.stake, { color }]}>{formatSol(p.account.stake)}</Text>
             </View>
@@ -288,6 +295,7 @@ const styles = StyleSheet.create({
   meRing: { borderWidth: 2, padding: 1 },
   youTag: { color: C.bg, fontSize: 9, fontWeight: '900', paddingHorizontal: 4, fontFamily: MONO },
   houseTag: { color: C.house, fontSize: 9, fontWeight: '900', fontFamily: MONO },
+  nickTag: { color: C.accentText, fontSize: 9, fontWeight: '800', fontFamily: MONO, maxWidth: 60 },
   stake: { fontSize: 9, fontWeight: '800', fontFamily: MONO },
   ghost: {
     width: 34,

@@ -291,3 +291,17 @@ test('away summary counts results once and reports the net in SOL', async () => 
   assert.equal(s.net, (SOL * 192n) / 10_000n - SOL / 100n);
   assert.equal(awayText(s, formatSol), 'While you were away: 1 won, 1 lost, 1 refunded · net +0.0092 SOL');
 });
+
+test('Seeker ID: the name after the 200-byte record header, one plain label, deterministic pick', async () => {
+  const { nameFromRecord, pickName } = await import('../chain/skrName.ts');
+  const record = (label: string) => {
+    const bytes = new Uint8Array(200 + 32);
+    bytes.set(new TextEncoder().encode(label), 200);
+    return bytes;
+  };
+  assert.equal(nameFromRecord(record('oxbla')), 'oxbla.skr');
+  assert.equal(nameFromRecord(record('a.b')), null);
+  assert.equal(nameFromRecord(record('')), null);
+  assert.equal(pickName(['zed.skr', 'Alpha.skr', 'alpha.skr']), 'Alpha.skr');
+  assert.equal(pickName([]), null);
+});

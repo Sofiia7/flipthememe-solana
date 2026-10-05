@@ -13,8 +13,8 @@ import { Gradient } from '../ui/Gradient';
 import { PixelText } from '../ui/PixelText';
 
 export type ShareCardData =
-  | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; profit: bigint }
-  | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null };
+  | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; profit: bigint; name?: string | null }
+  | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; name?: string | null };
 
 export const CARD_W = 360;
 export const CARD_H = 450;
@@ -58,6 +58,7 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
         <View style={[styles.faceRing, { borderColor: data.kind === 'win' ? C.neonYellow : sideColor }]}>
           <PixelFace face={data.face} size={120} expression={data.kind === 'win' ? 'happy' : undefined} />
         </View>
+        {data.name ? <Text style={styles.nick}>{data.name}</Text> : null}
       </View>
       {data.kind === 'win' ? (
         <View style={styles.center}>
@@ -208,7 +209,8 @@ const styles = StyleSheet.create({
   frame: { position: 'absolute', top: 8, left: 8, right: 8, bottom: 8, borderWidth: 3 },
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingTop: 4 },
   net: { color: C.neonYellow, fontSize: 11, fontWeight: '900', fontFamily: MONO, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 5 },
-  faceBox: { alignItems: 'center' },
+  faceBox: { alignItems: 'center', gap: 6 },
+  nick: { color: C.accentText, fontSize: 14, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
   faceRing: { borderWidth: 3, padding: 3, backgroundColor: '#1b1233' },
   center: { alignItems: 'center', gap: 8 },
   amount: {

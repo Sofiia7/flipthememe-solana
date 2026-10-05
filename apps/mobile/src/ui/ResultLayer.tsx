@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { Side } from '@flipthememe/client';
 import { classifyRounds } from '../chain/phase';
 import { chainNowSec } from '../chain/useChainClock';
+import { useSkrNames } from '../chain/skr';
 import { peekTokenInfo } from '../chain/useTokenInfo';
 import { formatCountdown, formatSol } from '../lib/format';
 import { useNow } from '../lib/usePolling';
@@ -60,7 +61,8 @@ function CountUpSol({ lamports }: { lamports: bigint }) {
 }
 
 function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  const { face, setTab, my } = useApp();
+  const { face, setTab, my, wallet } = useApp();
+  const myName = useSkrNames(wallet.owner ? [wallet.owner] : []).get(wallet.owner ?? '') ?? null;
   // The round is final first; the keeper's claim moves the money a few seconds later.
   const credited = my.positions.some((p) => p.round?.id === toast.roundId && p.account.claimed);
   const { width } = useWindowDimensions();
@@ -85,7 +87,7 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   const share = () => {
     setSharing(true);
     void shareCard(
-      { kind: 'win', face, side: toast.side, roundId: toast.roundId, symbol: info?.symbol ?? null, imageUrl: info?.imageUrl ?? null, profit: toast.payout - toast.stake },
+      { kind: 'win', face, side: toast.side, roundId: toast.roundId, symbol: info?.symbol ?? null, imageUrl: info?.imageUrl ?? null, profit: toast.payout - toast.stake, name: myName },
       toast.shareText,
       'Share your win',
     ).finally(() => setSharing(false));

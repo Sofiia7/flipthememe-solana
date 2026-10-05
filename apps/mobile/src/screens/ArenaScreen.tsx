@@ -3,6 +3,7 @@ import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, Vi
 import { RoundStatus, Side, winMultiplierBps } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer, roundLink } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
+import { useSkrNames } from '../chain/skr';
 import {
   OVERDUE_SECS,
   classifyRounds,
@@ -64,6 +65,7 @@ export function ArenaScreen() {
   const nowSec = chainNowSec(offsetSec, nowMs);
   const nowWhole = Math.floor(nowSec);
   const owner = wallet.owner;
+  const myName = useSkrNames(owner ? [owner] : []).get(owner ?? '') ?? null;
   const [amount, setAmount] = useState<bigint>(BET_AMOUNTS[1]);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
@@ -234,6 +236,7 @@ export function ArenaScreen() {
         roundId,
         symbol,
         imageUrl: tokenInfo?.imageUrl ?? null,
+        name: myName,
       },
       text,
       'Challenge a friend',

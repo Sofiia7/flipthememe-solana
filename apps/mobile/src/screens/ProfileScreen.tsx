@@ -9,7 +9,6 @@ import {
   HAIR_STYLE_NAMES,
   MOUTH_NAMES,
   SKIN_NAMES,
-  faceToBytes,
   randomFace,
   type Face,
   type FaceField,
@@ -19,6 +18,7 @@ import { chainNowSec } from '../chain/useChainClock';
 import { formatSol, shortAddress } from '../lib/format';
 import { chatterOn, soundMuted, useBoolStore } from '../lib/prefs';
 import { PixelFace } from '../PixelFace';
+import { useSkrNames } from '../chain/skr';
 import { playSound } from '../sound/sound';
 import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
@@ -50,9 +50,9 @@ function Toggle({ label, on, onPress }: { label: string; on: boolean; onPress: (
 
 export function ProfileScreen() {
   const { face, setFace, wallet, my, myReady, offsetSec } = useApp();
+  const myName = useSkrNames(wallet.owner ? [wallet.owner] : []).get(wallet.owner ?? '') ?? null;
   const muted = useBoolStore(soundMuted);
   const chatter = useBoolStore(chatterOn);
-  const bytes = faceToBytes(face);
   const stats = useMemo(() => {
     const now = chainNowSec(offsetSec);
     let wins = 0;
@@ -83,9 +83,9 @@ export function ProfileScreen() {
       <View style={styles.hero}>
         <PixelFace face={face} size={112} />
         <View style={styles.heroText}>
-          <Text style={styles.name}>{wallet.owner ? shortAddress(wallet.owner) : 'Not connected'}</Text>
-          <Text style={T.subtle}>Your face rides along with every bet as 8 bytes: no extra transaction, nothing to buy.</Text>
-          <Text style={styles.bytes}>[{Array.from(bytes).join(', ')}]</Text>
+          <Text style={styles.name}>{wallet.owner ? (myName ?? shortAddress(wallet.owner)) : 'Not connected'}</Text>
+          {myName && wallet.owner ? <Text style={styles.bytes}>{shortAddress(wallet.owner)} · Seeker ID</Text> : null}
+          <Text style={T.subtle}>Your face and Seeker ID name show next to every bet you make.</Text>
           <Btn small kind="ghost" title="RANDOMIZE" onPress={() => setFace(randomFace())} />
         </View>
       </View>
