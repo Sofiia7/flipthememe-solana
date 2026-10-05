@@ -32,11 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Runner resources
+      - name: Runner resources, free disk space
         run: |
           echo "cpus: $(nproc)"
           free -h
-          df -h / "$RUNNER_TEMP"
+          df -h /
+          # two Android variants with native code need more than the ~14 GB the image leaves free;
+          # drop preinstalled toolchains this job never uses (the Android SDK stays)
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/local/julia* || true
+          df -h /
 
       - uses: actions/setup-node@v7
         with:
@@ -90,8 +95,9 @@ jobs:
         working-directory: apps/mobile/android
         run: |
           sed -i 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8/' gradle.properties
-          echo "kotlin.daemon.jvmargs=-Xmx2g" >> gradle.properties
-          grep -E '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|reactNativeArchitectures)=' gradle.properties
+          # the template's gradle.properties has no trailing newline: start a new line first
+          printf '\nkotlin.daemon.jvmargs=-Xmx2g\n' >> gradle.properties
+          grep -E '^(org\.gradle\.jvmargs|kotlin\.daemon\.jvmargs|reactNativeArchitectures|expo\.inlineModules\.watchedDirectories)=' gradle.properties
 
       - uses: gradle/actions/setup-gradle@v6
         with:
