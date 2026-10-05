@@ -1,6 +1,8 @@
 import { LAMPORTS_PER_SOL } from '@flipthememe/client';
 
 export const DEVNET_RPC = 'https://api.devnet.solana.com';
+/** Devnet endpoints in failover order: a phone whose DNS loses one host still reaches the other. */
+export const DEVNET_RPCS = [DEVNET_RPC, 'https://solana-devnet.api.onfinality.io/public'] as const;
 /** Price reads go to mainnet (the PumpSwap pool); the list is tried in order with failover. */
 export const MAINNET_RPCS = ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'] as const;
 

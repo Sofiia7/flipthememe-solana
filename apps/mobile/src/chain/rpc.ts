@@ -5,7 +5,7 @@ import {
   type RpcTransport,
   type SolanaRpcApi,
 } from '@solana/kit';
-import { DEVNET_RPC, MAINNET_RPCS } from '../config';
+import { DEVNET_RPCS, MAINNET_RPCS } from '../config';
 
 export type SolanaRpc = Rpc<SolanaRpcApi>;
 
@@ -31,7 +31,33 @@ function transportWithTimeout(url: string, timeoutMs: number): RpcTransport {
   return transport as RpcTransport;
 }
 
-export const devnetRpc: SolanaRpc = createSolanaRpcFromTransport(transportWithTimeout(DEVNET_RPC, 15_000)) as SolanaRpc;
+/**
+ * Tries the endpoint that answered last, then the others, on network and HTTP failures only
+ * (JSON-RPC errors such as a failed simulation are answers and are not retried elsewhere).
+ * Resending the same signed transaction to a second endpoint is safe: it carries the same signature.
+ */
+function failoverTransport(urls: readonly string[], timeoutMs: number): RpcTransport {
+  const transports = urls.map((url) => transportWithTimeout(url, timeoutMs));
+  let preferred = 0;
+  const transport = async <T,>(config: Readonly<{ payload: unknown; signal?: AbortSignal }>): Promise<T> => {
+    let lastError: unknown = new Error('no devnet RPC configured');
+    for (let attempt = 0; attempt < transports.length; attempt++) {
+      const index = (preferred + attempt) % transports.length;
+      try {
+        const result = await transports[index]<T>(config);
+        preferred = index;
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (config.signal?.aborted) throw error;
+      }
+    }
+    throw lastError;
+  };
+  return transport as RpcTransport;
+}
+
+export const devnetRpc: SolanaRpc = createSolanaRpcFromTransport(failoverTransport(DEVNET_RPCS, 15_000)) as SolanaRpc;
 
 const mainnetRpcs: SolanaRpc[] = MAINNET_RPCS.map(
   (url) => createSolanaRpcFromTransport(transportWithTimeout(url, 6_000)) as SolanaRpc,

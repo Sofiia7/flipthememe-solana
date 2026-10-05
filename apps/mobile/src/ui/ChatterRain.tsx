@@ -6,7 +6,7 @@ import { ago, useChatter, type ChatterItem } from '../chain/useChatter';
 
 const SHOW_MS = 5_500;
 const GAP_MS = 2_200;
-const MAX_ON_SCREEN = 3;
+const MAX_ON_SCREEN = 2;
 
 const MOOD = {
   moon: { border: '#35df6c', bg: 'rgba(16, 48, 28, 0.94)', tag: 'MOON' },
@@ -16,7 +16,8 @@ const MOOD = {
 
 type Shown = { item: ChatterItem; key: number; anim: Animated.Value };
 
-export function ChatterRain({ symbol, mint, enabled }: { symbol: string | null; mint: string | null; enabled: boolean }) {
+/** `top` keeps the bubbles below the token header, over the chart only. */
+export function ChatterRain({ symbol, mint, enabled, top = 76 }: { symbol: string | null; mint: string | null; enabled: boolean; top?: number }) {
   const { next, drop } = useChatter(symbol, mint, enabled);
   const [shown, setShown] = useState<Shown[]>([]);
   const counter = useRef(0);
@@ -43,7 +44,7 @@ export function ChatterRain({ symbol, mint, enabled }: { symbol: string | null; 
   if (!enabled || shown.length === 0) return null;
   const now = Date.now();
   return (
-    <View pointerEvents="box-none" style={styles.layer}>
+    <View pointerEvents="box-none" style={[styles.layer, { top }]}>
       {shown.map(({ item, key, anim }) => {
         const mood = MOOD[item.mood];
         const translateY = anim.interpolate({ inputRange: [0, 1, 2], outputRange: [-90, 0, -20] });
@@ -73,7 +74,7 @@ export function ChatterRain({ symbol, mint, enabled }: { symbol: string | null; 
 }
 
 const styles = StyleSheet.create({
-  layer: { position: 'absolute', top: 6, left: 10, right: 10, gap: 6, zIndex: 50 },
+  layer: { position: 'absolute', left: 10, right: 10, gap: 6, zIndex: 50 },
   bubble: { borderWidth: 2, paddingHorizontal: 10, paddingVertical: 7, gap: 3 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tag: { fontSize: 9, fontWeight: '900', borderWidth: 1, paddingHorizontal: 4 },

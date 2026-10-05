@@ -66,6 +66,8 @@ export function ArenaScreen() {
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
+  /** Bottom edge of the token header: chatter bubbles start below it and never hide the token name. */
+  const [chatterTop, setChatterTop] = useState(76);
   const chatter = useBoolStore(chatterOn);
   // The chart takes the spare height of taller phones.
   const { height: screenHeight } = useWindowDimensions();
@@ -270,7 +272,9 @@ export function ArenaScreen() {
           {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
-          <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />
+          <View onLayout={(e) => setChatterTop(Math.round(e.nativeEvent.layout.y + e.nativeEvent.layout.height + 6))}>
+            <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />
+          </View>
 
           <PriceChart
             points={feed.points}
@@ -332,7 +336,7 @@ export function ArenaScreen() {
             <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
           </Pressable>
         </ScrollView>
-        <ChatterRain symbol={symbol} mint={tokenMint} enabled={chatter.loaded && chatter.value} />
+        <ChatterRain symbol={symbol} mint={tokenMint} enabled={chatter.loaded && chatter.value} top={chatterTop} />
       </View>
 
       <View style={styles.dock}>
