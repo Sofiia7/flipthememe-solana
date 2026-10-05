@@ -7,7 +7,7 @@ export const DEVNET_RPCS = [DEVNET_RPC, 'https://solana-devnet.api.onfinality.io
 export const MAINNET_RPCS = ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'] as const;
 
 export const CLUSTER = { id: 'solana:devnet', url: DEVNET_RPC } as const;
-export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com', icon: 'favicon.ico' };
+export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com', icon: 'icon-512.png' };
 
 export const FAUCET_URL = 'https://faucet.solana.com';
 export const DEEP_LINK_PREFIX = 'flipthememe://round/';
