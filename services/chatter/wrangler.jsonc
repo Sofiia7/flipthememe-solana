@@ -1,0 +1,9 @@
+{
+  // Live X chatter for the arena token: hides the SocialData key, caches per ticker.
+  // Secret: SOCIALDATA_API_KEY (wrangler secret put SOCIALDATA_API_KEY, value on stdin).
+  "name": "ftm-chatter",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": true,
+  "observability": { "enabled": true }
+}
