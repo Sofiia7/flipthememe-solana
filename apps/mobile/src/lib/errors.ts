@@ -91,8 +91,21 @@ function hasCode(error: unknown, code: number): boolean {
   return false;
 }
 
+/** A wallet failure tagged with its MWA step (WalletStepError in wallet/walletSession.ts, matched by name). */
+type StepError = { name: 'WalletStepError'; step: string; walletCode: number | string | null; message: string };
+
+function asStepError(error: unknown): StepError | null {
+  const e = error as Partial<StepError> | null;
+  return e?.name === 'WalletStepError' && typeof e.step === 'string' ? (e as StepError) : null;
+}
+
 /** MWA: the person closed or declined the wallet sheet. */
 export function isWalletDecline(error: unknown): boolean {
+  const step = asStepError(error);
+  if (step) {
+    const c = step.walletCode;
+    return c === -1 || c === -3 || c === -4 || c === 'ERROR_ASSOCIATION_CANCELLED' || c === 'ERROR_SESSION_CLOSED';
+  }
   const e = error as { name?: string; code?: unknown; message?: string } | null;
   if (!e) return false;
   if (e.name === 'SolanaMobileWalletAdapterProtocolError' && (e.code === -1 || e.code === -3 || e.code === -4)) return true;
@@ -118,6 +131,8 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
 
 /** Raw MWA error fields, shown next to the human sentence so wallet problems can be diagnosed on a phone. */
 export function walletDetail(error: unknown): string {
+  const step = asStepError(error);
+  if (step) return ` [${step.step} ${String(step.walletCode ?? '')}: ${step.message.slice(0, 160)}]`;
   const e = error as { name?: string; code?: unknown; message?: string; cause?: unknown } | null;
   if (!e) return '';
   const cause = e.cause instanceof Error ? ` / cause: ${e.cause.message}` : '';
@@ -127,7 +142,13 @@ export function walletDetail(error: unknown): string {
 /** One human sentence for a failed action. */
 export function humanError(error: unknown, action: TxAction): string {
   console.warn('[ftm] action failed', action, error);
-  if (isWalletDecline(error)) return `Request declined in the wallet.${walletDetail(error)}`;
+  const step = asStepError(error);
+  if (isWalletDecline(error)) {
+    const what =
+      step && step.step !== 'sign' ? 'The wallet did not connect. Check that it is set to Devnet and try again.' : 'Request declined in the wallet.';
+    return `${what}${walletDetail(error)}`;
+  }
+  if (step && typeof step.walletCode === 'string' && /timed out/i.test(step.walletCode)) return 'The wallet did not answer in time - try again.';
   const e = error as { name?: string; code?: unknown } | null;
   if (e?.name === 'SolanaMobileWalletAdapterError' && e.code === 'ERROR_WALLET_NOT_FOUND') {
     return 'No Solana wallet app found on this phone. Install one that supports Mobile Wallet Adapter.';

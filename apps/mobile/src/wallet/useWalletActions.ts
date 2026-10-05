@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { lamports, type Address, type Instruction, type Signature } from '@solana/kit';
-import { useMobileWallet } from '@wallet-ui/react-native-kit';
+import { transact, useMobileWallet, type KitMobileWallet } from '@wallet-ui/react-native-kit';
 import {
   compileForWallet,
   decodeVault,
@@ -18,6 +18,7 @@ import { fetchAccounts } from '../chain/fetch';
 import type { SolanaRpc } from '../chain/rpc';
 import { humanError, type TxAction } from '../lib/errors';
 import { sol } from '../lib/format';
+import { WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
 
 export type WalletBusy = Exclude<TxAction, 'bet' | 'claim'>;
 
@@ -62,23 +63,43 @@ export function useWalletActions(input: {
     [onChanged],
   );
 
-  /** Wallet signs (sign only), the app submits to devnet, whatever network the wallet shows. */
+  // The kit's own connect/sign cannot recover from a cached authorization the wallet rejects
+  // (see walletSession.ts), so every wallet trip goes through withWallet.
+  const { store, chain, identity } = mwa;
+  const walletCtx = useMemo<WalletContext<KitMobileWallet>>(
+    () => ({
+      store: store as unknown as WalletStore,
+      transact: async (callback) => await transact(callback),
+      authorize: (wallet, authToken) => wallet.authorize({ chain, identity, auth_token: authToken }),
+    }),
+    [store, chain, identity],
+  );
+
+  /**
+   * Wallet signs (sign only), the app submits to devnet, whatever network the wallet shows. The
+   * transaction is compiled after the wallet authorizes, so the blockhash is fresh even when the
+   * wallet first asks for a password.
+   */
   const signAndSubmit = useCallback(
     async (payer: Address, instructions: Instruction[]): Promise<Signature> => {
-      const compiled = await compileForWallet(rpc, payer, instructions);
-      const signed = await mwa.signTransactions(compiled.transaction);
-      return sendAndConfirm(rpc, { transaction: signed, lastValidBlockHeight: compiled.lastValidBlockHeight });
+      const { signed, lastValidBlockHeight } = await withWallet(walletCtx, async (wallet, account) => {
+        if (account.address !== payer) throw new WalletAccountChanged(account.address);
+        const compiled = await compileForWallet(rpc, payer, instructions);
+        const [transaction] = await wallet.signTransactions({ transactions: [compiled.transaction] });
+        return { signed: transaction, lastValidBlockHeight: compiled.lastValidBlockHeight };
+      });
+      return sendAndConfirm(rpc, { transaction: signed, lastValidBlockHeight });
     },
-    [rpc, mwa],
+    [rpc, walletCtx],
   );
 
   const connect = useCallback(
     () =>
       run('connect', async () => {
-        const account = await mwa.connect();
+        const account = await withWallet(walletCtx, async (_wallet, authorized) => authorized);
         return { message: `Connected ${account.address.slice(0, 4)}...${account.address.slice(-4)}` };
       }),
-    [run, mwa],
+    [run, walletCtx],
   );
 
   const disconnect = useCallback(async () => {

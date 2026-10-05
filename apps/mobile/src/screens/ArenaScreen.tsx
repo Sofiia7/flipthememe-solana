@@ -29,7 +29,7 @@ import { sessionStatusOf, useApp, type SessionStatus } from '../state/AppProvide
 import { C, MONO } from '../theme';
 import { ArenaClock, type ClockSide } from '../ui/ArenaClock';
 import { PriceChart } from '../ui/Chart';
-import { ChatterRain } from '../ui/ChatterRain';
+import { ChatterLane } from '../ui/ChatterLane';
 import { Banner, ExtLink } from '../ui/common';
 import { HowItWorksSheet } from '../ui/HowItWorks';
 import { NeonButton } from '../ui/NeonButton';
@@ -66,12 +66,11 @@ export function ArenaScreen() {
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
-  /** Bottom edge of the token header: chatter bubbles start below it and never hide the token name. */
-  const [chatterTop, setChatterTop] = useState(76);
   const chatter = useBoolStore(chatterOn);
-  // The chart takes the spare height of taller phones.
+  const chatterShown = chatter.loaded && chatter.value;
+  // The chart takes the spare height of taller phones, a little less when the X lane is on.
   const { height: screenHeight } = useWindowDimensions();
-  const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * 0.22)));
+  const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * (chatterShown ? 0.2 : 0.22))));
 
   // The rules open by themselves once, on the first launch.
   useEffect(() => {
@@ -251,6 +250,8 @@ export function ArenaScreen() {
         </View>
       </View>
 
+      {chatterShown ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
+
       <View style={styles.stage}>
         <ScrollView contentContainerStyle={styles.page}>
           {arena.error && (arenaStaleSec === null || arenaStaleSec > 10) ? (
@@ -272,9 +273,7 @@ export function ArenaScreen() {
           {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
-          <View onLayout={(e) => setChatterTop(Math.round(e.nativeEvent.layout.y + e.nativeEvent.layout.height + 6))}>
-            <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />
-          </View>
+          <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />
 
           <PriceChart
             points={feed.points}
@@ -336,7 +335,6 @@ export function ArenaScreen() {
             <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
           </Pressable>
         </ScrollView>
-        <ChatterRain symbol={symbol} mint={tokenMint} enabled={chatter.loaded && chatter.value} top={chatterTop} />
       </View>
 
       <View style={styles.dock}>
