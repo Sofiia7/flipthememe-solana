@@ -11,7 +11,7 @@ test('a challenge link names the side and the token and offers the opposite side
   const body = await res.text();
   assert.match(body, /FRIEND IS UP/);
   assert.match(body, /ON \$TESLA/);
-  assert.match(body, /TAKE DOWN/);
+  assert.match(body, /CALL DOWN/);
   assert.match(body, /ROUND #496/);
   assert.ok(body.includes('intent://round/496#Intent;scheme=flipthememe;package=com.flipthememe.app;'));
   assert.match(body, /<meta property="og:title" content="I&#39;m UP on \$Tesla\. Take the other side\.">/);

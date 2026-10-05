@@ -3,14 +3,18 @@
 //   /r/<round>?side=up&t=<ticker>   challenge page: opens the app on that round, or offers the APK
 //   /get                            how to install and play
 //   /.well-known/assetlinks.json    Android App Links: lets the app open /r/ links directly
+//   /v1/names?a=<addr>,<addr>       Seeker ID (.skr) names for the app's player rows, see names.ts
 //
 // The app is not a web app: this page only bridges a messenger link to the Android app.
+
+import { names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
 /** SHA-256 of the release signing certificate (public, printed by apksigner in CI). */
 const RELEASE_CERT_SHA256 = '94:A7:26:CF:26:AB:3A:F1:FA:D6:54:4A:73:86:22:29:7B:A0:A9:AD:40:95:76:76:56:58:F7:A3:3F:3F:20:89';
 const ORIGIN = 'https://sol.flipthememe.com';
-const APK_URL = 'https://github.com/Sofiia7/flipthememe-solana/releases/latest';
+/** Every release carries the APK under this fixed name, so the newest one is always this URL. */
+const APK_URL = 'https://github.com/Sofiia7/flipthememe-solana/releases/latest/download/FlipTheMeme.apk';
 const OG_IMAGE = 'https://flipthememe.com/og-cover.png';
 
 const ASSET_LINKS = [
@@ -86,7 +90,7 @@ function challengePage(round: string, side: 'up' | 'down' | null, ticker: string
   const headline = side
     ? `<div class="big ${side}">FRIEND IS ${side.toUpperCase()} ${side === 'up' ? '&#9650;' : '&#9660;'}</div>
 <div class="call">ON ${escapeHtml(token.toUpperCase())}</div>
-<div class="big ${other}">TAKE ${other!.toUpperCase()} ${other === 'up' ? '&#9650;' : '&#9660;'}</div>`
+<div class="big ${other}">CALL ${other!.toUpperCase()} ${other === 'up' ? '&#9650;' : '&#9660;'}</div>`
     : `<div class="big">PICK A SIDE</div><div class="call">UP &#9650; OR DOWN &#9660;</div>`;
   return page({
     title,
@@ -98,7 +102,7 @@ ${headline}
 </div>
 <a class="btn go" href="${escapeHtml(appIntent(round))}">OPEN FLIPTHEMEME</a>
 <a class="btn get" href="/get">GET THE ANDROID APP</a>
-<p>A new round every minute on the hottest fresh memecoin. You call the move, you never buy the token. Solana devnet, test SOL only.</p>`,
+<p>A new round every minute on a busy fresh memecoin, so you can always catch the next one. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
   });
 }
 
@@ -139,4 +143,7 @@ export function handle(request: Request): Response {
   return new Response(null, { status: 302, headers: { location: `${ORIGIN}/get` } });
 }
 
-export default { fetch: (request: Request) => handle(request) };
+export default {
+  fetch: (request: Request, env: NamesEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) =>
+    new URL(request.url).pathname === '/v1/names' ? names(request, env, ctx) : handle(request),
+};

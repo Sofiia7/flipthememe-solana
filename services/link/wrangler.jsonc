@@ -1,6 +1,9 @@
 {
   // sol.flipthememe.com: landing page for shared round links and Android App Links.
   // DNS: AAAA sol -> 100:: (proxied) in the flipthememe.com zone; this route serves it.
+  // Secret for /v1/names: MAINNET_RPC, a keyed mainnet RPC URL that allows getProgramAccounts
+  // (wrangler secret put MAINNET_RPC, value on stdin). Needed once deployed: the free public RPCs
+  // refuse getProgramAccounts to Workers (see src/names.ts). Without it every name comes back missing.
   "name": "ftm-link",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-05",
