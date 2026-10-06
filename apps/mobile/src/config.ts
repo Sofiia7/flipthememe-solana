@@ -15,15 +15,33 @@ export const DEEP_LINK_PREFIX = 'flipthememe://round/';
 
 export const POLL = {
   arenaMs: 2_000,
+  /** Arena reads while another tab is open: config and rounds only, kept under the 10 s stale banner. */
+  arenaHiddenMs: 8_000,
+  /** Arena reads while no round is upcoming, open or in flight (the keeper creates each round 15 s ahead). */
+  arenaQuietMs: 5_000,
   accountMs: 4_000,
+  /** My account while none of my rounds is in play: only my own actions change it then, and they refresh at once. */
+  accountIdleMs: 15_000,
+  /** After my own action the account keeps the fast pace this long, in case the RPC is a moment behind. */
+  accountAfterActionMs: 20_000,
+  /** My positions (a getProgramAccounts) are read when my vault or session moves, and at least this often. */
+  positionsMaxAgeMs: 120_000,
+  /** A round the arena read this recently is taken from there instead of being read again for my account. */
+  sharedRoundMs: 3_000,
   priceMs: 1_500,
   clockMs: 60_000,
   /** Data older than this shows the offline / stale banner. */
   staleMs: 10_000,
 } as const;
 
+/** After HTTP 429 an RPC endpoint is left alone 2 s, doubling on each repeat up to 30 s (longer if Retry-After asks). */
+export const RPC_COOL_DOWN = { baseMs: 2_000, maxMs: 30_000 } as const;
+
 /** Mainnet price points kept for the chart. */
 export const PRICE_HISTORY_MS = 10 * 60 * 1_000;
+
+/** Chart history (GeckoTerminal 1-minute candles, reference only): read again when older than this. */
+export const CHART_HISTORY_MAX_AGE_MS = 2 * 60 * 1_000;
 
 const sol = (hundredths: bigint) => (LAMPORTS_PER_SOL * hundredths) / 100n;
 

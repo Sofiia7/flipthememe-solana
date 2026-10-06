@@ -100,7 +100,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   offsetRef.current = offsetSec;
   const chainNow = useCallback(() => chainNowSec(offsetRef.current), []);
 
-  const arena = useArena(rpc);
+  // The arena polls fast and the price feeds run only while the Arena tab is on screen.
+  const [tab, setTab] = useState<Tab>('arena');
+  const onArena = tab === 'arena';
+  const arena = useArena(rpc, onArena);
 
   const [sessionKey, setSessionKey] = useState<SessionKey | null>(null);
   const [sessionKeyError, setSessionKeyError] = useState<string | null>(null);
@@ -133,8 +136,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     myRaw.refresh();
   };
 
-  // History kept on the phone per wallet: finished rounds stay listed after the program closes
-  // their Position accounts (an hour or so after the claim).
+  // History kept on the phone per wallet: finished rounds stay listed after the keeper closes
+  // their Position accounts (a day after the round ends).
   const [kept, setKept] = useState<{ owner: string; records: readonly HistoryRecord[] } | null>(null);
   useEffect(() => {
     setKept(null);
@@ -252,8 +255,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     return { chartPool, myPool: myPool && myPool !== chartPool ? myPool : null };
   }, [arena.rounds, myRaw.positions, myRaw.owner, owner]);
-  const feed = usePoolPrice(pools.chartPool);
-  const myFeed = usePoolPrice(pools.myPool);
+  const feed = usePoolPrice(pools.chartPool, onArena);
+  const myFeed = usePoolPrice(pools.myPool, onArena);
 
   // Result overlays when one of my rounds turns final during this session (they play their own haptics and sound).
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -324,7 +327,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [away, owner, saveAck]);
   const finalSeenAt = useCallback((roundAddress: string) => finalSeen.current.get(roundAddress) ?? null, []);
 
-  const [tab, setTab] = useState<Tab>('arena');
   const [deepLinkRound, setDeepLinkRound] = useState<bigint | null>(null);
   useEffect(() => {
     const handle = (url: string | null) => {

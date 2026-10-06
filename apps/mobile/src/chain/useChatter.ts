@@ -1,6 +1,8 @@
 // Live X chatter about the arena token, served by the ftm-chatter Worker (services/chatter).
 // Every item is a real tweet; each one is shown once.
 import { useEffect, useRef, useState } from 'react';
+import { countRequest } from '../lib/requestLog';
+import { appInForeground } from '../lib/usePolling';
 
 export const CHATTER_URL = 'https://ftm-chatter.sofiaseremeteva.workers.dev/v1/chatter';
 const POLL_MS = 45_000;
@@ -35,7 +37,10 @@ export function useChatter(symbol: string | null, mint: string | null, enabled: 
     if (!enabled || !symbol) return;
     let cancelled = false;
     const load = async () => {
+      // The timer keeps firing in the background; nothing is fetched until the app is on screen again.
+      if (!appInForeground()) return;
       try {
+        countRequest('http', 'chatter');
         const params = `symbol=${encodeURIComponent(symbol)}${mint ? `&mint=${encodeURIComponent(mint)}` : ''}`;
         const res = await fetch(`${CHATTER_URL}?${params}`);
         if (!res.ok) return;

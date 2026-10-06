@@ -293,6 +293,7 @@ export function ArenaScreen() {
 
           <PriceChart
             points={feed.points}
+            historyPool={feed.pool}
             nowMs={nowMs}
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}

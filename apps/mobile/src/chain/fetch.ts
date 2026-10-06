@@ -10,6 +10,7 @@ import {
   type RoundAccount,
   type SessionAccount,
 } from '@flipthememe/client';
+import { setBounded } from '../lib/limits';
 import { SESSION_SPACE } from '../wallet/sessionList';
 import type { SolanaRpc } from './rpc';
 
@@ -90,6 +91,8 @@ export async function fetchSessionsOf(rpc: SolanaRpc, owner: Address): Promise<S
   return out.sort((a, b) => (a.account.expiry > b.account.expiry ? -1 : a.account.expiry < b.account.expiry ? 1 : 0));
 }
 
+/** A new round every minute, so the cache keeps the newest few hundred ids only. */
+const ROUND_ADDRESSES_KEPT = 256;
 const roundAddressCache = new Map<bigint, Promise<Address>>();
 
 export function roundAddressCached(id: bigint): Promise<Address> {
@@ -97,7 +100,7 @@ export function roundAddressCached(id: bigint): Promise<Address> {
   if (!found) {
     found = roundAddress(id);
     found.catch(() => roundAddressCache.delete(id));
-    roundAddressCache.set(id, found);
+    setBounded(roundAddressCache, id, found, ROUND_ADDRESSES_KEPT);
   }
   return found;
 }

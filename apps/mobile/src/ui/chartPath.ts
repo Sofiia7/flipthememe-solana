@@ -1,8 +1,27 @@
 // Path math for the price chart, kept free of React Native so node:test covers it.
 
 export type XY = { x: number; y: number };
+/** A time series point: time and value in any units (ms and price for the chart). */
+export type TimeValue = { t: number; v: number };
 
 const pt = (p: XY) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+
+/** "M x y L x y ..." through the points. */
+export function linePath(points: readonly XY[]): string {
+  let d = '';
+  points.forEach((p, i) => {
+    d += `${i === 0 ? 'M' : 'L'}${pt(p)}`;
+  });
+  return d;
+}
+
+/** The area under a line down to `baseY` (the chart floor); empty below two points. */
+export function areaPath(points: readonly XY[], baseY: number): string {
+  if (points.length < 2) return '';
+  const first = points[0];
+  const last = points[points.length - 1];
+  return `${linePath(points)}L${pt({ x: last.x, y: baseY })}L${pt({ x: first.x, y: baseY })}Z`;
+}
 
 /**
  * The price line split at a horizontal level (screen y of the strike): the parts above it and the
@@ -30,4 +49,60 @@ export function splitAtLevel(points: readonly XY[], level: number): { above: str
     prev = p;
   }
   return parts;
+}
+
+/** `splitAtLevel` for a line broken into pieces (see `splitAtGaps`): each piece split on its own, the paths joined. */
+export function splitLinesAtLevel(lines: readonly (readonly XY[])[], level: number): { above: string; below: string } {
+  const parts = lines.map((line) => splitAtLevel(line, level));
+  return { above: parts.map((p) => p.above).join(''), below: parts.map((p) => p.below).join('') };
+}
+
+/**
+ * Splits a series (oldest first) wherever two neighbours lie more than `maxGap` apart, so a pause in
+ * the data (app in the background, another tab open) shows as a gap instead of a straight line.
+ */
+export function splitAtGaps<T>(items: readonly T[], timeOf: (item: T) => number, maxGap: number): T[][] {
+  const out: T[][] = [];
+  let current: T[] = [];
+  let last = 0;
+  for (const item of items) {
+    const t = timeOf(item);
+    if (current.length > 0 && t - last > maxGap) {
+      out.push(current);
+      current = [];
+    }
+    current.push(item);
+    last = t;
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
+/**
+ * The part of a series (oldest first, times strictly increasing) inside [t0, t1], the line cut
+ * exactly at both bounds, so a coarse series still reaches the chart edge and stops where asked.
+ */
+export function clipSeries(points: readonly TimeValue[], t0: number, t1: number): TimeValue[] {
+  const out: TimeValue[] = [];
+  if (!(t1 > t0)) return out;
+  const cut = (a: TimeValue, b: TimeValue, t: number): TimeValue => ({ t, v: a.v + ((t - a.t) / (b.t - a.t)) * (b.v - a.v) });
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (i > 0) {
+      const a = points[i - 1];
+      if (a.t < t0 && p.t > t0) out.push(cut(a, p, t0));
+      if (a.t < t1 && p.t > t1) {
+        out.push(cut(a, p, t1));
+        break;
+      }
+    }
+    if (p.t > t1) break;
+    if (p.t >= t0) out.push(p);
+  }
+  return out;
+}
+
+/** True when two positive values are within `factor` of each other (either way). */
+export function withinFactor(a: number, b: number, factor: number): boolean {
+  return a > 0 && b > 0 && Math.max(a / b, b / a) <= factor;
 }

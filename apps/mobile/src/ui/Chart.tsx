@@ -1,12 +1,19 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import type { Address } from '@solana/kit';
+import { usePoolHistory } from '../chain/usePoolHistory';
 import type { PricePoint } from '../chain/usePoolPrice';
 import { C, MONO } from '../theme';
-import { splitAtLevel } from './chartPath';
+import { areaPath, clipSeries, linePath, splitAtGaps, splitLinesAtLevel, withinFactor } from './chartPath';
 
 type Props = {
   points: readonly PricePoint[];
+  /**
+   * Pool whose last minutes (GeckoTerminal 1-minute closes) are drawn as a faint dashed line where the
+   * live line has not started yet. Picture only: it never touches the strike, the standing or the stale state.
+   */
+  historyPool?: Address | null;
   nowMs: number;
   /** Fixed strike of the round the chart follows (same units as the pool price). */
   strike?: bigint | null;
@@ -32,11 +39,29 @@ const PAST_MS = 90_000;
 const PAD_TOP = 16;
 const PAD_BOTTOM = 16;
 const AHEAD_MAX_MS = 110_000;
+/** Live points further apart than this (app in the background, another tab open) leave a gap in the line. */
+const LIVE_GAP_MS = 15_000;
+/** History further than this factor from the live price is not drawn: a broken source must not flatten the live line. */
+const HISTORY_MAX_FACTOR = 10;
 
 /** Live mainnet price: the strike as a dashed line with green above and red below, plus the round's windows. */
-export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, strikeWindow, exitWindow, cutoffMs, stale, height = 150, emptyText }: Props) {
+export function PriceChart({
+  points,
+  historyPool,
+  nowMs,
+  strike,
+  strikeLabel,
+  pairLabel,
+  strikeWindow,
+  exitWindow,
+  cutoffMs,
+  stale,
+  height = 150,
+  emptyText,
+}: Props) {
   const [width, setWidth] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width));
+  const history = usePoolHistory(historyPool ?? null);
 
   const start = nowMs - PAST_MS;
   let end = nowMs + 20_000;
@@ -48,7 +73,15 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, stri
   reach(cutoffMs);
 
   const visible = points.filter((p) => p.atMs >= start - 3_000 && p.atMs <= nowMs + 1_000);
-  const values = visible.map((p) => Number(p.price));
+  // The history fills only the time before the live line starts.
+  let reference = clipSeries(
+    history.map((p) => ({ t: p.atMs, v: p.price })),
+    start,
+    visible.length > 0 ? visible[0].atMs : nowMs,
+  );
+  const lastReference = reference[reference.length - 1];
+  if (lastReference && visible.length > 0 && !withinFactor(lastReference.v, Number(visible[0].price), HISTORY_MAX_FACTOR)) reference = [];
+  const values = [...visible.map((p) => Number(p.price)), ...reference.map((r) => r.v)];
   const strikeValue = strike != null && strike > 0n ? Number(strike) : null;
   // The strike is part of the range, so its line is always on the chart.
   if (strikeValue !== null) values.push(strikeValue);
@@ -68,13 +101,12 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, stri
   const above = strikeValue !== null && lastValue !== null ? (lastValue > strikeValue ? true : lastValue < strikeValue ? false : null) : null;
   const dotColor = stale ? C.dim : above === true ? C.neonGreen : above === false ? C.neonRed : strikeValue !== null ? C.neonYellow : C.accentText;
 
-  const xy = visible.map((p) => ({ x: x(p.atMs), y: y(Number(p.price)) }));
-  let d = '';
-  xy.forEach((p, i) => {
-    d += `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
-  });
-  const first = visible[0];
-  const area = d && first && last ? `${d}L${x(last.atMs).toFixed(1)} ${PAD_TOP + plotH}L${x(first.atMs).toFixed(1)} ${PAD_TOP + plotH}Z` : '';
+  const segments = splitAtGaps(visible, (p) => p.atMs, LIVE_GAP_MS).map((segment) =>
+    segment.map((p) => ({ x: x(p.atMs), y: y(Number(p.price)) })),
+  );
+  const d = segments.map(linePath).join('');
+  const area = segments.map((segment) => areaPath(segment, PAD_TOP + plotH)).join('');
+  const referencePath = reference.length >= 2 ? linePath(reference.map((r) => ({ x: x(r.t), y: y(r.v) }))) : '';
 
   const band = (range: readonly [number, number] | null | undefined, color: string, label: string, strong: boolean) => {
     if (!range || width === 0) return null;
@@ -107,7 +139,7 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, stri
   };
 
   const sy = strikeValue !== null ? y(strikeValue) : null;
-  const split = sy !== null ? splitAtLevel(xy, sy) : null;
+  const split = sy !== null ? splitLinesAtLevel(segments, sy) : null;
   const ticks = [-60_000, 0].map((offset) => ({ ms: nowMs + offset, label: offset === 0 ? 'now' : '-1m' }));
   const strikeTag = strikeLabel ?? 'STRIKE';
   const tagW = strikeTag.length * 6 + 8;
@@ -151,6 +183,15 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, stri
             </SvgText>
           ) : null}
 
+          {referencePath ? (
+            <>
+              <Path d={referencePath} stroke={C.subtle} strokeWidth={1.5} strokeDasharray="4 3" opacity={0.7} fill="none" strokeLinejoin="round" />
+              <SvgText x={4} y={height - 4} fill={C.subtle} fontSize={8} fontWeight="bold" fontFamily={MONO}>
+                HISTORY
+              </SvgText>
+            </>
+          ) : null}
+
           {d && split ? (
             <>
               {split.above ? <Path d={split.above} stroke={stale ? C.dim : C.neonGreen} strokeWidth={2.5} fill="none" strokeLinejoin="round" /> : null}
@@ -158,7 +199,7 @@ export function PriceChart({ points, nowMs, strike, strikeLabel, pairLabel, stri
             </>
           ) : d ? (
             <>
-              <Path d={area} fill="url(#ftmArea)" />
+              {area ? <Path d={area} fill="url(#ftmArea)" /> : null}
               <Path d={d} stroke={stale ? C.dim : C.accentText} strokeWidth={2.5} fill="none" strokeLinejoin="round" />
             </>
           ) : null}

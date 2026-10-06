@@ -1,6 +1,6 @@
-// History that outlives the chain: the program closes a Position account about an hour after its
-// round is final and claimed, so every result this phone sees final is also kept on the phone, per
-// wallet. History and Profile show the chain rows plus the kept rows the chain no longer has (the
+// History that outlives the chain: once a round is final and a position claimed, the keeper closes
+// the Position account (a day after the round ends; the program allows it after an hour), so every
+// result this phone sees final is also kept on the phone, per wallet. History and Profile show the chain rows plus the kept rows the chain no longer has (the
 // chain row wins when both exist). Pure TypeScript (no React Native imports), so node:test covers
 // it; storage is injected.
 import { RoundStatus, type PositionAccount, type RoundAccount } from '@flipthememe/client';
