@@ -11,7 +11,7 @@ import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink, KV, Pill } from '../ui/common';
 import { isChecking, type GuardedAction } from '../wallet/pendingTx';
-import { revocableSigners, sessionRows, withDeviceSession, type SessionRow } from '../wallet/sessionList';
+import { revocableSigners, sessionRows, sessionStatusOf, withDeviceSession, type SessionRow } from '../wallet/sessionList';
 import { NETWORK_FEE } from '../wallet/topUpPlan';
 
 const STATUS_PILL: Record<SessionRow['status'], { text: string; color: string }> = {
@@ -43,7 +43,11 @@ export function WalletScreen() {
   }, [result, refreshSessions]);
 
   const minStake = arena.config?.minStake ?? 10_000_000n;
+  // Money already in the game balance: this phone gets a session over it with one approval, no deposit.
+  const myStatus = sessionStatusOf(my.session, nowSec, minStake);
+  const keyLow = (my.keyLamports ?? 0n) < SESSION_RULES.gasPerBet;
   const available = my.vault?.available ?? 0n;
+  const canRenew = myReady && available >= minStake && (myStatus !== 'active' || keyLow);
   const locked = my.vault?.locked ?? 0n;
   const checking = (action: GuardedAction, target?: string) => isChecking(wallet.pendingTx, action, target);
 
@@ -117,7 +121,22 @@ export function WalletScreen() {
             <KV k="Available" v={myReady ? sol(available) : '...'} tone="up" />
             <KV k="Locked in rounds" v={myReady ? sol(locked) : '...'} tone="gold" />
             <Text style={T.dim}>Winnings and refunds land here after each round. Only available SOL can be withdrawn.</Text>
-            <Text style={styles.sub}>TOP UP & PLAY</Text>
+            {canRenew ? (
+              <>
+                <Btn
+                  title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
+                  busy={wallet.busy === 'renew' || checking('renew')}
+                  disabled={busy || !sessionKey}
+                  onPress={() => void wallet.renewSession(available)}
+                />
+                <Text style={T.dim}>
+                  {myStatus === 'none'
+                    ? 'This phone has no session yet (a new install gets a new device key). One approval, no deposit: bets come from your game balance.'
+                    : 'One approval, no deposit: a new 24 h session over your game balance.'}
+                </Text>
+              </>
+            ) : null}
+            <Text style={styles.sub}>{canRenew ? 'OR ADD SOL' : 'TOP UP & PLAY'}</Text>
             {checking('topup') ? (
               <Btn small title="CHECKING TOP UP" busy onPress={() => undefined} />
             ) : (

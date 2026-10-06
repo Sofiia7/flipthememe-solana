@@ -19,7 +19,7 @@ import {
 } from '../chain/phase';
 import { chainNowSec, chainToLocalMs } from '../chain/useChainClock';
 import { isFeedStale, type PoolFeed } from '../chain/usePoolPrice';
-import { peekTokenInfo } from '../chain/useTokenInfo';
+import { peekTokenInfo, useTokenInfo } from '../chain/useTokenInfo';
 import { faceFromBytes } from '../face/faceModel';
 import { deltaView, formatCountdown, formatSol } from '../lib/format';
 import { chatterOn, howItWorksSeen, useBoolStore } from '../lib/prefs';
@@ -133,10 +133,14 @@ export function ArenaScreen() {
     return p && !p.stale ? standingNow(m.position.account.side, st.strike, p.price) : null;
   };
 
+  // While a round of mine plays, the stage (token header, X lane, chart) follows it, even after the
+  // keeper moved the next rounds to another token: the strike line I bet on stays on screen.
+  const stagePool = focus?.round.account.pool ?? feed.pool;
+  const stageFeed: PoolFeed = stagePool !== feed.pool && myFeed.pool === stagePool ? myFeed : feed;
   // The chart follows my round, else the latest live round on this pool.
-  const chartRound = selectChartRound({ pool: feed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
+  const chartRound = selectChartRound({ pool: stageFeed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
   const chartStrike = chartRound ? strikeState(chartRound.account, nowSec) : null;
-  const priceStale = isFeedStale(feed, nowMs);
+  const priceStale = isFeedStale(stageFeed, nowMs);
   // The strike window: bright while the strike is measured, faint once the strike line is drawn.
   const strikeWindow =
     chartRound && chartStrike && chartStrike.kind !== 'none'
@@ -163,12 +167,22 @@ export function ArenaScreen() {
     else if (st.kind === 'fixing') clockSide = { kind: 'note', text: 'FIXING STRIKE', label: id };
   }
 
-  // Header and chart describe the same pool: the open round's, else the latest started one.
+  // Header and chart describe the same pool: my round's while it plays, else the open round's, else the latest started one.
   const panelRound = panel.kind === 'empty' ? null : panel.round;
-  const tokenRound = open ?? arena.rounds.find((r) => feed.pool !== null && r.account.pool === feed.pool) ?? panelRound ?? arena.rounds[0] ?? null;
+  const tokenRound =
+    (focus && focus.round.account.pool === stageFeed.pool ? focus.round : null) ??
+    (open && open.account.pool === stageFeed.pool ? open : null) ??
+    arena.rounds.find((r) => stageFeed.pool !== null && r.account.pool === stageFeed.pool) ??
+    open ??
+    panelRound ??
+    arena.rounds[0] ??
+    null;
   const tokenMint = tokenRound?.account.tokenMint ?? null;
   const tokenInfo = peekTokenInfo(tokenMint);
   const symbol = tokenInfo?.symbol ?? null;
+  // The open round's token, named in the NEXT bar and in a challenge when it differs from the stage.
+  const openInfo = useTokenInfo(open && open.account.tokenMint !== tokenMint ? open.account.tokenMint : null, open?.account.pool ?? null);
+  const openSymbol = open && open.account.tokenMint !== tokenMint ? (openInfo?.symbol ?? null) : symbol;
 
   // Betting preconditions.
   const minStake = open?.account.minStake ?? arena.config?.minStake ?? 10_000_000n;
@@ -224,9 +238,10 @@ export function ArenaScreen() {
     void betting.place(open.id, side, amount);
   };
 
+  // A challenge is always for the open round, whose token may differ from the stage's.
   const challenge = (roundId: bigint, side: number, position?: PositionView) => {
-    const token = symbol ? `$${symbol}` : 'a fresh meme coin';
-    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${roundId} (Solana devnet, test SOL). Take the other side: ${roundLink(roundId, { side: sideName(side), token: symbol })}`;
+    const token = openSymbol ? `$${openSymbol}` : 'a fresh meme coin';
+    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${roundId} (Solana devnet, test SOL). Take the other side: ${roundLink(roundId, { side: sideName(side), token: openSymbol })}`;
     setSharing(true);
     void shareCard(
       {
@@ -234,8 +249,8 @@ export function ArenaScreen() {
         face: position ? faceFromBytes(position.account.face) : app.face,
         side,
         roundId,
-        symbol,
-        imageUrl: tokenInfo?.imageUrl ?? null,
+        symbol: openSymbol,
+        imageUrl: (open && open.account.tokenMint !== tokenMint ? openInfo : tokenInfo)?.imageUrl ?? null,
         name: myName,
       },
       text,
@@ -292,8 +307,7 @@ export function ArenaScreen() {
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={nowMs} />
 
           <PriceChart
-            points={feed.points}
-            historyPool={feed.pool}
+            points={stageFeed.points}
             nowMs={nowMs}
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}
@@ -303,9 +317,11 @@ export function ArenaScreen() {
             exitWindow={
               chartRound ? [chainToLocalMs(chartRound.account.exitStart, offsetSec), chainToLocalMs(chartRound.account.exitEnd, offsetSec)] : null
             }
-            cutoffMs={open ? chainToLocalMs(open.account.cutoffAt, offsetSec) : null}
-            stale={priceStale && feed.points.length > 0}
-            emptyText={feed.pool ? (feed.error ? `Price source unreachable: ${feed.error}` : 'Reading the live price...') : 'Waiting for the first round'}
+            cutoffMs={open && open.account.pool === stageFeed.pool ? chainToLocalMs(open.account.cutoffAt, offsetSec) : null}
+            stale={priceStale && stageFeed.points.length > 0}
+            emptyText={
+              stageFeed.pool ? (stageFeed.error ? `Price source unreachable: ${stageFeed.error}` : 'Reading the live price...') : 'Waiting for the first round'
+            }
           />
 
           {arena.updatedAt === null ? (
@@ -347,7 +363,7 @@ export function ArenaScreen() {
             />
           ))}
 
-          <ResultsStrip finals={groups.finals.filter((r) => feed.pool !== null && r.account.pool === feed.pool)} mine={mine} />
+          <ResultsStrip finals={groups.finals.filter((r) => stageFeed.pool !== null && r.account.pool === stageFeed.pool)} mine={mine} />
 
           <Pressable onPress={() => tokenRound && void Linking.openURL(explorer.dexscreener(tokenRound.account.pool)).catch(() => undefined)}>
             <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
@@ -356,7 +372,9 @@ export function ArenaScreen() {
       </View>
 
       <View style={styles.dock}>
-        {panel.kind === 'mine' && open ? <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} /> : null}
+        {panel.kind === 'mine' && open ? (
+          <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} token={open.account.tokenMint !== tokenMint ? openSymbol : null} />
+        ) : null}
         {panel.kind === 'mine' && !open && groups.upcoming ? (
           <NextRoundBar roundId={groups.upcoming.id} secondsLeft={Number(groups.upcoming.account.opensAt) - nowSec} opens />
         ) : null}

@@ -1,8 +1,6 @@
 // Path math for the price chart, kept free of React Native so node:test covers it.
 
 export type XY = { x: number; y: number };
-/** A time series point: time and value in any units (ms and price for the chart). */
-export type TimeValue = { t: number; v: number };
 
 const pt = (p: XY) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
 
@@ -76,33 +74,4 @@ export function splitAtGaps<T>(items: readonly T[], timeOf: (item: T) => number,
   }
   if (current.length > 0) out.push(current);
   return out;
-}
-
-/**
- * The part of a series (oldest first, times strictly increasing) inside [t0, t1], the line cut
- * exactly at both bounds, so a coarse series still reaches the chart edge and stops where asked.
- */
-export function clipSeries(points: readonly TimeValue[], t0: number, t1: number): TimeValue[] {
-  const out: TimeValue[] = [];
-  if (!(t1 > t0)) return out;
-  const cut = (a: TimeValue, b: TimeValue, t: number): TimeValue => ({ t, v: a.v + ((t - a.t) / (b.t - a.t)) * (b.v - a.v) });
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    if (i > 0) {
-      const a = points[i - 1];
-      if (a.t < t0 && p.t > t0) out.push(cut(a, p, t0));
-      if (a.t < t1 && p.t > t1) {
-        out.push(cut(a, p, t1));
-        break;
-      }
-    }
-    if (p.t > t1) break;
-    if (p.t >= t0) out.push(p);
-  }
-  return out;
-}
-
-/** True when two positive values are within `factor` of each other (either way). */
-export function withinFactor(a: number, b: number, factor: number): boolean {
-  return a > 0 && b > 0 && Math.max(a / b, b / a) <= factor;
 }

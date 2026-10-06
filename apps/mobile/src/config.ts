@@ -40,9 +40,6 @@ export const RPC_COOL_DOWN = { baseMs: 2_000, maxMs: 30_000 } as const;
 /** Mainnet price points kept for the chart. */
 export const PRICE_HISTORY_MS = 10 * 60 * 1_000;
 
-/** Chart history (GeckoTerminal 1-minute candles, reference only): read again when older than this. */
-export const CHART_HISTORY_MAX_AGE_MS = 2 * 60 * 1_000;
-
 const sol = (hundredths: bigint) => (LAMPORTS_PER_SOL * hundredths) / 100n;
 
 export const BET_AMOUNTS: readonly bigint[] = [sol(1n), sol(2n), sol(5n), sol(10n)];

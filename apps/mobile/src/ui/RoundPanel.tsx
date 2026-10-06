@@ -259,13 +259,15 @@ export function ExtraRoundLine({
 }
 
 /** "NEXT #102 · entry closes 0:16", right above the bet buttons while my round is in flight. */
-export function NextRoundBar({ roundId, secondsLeft, opens }: { roundId: bigint; secondsLeft: number; opens: boolean }) {
+/** The round the bet buttons play, under my round in play; `token` names it when it is another coin than the stage's. */
+export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { roundId: bigint; secondsLeft: number; opens: boolean; token?: string | null }) {
   const urgent = !opens && secondsLeft <= 5;
   return (
     <View style={styles.next}>
       <Pulse color={urgent ? C.neonRed : C.neonYellow} size={6} />
       <Text style={styles.nextText}>
-        NEXT #{roundId.toString()} · {opens ? 'opens in' : 'entry closes'}{' '}
+        NEXT #{roundId.toString()}
+        {token ? <Text style={styles.nextToken}> ${token.toUpperCase()}</Text> : null} · {opens ? 'opens in' : 'entry closes'}{' '}
         <Text style={[styles.nextClock, urgent && { color: C.neonRed }]}>{formatCountdown(secondsLeft)}</Text>
       </Text>
     </View>
@@ -330,5 +332,6 @@ const styles = StyleSheet.create({
   extraState: { fontSize: 11, fontFamily: MONO, fontWeight: '900', flexShrink: 1, marginLeft: 'auto' },
   next: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 2 },
   nextText: { color: C.text, fontSize: 12, fontWeight: '800', fontFamily: MONO },
+  nextToken: { color: C.neonYellow, fontWeight: '900' },
   nextClock: { color: C.neonYellow, fontWeight: '900' },
 });
