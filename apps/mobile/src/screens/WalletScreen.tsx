@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { PROGRAM_ID } from '@flipthememe/client';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS, explorer } from '../config';
@@ -11,7 +11,16 @@ import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink, KV, Pill } from '../ui/common';
 import { isChecking, type GuardedAction } from '../wallet/pendingTx';
-import { revocableSigners, sessionRows, sessionStatusOf, withDeviceSession, type SessionRow } from '../wallet/sessionList';
+import { canRenewSession, minStakeOf } from '../wallet/playState';
+import {
+  revocableSigners,
+  sessionLimitedBelow,
+  sessionRows,
+  sessionStatusOf,
+  sessionUsageText,
+  withDeviceSession,
+  type SessionRow,
+} from '../wallet/sessionList';
 import { NETWORK_FEE } from '../wallet/topUpPlan';
 
 const STATUS_PILL: Record<SessionRow['status'], { text: string; color: string }> = {
@@ -31,23 +40,27 @@ export function WalletScreen() {
   const owner = wallet.owner;
   const busy = wallet.busy !== null;
   const [copied, setCopied] = useState(false);
+  // Everything about the device key, the sessions and test SOL lives behind one closed header.
+  const [advanced, setAdvanced] = useState(false);
   /** Signers the revoke in flight covers (its buttons spin). */
   const [revoking, setRevoking] = useState<readonly string[]>([]);
 
   const sessions = useSessions(rpc, owner);
   const result = wallet.result;
   const refreshSessions = sessions.refresh;
-  // A finished or settled action may have started or revoked sessions.
+  const scroll = useRef<ScrollView>(null);
+  // A finished or settled action may have started or revoked sessions, and its banner sits at the top.
   useEffect(() => {
-    if (result) refreshSessions();
+    if (!result) return;
+    refreshSessions();
+    scroll.current?.scrollTo({ y: 0, animated: true });
   }, [result, refreshSessions]);
 
-  const minStake = arena.config?.minStake ?? 10_000_000n;
+  const minStake = minStakeOf(arena.config?.minStake);
   // Money already in the game balance: this phone gets a session over it with one approval, no deposit.
   const myStatus = sessionStatusOf(my.session, nowSec, minStake);
-  const keyLow = (my.keyLamports ?? 0n) < SESSION_RULES.gasPerBet;
   const available = my.vault?.available ?? 0n;
-  const canRenew = myReady && available >= minStake && (myStatus !== 'active' || keyLow);
+  const canRenew = canRenewSession({ myReady, available, minStake, status: myStatus, keyLamports: my.keyLamports });
   const locked = my.vault?.locked ?? 0n;
   const checking = (action: GuardedAction, target?: string) => isChecking(wallet.pendingTx, action, target);
 
@@ -76,13 +89,17 @@ export function WalletScreen() {
   const canSweep = keyLamports !== null && keyLamports > NETWORK_FEE;
 
   return (
-    <ScrollView contentContainerStyle={styles.page}>
-      <View style={styles.head}>
-        <Text style={T.h1}>Wallet</Text>
-        <Pill text="DEVNET" color={C.gold} />
-      </View>
-      <Banner tone="info" text="Devnet test SOL only - nothing here is real money. Get test SOL with Airdrop or the faucet." />
+    <ScrollView ref={scroll} contentContainerStyle={styles.page}>
+      <Text style={T.h1}>Wallet</Text>
+      {/* What the last action did, right under the title: visible without scrolling. */}
+      {result && (result.action !== 'connect' || !result.ok) ? (
+        <View style={styles.result}>
+          <Banner tone={result.ok ? 'ok' : result.checking ? 'info' : 'error'} text={result.message} />
+          {result.signature ? <ExtLink label="View transaction on Explorer" url={explorer.tx(result.signature)} /> : null}
+        </View>
+      ) : null}
       {owner && my.error ? <Banner tone="warn" text={`Could not refresh: ${my.error}. Showing the last data.`} /> : null}
+      <Banner tone="info" text="Test SOL only - nothing here is real money." />
 
       <View style={T.panel}>
         <Text style={T.label}>CONNECTED WALLET</Text>
@@ -120,24 +137,14 @@ export function WalletScreen() {
             <Text style={T.label}>GAME BALANCE</Text>
             <KV k="Available" v={myReady ? sol(available) : '...'} tone="up" />
             <KV k="Locked in rounds" v={myReady ? sol(locked) : '...'} tone="gold" />
-            <Text style={T.dim}>
-              Winnings and refunds land here after each round. Each bet also holds about 0.0012 SOL of account rent from this balance; it
-              comes back a day after the round. Only available SOL can be withdrawn.
-            </Text>
+            <Text style={T.dim}>Winnings land here. Only available SOL can be withdrawn.</Text>
             {canRenew ? (
-              <>
-                <Btn
-                  title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
-                  busy={wallet.busy === 'renew' || checking('renew')}
-                  disabled={busy || !sessionKey}
-                  onPress={() => void wallet.renewSession(available)}
-                />
-                <Text style={T.dim}>
-                  {myStatus === 'none'
-                    ? 'This phone has no session yet (a new install gets a new device key). One approval, no deposit: bets come from your game balance.'
-                    : 'One approval, no deposit: a new 7-day session over your game balance.'}
-                </Text>
-              </>
+              <Btn
+                title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
+                busy={wallet.busy === 'renew' || checking('renew')}
+                disabled={busy || !sessionKey}
+                onPress={() => void wallet.renewSession(available)}
+              />
             ) : null}
             <Text style={styles.sub}>{canRenew ? 'OR ADD SOL' : 'TOP UP & PLAY'}</Text>
             {checking('topup') ? (
@@ -157,10 +164,6 @@ export function WalletScreen() {
                 ))}
               </View>
             )}
-            <Text style={T.dim}>
-              One approval: deposit, a 7-day session for this phone with a limit equal to the top up (max 0.1 SOL per bet), and{' '}
-              {formatSol(SESSION_RULES.gasTopUp)} SOL for the session key's fees when it is low.
-            </Text>
             <Btn
               kind="ghost"
               title={checking('withdraw') ? 'CHECKING WITHDRAW' : `WITHDRAW ALL AVAILABLE (${formatSol(available)} SOL)`}
@@ -170,78 +173,85 @@ export function WalletScreen() {
             />
           </View>
 
-          <View style={T.panel}>
-            <Text style={T.label}>PLAY SESSIONS</Text>
-            {shownRows.map((row) => (
-              <SessionLine
-                key={row.address}
-                row={row}
-                checking={isChecking(wallet.pendingTx, 'revoke', row.signer)}
-                spinning={wallet.busy === 'revoke' && revoking.includes(row.signer)}
-                disabled={busy || revokeChecking}
-                onRevoke={() => revoke([row.signer])}
-              />
-            ))}
-            {rows.length === 0 ? (
-              <Text style={T.subtle}>{sessions.list === null && !sessions.error ? 'Loading sessions...' : 'No sessions yet.'}</Text>
-            ) : null}
-            {rows.length > shownRows.length ? <Text style={T.dim}>+{rows.length - shownRows.length} older</Text> : null}
-            {sessions.error ? <Text style={styles.warn}>Session list: {sessions.error}</Text> : null}
-            {allSigners.length > 1 ? (
-              <Btn
-                kind="danger"
-                small
-                title={revokeChecking ? 'CHECKING' : `REVOKE ALL (${allSigners.length})`}
-                busy={revokeChecking || (wallet.busy === 'revoke' && revoking.length > 1)}
-                disabled={busy}
-                onPress={() => revoke(allSigners)}
-              />
-            ) : null}
-            {rows.length > 0 && !rows.some((r) => r.mine) ? <Text style={T.dim}>No session on this phone yet.</Text> : null}
-            <Text style={T.dim}>A session lets one phone bet from your game balance. It can never withdraw.</Text>
-          </View>
+          <Pressable
+            onPress={() => setAdvanced((open) => !open)}
+            style={styles.advancedHead}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: advanced }}
+            accessibilityLabel="Advanced"
+          >
+            <Text style={T.label}>ADVANCED</Text>
+            <View style={[styles.chevron, advanced && styles.chevronOpen]} />
+          </Pressable>
 
-          <View style={T.panel}>
-            <Text style={T.label}>DEVICE KEY (THIS PHONE)</Text>
-            <KV k="SOL on the key" v={keyLamports !== null ? sol(keyLamports, { maxDecimals: 5 }) : '...'} />
-            <Text style={T.dim}>Pays the network fee of each bet (0.000005 SOL). Not part of the game balance.</Text>
-            <Btn
-              kind="ghost"
-              small
-              title={sweepChecking ? 'CHECKING' : 'RETURN TO WALLET'}
-              busy={wallet.busy === 'sweep' || sweepChecking}
-              disabled={busy || betBusy || !canSweep || !sessionKey}
-              onPress={() => void wallet.returnKeyFunds()}
-            />
-            {betBusy && canSweep ? <Text style={T.dim}>Waiting for your bet to land.</Text> : null}
-            {sessionKey ? (
-              <View style={styles.row}>
-                <Text style={T.dim}>Key {shortAddress(sessionKey.address)}</Text>
-                <ExtLink label="Key on Explorer" url={explorer.address(sessionKey.address)} />
+          {advanced ? (
+            <>
+              <View style={T.panel}>
+                <Text style={T.label}>PLAY SESSIONS</Text>
+                {shownRows.map((row) => (
+                  <SessionLine
+                    key={row.address}
+                    row={row}
+                    checking={isChecking(wallet.pendingTx, 'revoke', row.signer)}
+                    spinning={wallet.busy === 'revoke' && revoking.includes(row.signer)}
+                    disabled={busy || revokeChecking}
+                    onRevoke={() => revoke([row.signer])}
+                  />
+                ))}
+                {rows.length === 0 ? (
+                  <Text style={T.subtle}>{sessions.list === null && !sessions.error ? 'Loading sessions...' : 'No sessions yet.'}</Text>
+                ) : null}
+                {rows.length > shownRows.length ? <Text style={T.dim}>+{rows.length - shownRows.length} older</Text> : null}
+                {sessions.error ? <Text style={styles.warn}>Session list: {sessions.error}</Text> : null}
+                {allSigners.length > 1 ? (
+                  <Btn
+                    kind="danger"
+                    small
+                    title={revokeChecking ? 'CHECKING' : `REVOKE ALL (${allSigners.length})`}
+                    busy={revokeChecking || (wallet.busy === 'revoke' && revoking.length > 1)}
+                    disabled={busy}
+                    onPress={() => revoke(allSigners)}
+                  />
+                ) : null}
+                {rows.length > 0 && !rows.some((r) => r.mine) ? <Text style={T.dim}>No session on this phone yet.</Text> : null}
+                <Text style={T.dim}>A session lets one phone place one-tap bets from your game balance. It can never withdraw.</Text>
               </View>
-            ) : (
-              <Text style={[T.dim, sessionKeyError ? { color: C.danger } : null]}>
-                {sessionKeyError ? `Session key unavailable: ${sessionKeyError}` : 'Loading the session key...'}
-              </Text>
-            )}
-          </View>
 
-          <View style={T.panel}>
-            <Text style={T.label}>DEVNET TEST SOL</Text>
-            <Btn kind="ghost" title="AIRDROP 1 DEVNET SOL" busy={wallet.busy === 'airdrop'} disabled={busy} onPress={() => void wallet.airdrop()} />
-            <Text style={T.dim}>The public devnet faucet is rate limited. If the airdrop fails, use the web faucet with your wallet address.</Text>
-            <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
-          </View>
+              <View style={T.panel}>
+                <Text style={T.label}>DEVICE KEY (THIS PHONE)</Text>
+                <KV k="SOL on the key" v={keyLamports !== null ? sol(keyLamports, { maxDecimals: 5 }) : '...'} />
+                <Text style={T.dim}>Pays the network fee of each bet (0.000005 SOL). Not part of the game balance.</Text>
+                <Btn
+                  kind="ghost"
+                  small
+                  title={sweepChecking ? 'CHECKING' : 'RETURN TO WALLET'}
+                  busy={wallet.busy === 'sweep' || sweepChecking}
+                  disabled={busy || betBusy || !canSweep || !sessionKey}
+                  onPress={() => void wallet.returnKeyFunds()}
+                />
+                {betBusy && canSweep ? <Text style={T.dim}>Waiting for your bet to land.</Text> : null}
+                {sessionKey ? (
+                  <View style={styles.row}>
+                    <Text style={T.dim}>Key {shortAddress(sessionKey.address)}</Text>
+                    <ExtLink label="Key on Explorer" url={explorer.address(sessionKey.address)} />
+                  </View>
+                ) : (
+                  <Text style={[T.dim, sessionKeyError ? { color: C.danger } : null]}>
+                    {sessionKeyError ? `Device key unavailable: ${sessionKeyError}` : 'Loading the device key...'}
+                  </Text>
+                )}
+              </View>
+
+              <View style={T.panel}>
+                <Text style={T.label}>TEST SOL</Text>
+                <Btn kind="ghost" title="AIRDROP 1 TEST SOL" busy={wallet.busy === 'airdrop'} disabled={busy} onPress={() => void wallet.airdrop()} />
+                <Text style={T.dim}>The public devnet faucet is rate limited. If the airdrop fails, use the web faucet with your wallet address.</Text>
+                <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
+              </View>
+            </>
+          ) : null}
         </>
       ) : null}
-
-      {result && result.action !== 'connect' ? (
-        <View style={styles.result}>
-          <Banner tone={result.ok ? 'ok' : result.checking ? 'info' : 'error'} text={result.message} />
-          {result.signature ? <ExtLink label="View transaction on Explorer" url={explorer.tx(result.signature)} /> : null}
-        </View>
-      ) : null}
-      {result && result.action === 'connect' && !result.ok ? <Banner tone="error" text={result.message} /> : null}
 
       <View style={styles.row}>
         <ExtLink label="Program on Explorer" url={explorer.address(PROGRAM_ID)} />
@@ -250,7 +260,7 @@ export function WalletScreen() {
   );
 }
 
-/** One session: which device, how long, how much; REVOKE while it can still bet. */
+/** One session: which device, how long, what it can do; REVOKE while it can still bet. */
 function SessionLine({
   row,
   checking,
@@ -277,12 +287,10 @@ function SessionLine({
         <Pill text={pill.text} color={pill.color} />
       </View>
       <Text style={styles.meta}>
-        {when} · max {formatSol(row.maxPerBet)} per bet
+        {when} · one-tap bets up to {formatSol(row.maxPerBet)} each
       </Text>
       <View style={styles.between}>
-        <Text style={styles.meta}>
-          spent {formatSol(row.spent)} / {formatSol(row.budget)} SOL
-        </Text>
+        <Text style={styles.meta}>{sessionUsageText(row, sessionLimitedBelow(SESSION_RULES), formatSol)}</Text>
         {row.revocable ? (
           <Btn kind="danger" small title={checking ? 'CHECKING' : 'REVOKE'} busy={checking || spinning} disabled={disabled} onPress={onRevoke} />
         ) : null}
@@ -293,13 +301,25 @@ function SessionLine({
 
 const styles = StyleSheet.create({
   page: { padding: 16, gap: 12, paddingBottom: 28 },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   address: { color: C.white, fontFamily: 'monospace', fontSize: 14, fontWeight: '800' },
   row: { flexDirection: 'row', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
   between: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   flex: { flex: 1 },
   sub: { color: C.label, fontSize: 10, fontWeight: '900', marginTop: 6 },
   result: { gap: 6 },
+  advancedHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.panel,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+  },
+  // A chevron drawn with two borders: it points down when closed and up when open.
+  chevron: { width: 9, height: 9, borderRightWidth: 2, borderBottomWidth: 2, borderColor: C.accentText, transform: [{ rotate: '45deg' }], marginBottom: 3 },
+  chevronOpen: { transform: [{ rotate: '-135deg' }], marginBottom: 0, marginTop: 3 },
   session: { borderWidth: 1, borderColor: C.borderSoft, backgroundColor: C.panelDeep, padding: 8, gap: 3 },
   sessionMine: { borderColor: C.accent },
   device: { color: C.white, fontSize: 12, fontWeight: '900', fontFamily: MONO, flexShrink: 1 },

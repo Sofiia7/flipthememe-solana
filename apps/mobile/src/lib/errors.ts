@@ -116,12 +116,12 @@ export function isWalletDecline(error: unknown): boolean {
 
 const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   RoundNotOpen: 'Entry just closed - try the next round.',
-  SessionCapExceeded: 'Session limit reached - tap Top up & play to renew it.',
+  SessionCapExceeded: 'Your one-tap limit is used up - tap Top up & play to renew it.',
   InsufficientAvailable: 'Not enough available balance - top up first.',
   BankTooLargeForPool: 'The pool is too shallow for a bigger matched bank - try a smaller amount or the other side.',
   SessionInvalid: 'Your play session expired or was revoked - renew it with Top up & play.',
   InvalidSession: 'The wallet rejected the session settings - try again.',
-  InvalidAmount: 'Amount out of range: 0.01 - 0.1 SOL per bet.',
+  InvalidAmount: "That amount is outside this round's limits.",
   Paused: 'Betting is paused by the operator. Settlement and withdrawals keep working.',
   AlreadyClaimed: 'Already claimed - the payout is in your balance.',
   NotFinal: 'The round is not final yet.',
@@ -130,7 +130,7 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   NotDue: 'Too early for this step - wait a few seconds.',
 };
 
-/** Raw MWA error fields, shown next to the human sentence so wallet problems can be diagnosed on a phone. */
+/** Raw MWA error fields for the console (adb logcat), where wallet problems are diagnosed. Never part of a player's message. */
 export function walletDetail(error: unknown): string {
   const step = asStepError(error);
   if (step) return ` [${step.step} ${String(step.walletCode ?? '')}: ${step.message.slice(0, 160)}]`;
@@ -142,12 +142,10 @@ export function walletDetail(error: unknown): string {
 
 /** One human sentence for a failed action. */
 export function humanError(error: unknown, action: TxAction): string {
-  console.warn('[ftm] action failed', action, error);
+  console.warn('[ftm] action failed', action, walletDetail(error), error);
   const step = asStepError(error);
   if (isWalletDecline(error)) {
-    const what =
-      step && step.step !== 'sign' ? 'The wallet did not connect. Check that it is set to Devnet and try again.' : 'Request declined in the wallet.';
-    return `${what}${walletDetail(error)}`;
+    return step && step.step !== 'sign' ? 'The wallet did not connect. Check that it is set to Devnet and try again.' : 'Request declined in the wallet.';
   }
   if (step && typeof step.walletCode === 'string' && /timed out/i.test(step.walletCode)) return 'The wallet did not answer in time - try again.';
   const e = error as { name?: string; code?: unknown } | null;
@@ -170,9 +168,9 @@ export function humanError(error: unknown, action: TxAction): string {
     // "InsufficientFundsForFee/Rent" is how a signature status reports it.
     /no record of a prior credit|insufficient lamports|insufficient ?funds/i.test(text)
   ) {
-    if (action === 'bet' || action === 'claim') return 'The session key is out of devnet SOL for fees - Top up & play refills it.';
+    if (action === 'bet' || action === 'claim') return 'The device key is out of devnet SOL for fees - Top up & play refills it.';
     if (action === 'sweep') return 'The device key balance just changed - try again.';
-    return 'Not enough devnet SOL in the wallet - use Airdrop or faucet.solana.com.';
+    return 'Not enough devnet SOL in the wallet - use Airdrop or the faucet link.';
   }
   if (hasCode(error, SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND) || /blockhash expired/i.test(text)) {
     return 'The network was too slow and the transaction expired - nothing was taken. Try again.';
@@ -183,12 +181,12 @@ export function humanError(error: unknown, action: TxAction): string {
   const status = httpStatus(error);
   if (status === 429) {
     return action === 'airdrop'
-      ? 'The devnet faucet is rate limited. Use https://faucet.solana.com to get test SOL.'
+      ? 'The devnet faucet is rate limited. Use the faucet link to get test SOL.'
       : 'Devnet RPC is rate limiting - try again in a few seconds.';
   }
   if (/abort/i.test(text)) return 'Devnet did not answer in time - check your connection.';
   if (/network request failed|failed to fetch/i.test(text)) return 'No internet connection.';
-  if (action === 'airdrop') return 'Airdrop failed. Use https://faucet.solana.com to get test SOL.';
+  if (action === 'airdrop') return 'Airdrop failed. Use the faucet link to get test SOL.';
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 160 ? `${message.slice(0, 160)}...` : message || 'Something went wrong.';
 }

@@ -36,6 +36,7 @@ export type SessionRow = {
   /** Seconds until it expires (0 once expired). */
   secondsLeft: number;
   maxPerBet: bigint;
+  /** The session cap: a turnover allowance since sessionCapFor, the top up itself on older sessions. */
   budget: bigint;
   spent: bigint;
   /** Neither revoked nor expired: the device can still bet with it, so the owner can revoke it. */
@@ -72,6 +73,25 @@ export function sessionRows(
     };
   });
   return rows.sort((a, b) => Number(b.mine) - Number(a.mine) || Number(b.revocable) - Number(a.revocable) || b.expiry - a.expiry);
+}
+
+/**
+ * The least allowance a session carries since it became turnover (maxPerBet x capTurnoverFactor, see
+ * sessionCapFor). Sessions made before that have the top up itself as their cap, which is below this:
+ * they show what was staked of their limit.
+ */
+export function sessionLimitedBelow(rules: { maxPerBet: bigint; capTurnoverFactor: bigint }): bigint {
+  return rules.maxPerBet * rules.capTurnoverFactor;
+}
+
+/**
+ * What a row says about its use. `spent` is the total staked through the session (the program never
+ * subtracts), so a new session reads "staked 0.06 SOL so far" and an old small-cap one "staked 0.04 of
+ * its 0.10 SOL limit".
+ */
+export function sessionUsageText(row: Pick<SessionRow, 'spent' | 'budget'>, limitedBelow: bigint, format: (lamports: bigint) => string): string {
+  if (row.budget < limitedBelow) return `staked ${format(row.spent)} of its ${format(row.budget)} SOL limit`;
+  return row.spent > 0n ? `staked ${format(row.spent)} SOL so far` : 'no bets yet';
 }
 
 /** Signers of the sessions REVOKE ALL covers (one transaction's worth). */

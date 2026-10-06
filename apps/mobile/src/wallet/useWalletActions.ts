@@ -4,9 +4,6 @@ import { getSignatureFromTransaction, lamports, type Address, type Instruction, 
 import { transact, useMobileWallet, type KitMobileWallet } from '@wallet-ui/react-native-kit';
 import {
   compileForWallet,
-  decodeVault,
-  deposit,
-  openVault,
   revokeSession,
   sendAndConfirm,
   signLocally,
@@ -24,7 +21,9 @@ import { sol } from '../lib/format';
 import type { SessionKey } from '../session/sessionKey';
 import { createPendingTxStore, type GuardedAction, type PendingTx } from './pendingTx';
 import { MAX_REVOKES_PER_TX } from './sessionList';
-import { NETWORK_FEE } from './topUpPlan';
+import { keyReturnAmount, shouldReturnKey, withdrawMessage, type KeyReturn } from './keyReturn';
+import { prepareTopUp } from './topUpFlow';
+import { sessionCapFor } from './topUpPlan';
 import { WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
 
 export type WalletBusy = Exclude<TxAction, 'bet' | 'claim'>;
@@ -41,9 +40,9 @@ export type WalletResult = {
 
 type Outcome = { message: string; signature?: string; checking?: boolean };
 type Signed = { transaction: Transaction; lastValidBlockHeight: bigint };
+/** What the one wallet session of connectAndPlay hands back: a settled earlier top up, or the signed transaction. */
+type ConnectStep = { kind: 'settled'; outcome: Outcome } | { kind: 'signed'; payer: Address; signed: Signed };
 
-/** Lamports a Top up transaction needs in the wallet beyond the deposit (rent, fees, margin). */
-const TOP_UP_OVERHEAD = 10_000_000n;
 /** How often a transaction of unknown outcome is looked up again. */
 const CHECK_EVERY_MS = 3_000;
 const CHECKING_TEXT = 'Sent. Checking devnet - no need to tap again.';
@@ -63,8 +62,10 @@ export function useWalletActions(input: {
   sessionKey: SessionKey | null;
   chainNowSec: () => number;
   onChanged: () => void;
+  /** A bet of this phone is signing, sending or unconfirmed: the device key is still needed (read when a withdraw ends). */
+  betInFlight: () => boolean;
 }) {
-  const { rpc, sessionKey, chainNowSec, onChanged } = input;
+  const { rpc, sessionKey, chainNowSec, onChanged, betInFlight } = input;
   const keyAddress = sessionKey?.address ?? null;
   const mwa = useMobileWallet();
   const owner = mwa.account?.address ?? null;
@@ -263,66 +264,85 @@ export function useWalletActions(input: {
   }, [mwa, onChanged]);
 
   /**
-   * One wallet approval: open the vault if needed, deposit, grant the session key a 7-day budget
-   * equal to the deposit, and send the key a little SOL for network fees when it runs low.
+   * What a top up reads once the wallet's address is known: its vault, its balance and the device
+   * key's. prepareTopUp (topUpFlow.ts) turns that into the transaction and refuses a wallet with too
+   * little devnet SOL here, before the wallet is asked to sign anything.
+   */
+  const prepareFor = useCallback(
+    async (payer: Address, amount: bigint) => {
+      if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
+      const vaultAddr = await vaultAddress(payer);
+      const [vaultRaw, walletRaw, keyRaw] = await fetchAccounts(rpc, [vaultAddr, payer, keyAddress]);
+      return prepareTopUp({
+        owner: payer,
+        deviceKey: keyAddress,
+        deposit: amount,
+        nowSec: chainNowSec(),
+        rules: SESSION_RULES,
+        reads: { vaultData: vaultRaw?.data ?? null, walletLamports: walletRaw?.lamports ?? 0n, keyLamports: keyRaw?.lamports ?? 0n },
+      });
+    },
+    [rpc, keyAddress, chainNowSec],
+  );
+  const topUpDone = (amount: bigint) => `Topped up ${sol(amount)}. One-tap bets are on for 7 days.`;
+
+  /**
+   * One wallet approval: open the vault if needed, deposit, grant the device key a 7-day session
+   * (an allowance of turnover, see sessionCapFor), and send the key a little SOL for network fees when
+   * it runs low.
    */
   const topUpAndPlay = useCallback(
     (amount: bigint) =>
       run('topup', async () => {
         const payer = owner;
         if (!payer) throw new Error('Connect a wallet first.');
-        if (!keyAddress) throw new Error('The session key is still loading - try again in a second.');
+        if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
         const earlier = await settleEarlier(payer, 'topup');
         if (earlier) return earlier;
-        const vaultAddr = await vaultAddress(payer);
-        const [vaultRaw, walletRaw, keyRaw] = await fetchAccounts(rpc, [vaultAddr, payer, keyAddress]);
-        const needsKeyGas = (keyRaw?.lamports ?? 0n) < SESSION_RULES.gasMin;
-        const need = amount + (needsKeyGas ? SESSION_RULES.gasTopUp : 0n) + TOP_UP_OVERHEAD;
-        const walletLamports = walletRaw?.lamports ?? 0n;
-        if (walletLamports < need) {
-          throw new Error(
-            `The wallet has ${sol(walletLamports)} on devnet; this top up needs about ${sol(need)}. Use Airdrop 1 devnet SOL first.`,
-          );
-        }
-        let vaultExists = false;
-        if (vaultRaw) {
-          try {
-            decodeVault(vaultRaw.data);
-            vaultExists = true;
-          } catch {
-            vaultExists = false;
-          }
-        }
-        const ixs: Instruction[] = [];
-        if (!vaultExists) ixs.push(await openVault({ owner: payer }));
-        ixs.push(await deposit({ owner: payer, amount }));
-        ixs.push(
-          await startSession({
-            owner: payer,
-            sessionSigner: keyAddress,
-            expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
-            maxPerBet: SESSION_RULES.maxPerBet,
-            sessionCap: amount,
-          }),
-        );
-        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
-        const signed = await walletSign(payer, ixs);
-        return submitGuarded('topup', payer, signed, `Topped up ${sol(amount)}. Bets are one tap for 7 days, up to ${sol(amount)} in total.`);
+        const prepared = await prepareFor(payer, amount);
+        const signed = await walletSign(payer, prepared.instructions);
+        return submitGuarded('topup', payer, signed, topUpDone(amount));
       }),
-    [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
+    [run, owner, keyAddress, settleEarlier, prepareFor, walletSign, submitGuarded],
   );
 
   /**
-   * Fast bets again without a deposit: a new 7-day session whose budget is the game balance the
-   * player already has (shown on the button), plus a little SOL for the key's network fees when it runs low.
+   * The same top up for a visitor, in ONE wallet session: the wallet authorizes, the app reads the
+   * accounts of the wallet it just learned (the address only exists after authorize), checks that it
+   * holds enough devnet SOL, and the wallet signs the transaction in that same session. The signature
+   * is stored before the transaction is sent, as for every money action (submitGuarded).
+   */
+  const connectAndPlay = useCallback(
+    (amount: bigint) =>
+      run('topup', async () => {
+        if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
+        const step = await withWallet<KitMobileWallet, ConnectStep>(walletCtx, async (wallet, account) => {
+          const payer = account.address;
+          // A top up of this wallet sent earlier with no answer yet: settle it, sign nothing new.
+          const earlier = await settleEarlier(payer, 'topup');
+          if (earlier) return { kind: 'settled', outcome: earlier };
+          const prepared = await prepareFor(payer, amount);
+          const compiled = await compileForWallet(rpc, payer, prepared.instructions);
+          const [transaction] = await wallet.signTransactions({ transactions: [compiled.transaction] });
+          return { kind: 'signed', payer, signed: { transaction, lastValidBlockHeight: compiled.lastValidBlockHeight } };
+        });
+        if (step.kind === 'settled') return step.outcome;
+        return submitGuarded('topup', step.payer, step.signed, topUpDone(amount));
+      }),
+    [run, keyAddress, walletCtx, rpc, settleEarlier, prepareFor, submitGuarded],
+  );
+
+  /**
+   * One-tap bets again without a deposit: a new 7-day session over the game balance the player already
+   * has (shown on the button), plus a little SOL for the key's network fees when it runs low.
    */
   const renewSession = useCallback(
-    (budget: bigint) =>
+    (available: bigint) =>
       run('renew', async () => {
         const payer = owner;
         if (!payer) throw new Error('Connect a wallet first.');
-        if (!keyAddress) throw new Error('The session key is still loading - try again in a second.');
-        if (budget <= 0n) throw new Error('Nothing in the game balance to play with - top up first.');
+        if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
+        if (available <= 0n) throw new Error('Nothing in the game balance to play with - top up first.');
         const earlier = await settleEarlier(payer, 'renew');
         if (earlier) return earlier;
         const [keyRaw] = await fetchAccounts(rpc, [keyAddress]);
@@ -333,14 +353,54 @@ export function useWalletActions(input: {
             sessionSigner: keyAddress,
             expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
             maxPerBet: SESSION_RULES.maxPerBet,
-            sessionCap: budget,
+            sessionCap: sessionCapFor(available, SESSION_RULES),
           }),
         ];
         if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
         const signed = await walletSign(payer, ixs);
-        return submitGuarded('renew', payer, signed, `Fast bets are on for 7 days, up to ${sol(budget)} in total.`);
+        return submitGuarded('renew', payer, signed, `One-tap bets are on for 7 days, up to ${sol(SESSION_RULES.maxPerBet)} per bet.`);
       }),
     [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
+  );
+
+  /**
+   * The SOL on this phone's device key (bet fees) back to `forOwner`. The key signs and pays the fee
+   * itself, so no wallet popup; it is left empty (the next top up refills it).
+   */
+  const sweepKey = useCallback(
+    async (forOwner: Address, key: SessionKey): Promise<{ outcome: Outcome; amount: bigint }> => {
+      const earlier = await settleEarlier(forOwner, 'sweep');
+      if (earlier) return { outcome: earlier, amount: 0n };
+      const { value } = await rpc.getBalance(key.address, { commitment: 'confirmed' }).send();
+      const amount = keyReturnAmount(BigInt(value));
+      if (amount <= 0n) throw new Error('Nothing on the device key to return.');
+      const signed = await signLocally(rpc, key.signer, [transferSol({ from: key.signer, to: forOwner, lamports: amount })]);
+      const outcome = await submitGuarded('sweep', forOwner, signed, `Returned ${sol(amount, { maxDecimals: 5 })} to your wallet.`);
+      return { outcome, amount };
+    },
+    [rpc, settleEarlier, submitGuarded],
+  );
+
+  /**
+   * The second step of WITHDRAW ALL: the device key's SOL follows the game balance home. Best effort,
+   * signed by the device key, only when the key holds more than a fee and no bet of this phone is in
+   * flight. It never throws: a failure here must not turn a successful withdraw into an error.
+   */
+  const returnKeyAfterWithdraw = useCallback(
+    async (forOwner: Address): Promise<KeyReturn> => {
+      try {
+        if (!sessionKey) return { kind: 'empty' };
+        if (betInFlight()) return { kind: 'busy' };
+        const { value } = await rpc.getBalance(sessionKey.address, { commitment: 'confirmed' }).send();
+        if (!shouldReturnKey({ keyLamports: BigInt(value), betInFlight: false })) return { kind: 'empty' };
+        const { outcome, amount } = await sweepKey(forOwner, sessionKey);
+        return outcome.checking ? { kind: 'checking' } : { kind: 'returned', amount };
+      } catch (error) {
+        console.warn('[ftm] returning the device key funds after a withdraw failed', error);
+        return { kind: 'failed' };
+      }
+    },
+    [sessionKey, betInFlight, rpc, sweepKey],
   );
 
   const withdrawAll = useCallback(
@@ -351,9 +411,13 @@ export function useWalletActions(input: {
         if (earlier) return earlier;
         if (available <= 0n) throw new Error('Nothing available to withdraw.');
         const signed = await walletSign(owner, [await withdraw({ owner, amount: available })]);
-        return submitGuarded('withdraw', owner, signed, `Withdrew ${sol(available)} to your wallet.`);
+        const done = `Withdrew ${sol(available)} to your wallet.`;
+        const outcome = await submitGuarded('withdraw', owner, signed, done);
+        // Sent with no answer yet: nothing more is sent until the chain says.
+        if (outcome.checking) return outcome;
+        return { ...outcome, message: withdrawMessage(done, await returnKeyAfterWithdraw(owner)) };
       }),
-    [run, owner, settleEarlier, walletSign, submitGuarded],
+    [run, owner, settleEarlier, walletSign, submitGuarded, returnKeyAfterWithdraw],
   );
 
   /** Revokes the sessions of these device keys in one wallet approval (any device, this phone included). */
@@ -375,23 +439,14 @@ export function useWalletActions(input: {
     [run, owner, keyAddress, settleEarlier, walletSign, submitGuarded],
   );
 
-  /**
-   * The SOL on this phone's device key (bet fees, position rent) back to the wallet. The key signs
-   * and pays the fee itself, so no wallet popup; it is left empty (the next top up refills it).
-   */
+  /** RETURN TO WALLET (Wallet tab, ADVANCED): the device key's SOL back to the wallet, no wallet popup. */
   const returnKeyFunds = useCallback(
     () =>
       run('sweep', async () => {
         if (!owner || !sessionKey) throw new Error('Connect a wallet first.');
-        const earlier = await settleEarlier(owner, 'sweep');
-        if (earlier) return earlier;
-        const { value } = await rpc.getBalance(sessionKey.address, { commitment: 'confirmed' }).send();
-        const amount = BigInt(value) - NETWORK_FEE;
-        if (amount <= 0n) throw new Error('Nothing on the device key to return.');
-        const signed = await signLocally(rpc, sessionKey.signer, [transferSol({ from: sessionKey.signer, to: owner, lamports: amount })]);
-        return submitGuarded('sweep', owner, signed, `Returned ${sol(amount, { maxDecimals: 5 })} to your wallet.`);
+        return (await sweepKey(owner, sessionKey)).outcome;
       }),
-    [run, owner, sessionKey, rpc, settleEarlier, submitGuarded],
+    [run, owner, sessionKey, sweepKey],
   );
 
   const airdrop = useCallback(
@@ -413,7 +468,7 @@ export function useWalletActions(input: {
     [run, owner, rpc],
   );
 
-  /** Claim through the wallet (used when the session key cannot pay the fee). */
+  /** Claim through the wallet (used when the device key cannot pay the fee). */
   const signWithWallet = signAndSubmit;
 
   return {
@@ -426,6 +481,7 @@ export function useWalletActions(input: {
     connect,
     disconnect,
     topUpAndPlay,
+    connectAndPlay,
     renewSession,
     withdrawAll,
     revokeSessions,

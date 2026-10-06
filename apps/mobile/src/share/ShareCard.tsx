@@ -1,6 +1,6 @@
 // Picture shares: a neon card is rendered off-screen, captured with react-native-view-shot
-// and handed to the system share sheet by expo-sharing. Anything missing or failing falls back
-// to a text share that carries the flipthememe://round/<id> deep link.
+// and handed to the system share sheet (react-native-share, else expo-sharing). Anything missing or
+// failing falls back to a text share that carries the round link.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Image, Share, StyleSheet, Text, View } from 'react-native';
 import { Side } from '@flipthememe/client';
@@ -55,7 +55,6 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
       <View style={[styles.frame, { borderColor: frameColor }]} />
       <View style={styles.top}>
         <PixelText text="$FLIPTHEMEME" size={2} color={C.white} shadow={C.accent} />
-        <Text style={styles.net}>DEVNET</Text>
       </View>
       <View style={styles.faceBox}>
         <View style={[styles.faceRing, { borderColor: frameColor }]}>
@@ -85,7 +84,9 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
             <Text style={styles.small}>OR</Text>
             <Text style={[styles.side, { color: C.neonRed }]}>DOWN ▼</Text>
           </View>
-          <Text style={styles.small}>60 SECONDS · FRESH SOLANA MEMECOINS</Text>
+          <Text style={styles.small} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            A 1-MINUTE MOVE · RESULT IN ~2 MIN
+          </Text>
         </View>
       ) : (
         <View style={styles.center}>
@@ -220,8 +221,7 @@ const styles = StyleSheet.create({
   offscreen: { position: 'absolute', left: -10_000, top: 0, width: CARD_W, height: CARD_H },
   card: { width: CARD_W, height: CARD_H, padding: 18, justifyContent: 'space-between' },
   frame: { position: 'absolute', top: 8, left: 8, right: 8, bottom: 8, borderWidth: 3 },
-  top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4, paddingTop: 4 },
-  net: { color: C.neonYellow, fontSize: 11, fontWeight: '900', fontFamily: MONO, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 5 },
+  top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, paddingTop: 4 },
   faceBox: { alignItems: 'center', gap: 6 },
   nick: { color: C.accentText, fontSize: 14, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
   faceRing: { borderWidth: 3, padding: 3, backgroundColor: '#1b1233' },

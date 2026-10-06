@@ -121,7 +121,7 @@ export function SideColumn({
 }
 
 const STAGE: Record<InFlightStage, { text: string; color: string }> = {
-  fixing: { text: 'FIXING STRIKE', color: C.neonYellow },
+  fixing: { text: 'LOCKING START', color: C.neonYellow },
   live: { text: 'LIVE', color: C.neonGreen },
   settling: { text: 'SETTLING', color: C.neonPurple },
 };
@@ -276,8 +276,7 @@ export function ExtraRoundLine({
   );
 }
 
-/** "NEXT #102 · entry closes 0:16", right above the bet buttons while my round is in flight. */
-/** The round the bet buttons play, under my round in play; `token` names it when it is another coin than the stage's. */
+/** "NEXT #102 · entry closes 0:16": the round the bet buttons play, right above them while my round is in flight; `token` names it when it is another coin than the stage's. */
 export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { roundId: bigint; secondsLeft: number; opens: boolean; token?: string | null }) {
   const urgent = !opens && secondsLeft <= 5;
   return (

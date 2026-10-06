@@ -3,7 +3,7 @@ import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Address } from '@solana/kit';
 import { RoundStatus, Side } from '@flipthememe/client';
-import { positionResult, roundResultLabel, type PositionResult, type ResultLabel } from '../chain/phase';
+import { positionResult, refundTitle, roundResultLabel, type PositionResult, type ResultLabel } from '../chain/phase';
 import type { RoundView } from '../chain/fetch';
 import { devnetRpc, type SolanaRpc } from '../chain/rpc';
 import { checkSignature, settledError } from '../chain/txStatus';
@@ -127,7 +127,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshRef = useRef<() => void>(() => undefined);
   const refreshAll = useCallback(() => refreshRef.current(), []);
 
-  const wallet = useWalletActions({ rpc, sessionKey, chainNowSec: chainNow, onChanged: refreshAll });
+  // A bet of this phone in flight still needs the device key: the wallet actions read this when a withdraw ends.
+  const betInFlightRef = useRef(false);
+  const betInFlight = useCallback(() => betInFlightRef.current, []);
+  const wallet = useWalletActions({ rpc, sessionKey, chainNowSec: chainNow, onChanged: refreshAll, betInFlight });
   const owner = wallet.owner;
 
   const myRaw = useMyAccount(rpc, owner, sessionKey?.address ?? null);
@@ -208,6 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // While no send is running, the pending bet's signature is looked up until the chain answers:
   // confirmed (placed), refused (the reason is shown) or expired (nothing was taken).
   const betSending = betting.bet.phase === 'signing' || betting.bet.phase === 'sending' || betting.bet.phase === 'confirming';
+  betInFlightRef.current = pending !== null || betSending || betting.claiming !== null;
   const pendingLanded = pending !== null && landed?.signature === pending.signature;
   useEffect(() => {
     if (!pending || betSending || pendingLanded) return undefined;
@@ -430,10 +434,10 @@ function resultToast(
 ): Toast {
   const a = round.account;
   const label = roundResultLabel(a);
-  const r = positionResult({ side: side as Side, stake, claimed, payout }, a, nowSec);
+  const r = positionResult({ side: side as Side, stake, claimed, payout, isHouse: false }, a, nowSec);
   const amount = r.payout ?? 0n;
   const symbol = peekTokenInfo(a.tokenMint)?.symbol;
-  const token = symbol ? `$${symbol}` : 'a fresh meme coin';
+  const token = symbol ? `$${symbol}` : 'a trending meme coin';
   const base = { id: `${round.id}`, roundId: round.id, side, stake, payout: amount, tokenMint: a.tokenMint, label };
   if (r.kind === 'won') {
     return {
@@ -455,16 +459,7 @@ function resultToast(
       shareText: `Round #${round.id} on ${token} went ${label} in FlipTheMeme. Rematch? ${roundLink(round.id)}`,
     };
   }
-  const title =
-    r.kind === 'full-refund'
-      ? 'No match - stake back'
-      : label === 'TIE'
-        ? 'Tie - stake back'
-        : label === 'NO PRICE'
-          ? 'No price - stake back'
-          : label === 'EXPIRED'
-            ? 'Expired - stake back'
-            : 'Refund - stake back';
+  const title = refundTitle({ kind: r.kind === 'full-refund' ? 'full-refund' : 'refund', label, payout: amount, stake });
   return {
     ...base,
     kind: r.kind === 'full-refund' ? 'full-refund' : 'refund',

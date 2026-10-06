@@ -16,7 +16,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
         <View style={[styles.logo, styles.logoEmpty]}>
           <Text style={styles.logoLetter}>?</Text>
         </View>
-        <Text style={styles.waiting}>Picking the hottest fresh coin...</Text>
+        <Text style={styles.waiting}>Picking the hottest coin...</Text>
       </View>
     );
   }
@@ -51,7 +51,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
           ) : null}
         </View>
         <Text style={styles.meta} numberOfLines={1}>
-          {signals || 'fresh from pump.fun'}
+          {signals || 'busy pump.fun coin'}
         </Text>
       </View>
       <Text style={styles.badge}>ARENA{'\n'}TOKEN</Text>

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MobileWalletProvider } from '@wallet-ui/react-native-kit';
@@ -9,7 +9,7 @@ import { HistoryScreen } from './src/screens/HistoryScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { WalletScreen } from './src/screens/WalletScreen';
 import { ShareCardHost } from './src/share/ShareCard';
-import { playSound, preloadSounds } from './src/sound/sound';
+import { preloadSounds } from './src/sound/sound';
 import { AppProvider, useApp } from './src/state/AppProvider';
 import { C } from './src/theme';
 import { ResultLayer } from './src/ui/ResultLayer';
@@ -17,22 +17,12 @@ import { TabBar } from './src/ui/TabBar';
 
 function Shell() {
   const insets = useSafeAreaInsets();
-  const { tab, setTab, toasts, dismissToast, betting } = useApp();
+  const { tab, setTab, toasts, dismissToast } = useApp();
 
   useEffect(() => {
     loadPrefs();
     preloadSounds();
   }, []);
-
-  // The "bet placed" coin, once per confirmed bet, whichever tab is open.
-  const lastBetAt = useRef(0);
-  const { phase, at } = betting.bet;
-  useEffect(() => {
-    if (phase === 'confirmed' && at !== lastBetAt.current) {
-      lastBetAt.current = at;
-      playSound('bet');
-    }
-  }, [phase, at]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>

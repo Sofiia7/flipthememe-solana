@@ -43,17 +43,6 @@ export function formatCountdown(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
-/** "45 s", "6 min", "3 h", "2 d" */
-export function formatAge(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s} s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} min`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h} h`;
-  return `${Math.floor(h / 24)} d`;
-}
-
 /** "23h 59m", "5m 03s", "42s" */
 export function formatDuration(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));

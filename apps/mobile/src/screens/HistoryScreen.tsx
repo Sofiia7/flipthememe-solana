@@ -42,7 +42,16 @@ export function HistoryScreen() {
           {my.error ? <Banner tone="warn" text={`Could not refresh: ${my.error}`} /> : null}
         </View>
       }
-      ListEmptyComponent={<Text style={T.subtle}>{myReady ? 'No bets yet. Pick UP or DOWN in the arena.' : 'Loading your positions...'}</Text>}
+      ListEmptyComponent={
+        myReady ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyTitle}>NO CALLS YET</Text>
+            <Text style={[T.subtle, styles.emptyHint]}>No bets yet. Pick UP or DOWN in the arena.</Text>
+          </View>
+        ) : (
+          <Text style={T.subtle}>Loading your positions...</Text>
+        )
+      }
       extraData={nowMs}
       renderItem={({ item }) => <HistoryItem entry={item} nowMs={nowMs} />}
     />
@@ -53,11 +62,11 @@ function HistoryItem({ entry, nowMs }: { entry: HistoryEntry<MyPosition>; nowMs:
   return entry.kind === 'chain' ? <HistoryRow item={entry.position} nowMs={nowMs} /> : <KeptRow record={entry.record} />;
 }
 
-/** "+0.12% (strike -> exit)" or where the round stopped. */
+/** "+0.12% (start -> exit)" or where the round stopped. */
 function moveText(strike: bigint, exit: bigint, final: boolean): string {
-  if (strike > 0n && exit > 0n) return `${formatMicroPct(changeMicroPct(strike, exit))} (strike -> exit)`;
-  if (strike > 0n) return 'strike fixed, exit pending';
-  return final ? 'no strike (round not played)' : 'strike pending';
+  if (strike > 0n && exit > 0n) return `${formatMicroPct(changeMicroPct(strike, exit))} (start -> exit)`;
+  if (strike > 0n) return 'start price fixed, exit pending';
+  return final ? 'no start price (round not played)' : 'start price pending';
 }
 
 function shareResult(r: {
@@ -132,7 +141,10 @@ function ResultCard(props: {
         <Text style={[styles.payout, { color }]}>{props.payout !== null ? `+${sol(props.payout)}` : '-'}</Text>
       </View>
       {final ? (
-        <Text style={styles.meta}>{props.claimed ? 'Paid to your game balance' : 'Not claimed yet - the keeper usually pays within seconds'}</Text>
+        <Text style={styles.meta}>{props.claimed ? 'Paid to your game balance' : 'Credited automatically. CLAIM appears here if it takes longer.'}</Text>
+      ) : null}
+      {kind === 'refund' && props.label === 'EXPIRED' && props.payout !== null && props.payout > props.stake ? (
+        <Text style={styles.meta}>Expired: your stake back plus a share of the house stake.</Text>
       ) : null}
       <View style={styles.links}>
         <ExtLink label="Position on Explorer" url={explorer.address(props.positionAddress)} />
@@ -263,6 +275,20 @@ function KeptRow({ record }: { record: HistoryRecord }) {
 const styles = StyleSheet.create({
   page: { padding: 16, gap: 10, paddingBottom: 28 },
   headBox: { gap: 6, marginBottom: 4 },
+  // As loud as the arena's "BE THE FIRST TO CALL IT": the first thing a new player sees here.
+  empty: { alignItems: 'center', gap: 8, paddingVertical: 28 },
+  emptyTitle: {
+    color: C.neonYellow,
+    fontSize: 17,
+    lineHeight: 21,
+    fontWeight: '900',
+    textAlign: 'center',
+    fontFamily: MONO,
+    textShadowColor: C.neonYellow,
+    textShadowRadius: 10,
+    textShadowOffset: { width: 0, height: 0 },
+  },
+  emptyHint: { textAlign: 'center' },
   card: { borderWidth: 1, borderColor: C.border, backgroundColor: C.panel, padding: 10, gap: 4 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   title: { color: C.white, fontSize: 13, fontWeight: '900', flexShrink: 1 },

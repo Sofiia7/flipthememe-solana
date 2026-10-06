@@ -6,6 +6,7 @@ import { getAddressDecoder } from '@solana/kit';
 import { Outcome, RefundReason, RoundStatus, Side, type PositionAccount, type RoundAccount } from '@flipthememe/client';
 import {
   HISTORY_CAP,
+  accuracyOf,
   createHistoryStore,
   historyEntry,
   historyStats,
@@ -15,7 +16,12 @@ import {
   recordFace,
   recordOf,
   serializeHistory,
+  streakAsOf,
+  streakLabel,
+  streakOf,
+  streakWords,
   type ChainPosition,
+  type HistoryEntry,
   type HistoryRecord,
 } from '../state/history.ts';
 import type { KeyValueStorage } from '../lib/boolStore.ts';
@@ -252,4 +258,98 @@ test('storage: versioned entry per wallet, round trip, unreadable rows dropped',
   assert.deepEqual([...data.keys()], [`ftm.history.v1.${OWNER}`]);
   assert.deepEqual(await store.load(OWNER), records);
   assert.deepEqual(await store.load(addr(9)), [], 'other wallets have their own entry');
+});
+
+/** One row per letter, oldest letter first: W won, L lost, T tie (refund), N no match (full refund), P still in play, X no round data. */
+function rows(letters: string, firstId = 1n): HistoryEntry[] {
+  const chain = [...letters].map((ch, i): ChainPosition => {
+    const id = firstId + BigInt(i);
+    switch (ch) {
+      case 'W':
+        return mine(id);
+      case 'L':
+        return mine(id, { position: { side: Side.Down } });
+      case 'T':
+        return mine(id, { round: { outcome: Outcome.Refund, refundReason: RefundReason.Tie } });
+      case 'N':
+        return mine(id, { round: { outcome: Outcome.NotActivated, rawDown: 0n, strikePrice: 0n, exitPrice: 0n } });
+      case 'P':
+        return mine(id, { round: { status: RoundStatus.Live, outcome: Outcome.Pending } });
+      case 'X':
+        return mine(id, { round: null });
+      default:
+        throw new Error(`unknown row ${ch}`);
+    }
+  });
+  return mergeHistory(chain, []);
+}
+
+test('streak: nothing played yet', () => {
+  assert.deepEqual(streakOf([]), { current: 0, kind: null, best: 0 });
+});
+
+test('streak: refunds neither extend nor break a streak, and alone they make none', () => {
+  assert.deepEqual(streakOf(rows('TNT')), { current: 0, kind: null, best: 0 });
+  assert.deepEqual(streakOf(rows('WTNW')), { current: 2, kind: 'win', best: 2 });
+  assert.deepEqual(streakOf(rows('LTL')), { current: 2, kind: 'loss', best: 0 });
+  assert.deepEqual(streakOf(rows('WWTL')), { current: 1, kind: 'loss', best: 2 });
+});
+
+test('streak: the newest finished rounds count, whatever order the rows come in', () => {
+  const ordered = rows('WWLWWWTW');
+  // 8 W, 7 refund, then 6 5 4 W: four wins in a row, stopped by the loss in round 3; the best run is the same four.
+  assert.deepEqual(streakOf(ordered), { current: 4, kind: 'win', best: 4 });
+  const shuffled = [ordered[3], ordered[0], ordered[7], ordered[5], ordered[1], ordered[6], ordered[2], ordered[4]];
+  assert.deepEqual(streakOf(shuffled), { current: 4, kind: 'win', best: 4 });
+  assert.deepEqual(streakOf(rows('WWWWWLW')), { current: 1, kind: 'win', best: 5 }, 'the best run may be an old one');
+  assert.deepEqual(streakOf(rows('WLLL')), { current: 3, kind: 'loss', best: 1 });
+  assert.deepEqual(streakOf(rows('LLLWL')), { current: 1, kind: 'loss', best: 1 });
+});
+
+test('streak: a round still in play, or without round data, is ignored', () => {
+  assert.deepEqual(streakOf(rows('WWP')), { current: 2, kind: 'win', best: 2 });
+  assert.deepEqual(streakOf(rows('LLWPP')), { current: 1, kind: 'win', best: 1 });
+  assert.deepEqual(streakOf(rows('WXW')), { current: 2, kind: 'win', best: 2 });
+  assert.deepEqual(streakOf(rows('PX')), { current: 0, kind: null, best: 0 });
+});
+
+test('streak: rows kept on the phone count like chain rows', () => {
+  const chain = [mine(10n), mine(9n)];
+  const records = [kept(8n, { claimed: true }), kept(7n, { kind: 'lost', payout: 0n, claimed: true }), kept(6n, { claimed: true }), kept(5n, { claimed: true })];
+  const entries = mergeHistory(chain, records);
+  assert.deepEqual(entries.map((e) => e.kind), ['chain', 'chain', 'stored', 'stored', 'stored', 'stored']);
+  assert.deepEqual(streakOf(entries), { current: 3, kind: 'win', best: 3 });
+});
+
+test('streak as of a round leaves out the rounds after it (the overlay of an older result)', () => {
+  const entries = rows('WWLW');
+  assert.deepEqual(streakOf(entries), { current: 1, kind: 'win', best: 2 });
+  assert.deepEqual(streakAsOf(entries, 2n), { current: 2, kind: 'win', best: 2 });
+  assert.deepEqual(streakAsOf(entries, 3n), { current: 1, kind: 'loss', best: 2 });
+  assert.deepEqual(streakAsOf(entries, 0n), { current: 0, kind: null, best: 0 });
+});
+
+test('streak words and the chip label', () => {
+  assert.equal(streakWords({ current: 0, kind: null, best: 3 }), '-');
+  assert.equal(streakWords({ current: 1, kind: 'win', best: 1 }), '1 win');
+  assert.equal(streakWords({ current: 3, kind: 'win', best: 3 }), '3 wins');
+  assert.equal(streakWords({ current: 1, kind: 'loss', best: 0 }), '1 loss');
+  assert.equal(streakWords({ current: 2, kind: 'loss', best: 0 }), '2 losses');
+
+  assert.equal(streakLabel({ current: 3, kind: 'win', best: 3 }), '3 IN A ROW');
+  assert.equal(streakLabel({ current: 2, kind: 'win', best: 2 }), '2 IN A ROW');
+  assert.equal(streakLabel({ current: 1, kind: 'win', best: 5 }), null, 'one win is not a streak');
+  assert.equal(streakLabel({ current: 2, kind: 'loss', best: 0 }), 'LOST 2 IN A ROW');
+  assert.equal(streakLabel({ current: 1, kind: 'loss', best: 0 }), null);
+  assert.equal(streakLabel({ current: 0, kind: null, best: 0 }), null);
+});
+
+test('accuracy is wins over decided rounds, none without a decided round', () => {
+  assert.equal(accuracyOf({ wins: 0, losses: 0 }), null);
+  assert.equal(accuracyOf({ wins: 3, losses: 1 }), 0.75);
+  assert.equal(accuracyOf({ wins: 0, losses: 4 }), 0);
+  assert.equal(accuracyOf({ wins: 2, losses: 0 }), 1);
+  // Refunds are not in it: it reads the same fields historyStats returns.
+  const stats = historyStats(rows('WLWT'), Number(T0) + 10_000);
+  assert.equal(accuracyOf(stats), 2 / 3);
 });

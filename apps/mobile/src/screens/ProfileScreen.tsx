@@ -17,9 +17,11 @@ import { formatSol, shortAddress } from '../lib/format';
 import { chatterOn, soundMuted, useBoolStore } from '../lib/prefs';
 import { PixelFace } from '../PixelFace';
 import { useSkrNames } from '../chain/skr';
+import { useSeekerStatus } from '../chain/sgt';
+import { seekerLabel } from '../chain/sgtCheck';
 import { playSound } from '../sound/sound';
 import { useApp } from '../state/AppProvider';
-import { historyStats } from '../state/history';
+import { accuracyOf, historyStats, streakOf, streakWords } from '../state/history';
 import { C, MONO, T } from '../theme';
 import { Btn, KV } from '../ui/common';
 
@@ -50,10 +52,14 @@ function Toggle({ label, on, onPress }: { label: string; on: boolean; onPress: (
 export function ProfileScreen() {
   const { face, setFace, wallet, history, myReady, offsetSec } = useApp();
   const myName = useSkrNames(wallet.owner ? [wallet.owner] : []).get(wallet.owner ?? '') ?? null;
+  // A Seeker Genesis Token in the wallet (read from mainnet) marks a verified Seeker owner.
+  const seeker = useSeekerStatus(wallet.owner);
   const muted = useBoolStore(soundMuted);
   const chatter = useBoolStore(chatterOn);
   // Chain rows plus finished rounds kept on the phone after their accounts closed.
   const stats = useMemo(() => historyStats(history, chainNowSec(offsetSec)), [history, offsetSec]);
+  const streak = useMemo(() => streakOf(history), [history]);
+  const accuracy = accuracyOf(stats);
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
@@ -62,7 +68,8 @@ export function ProfileScreen() {
         <PixelFace face={face} size={112} />
         <View style={styles.heroText}>
           <Text style={styles.name}>{wallet.owner ? (myName ?? shortAddress(wallet.owner)) : 'Not connected'}</Text>
-          {myName && wallet.owner ? <Text style={styles.bytes}>{shortAddress(wallet.owner)} · Seeker ID</Text> : null}
+          {myName && wallet.owner ? <Text style={styles.addressLine}>{shortAddress(wallet.owner)} · Seeker ID</Text> : null}
+          {seeker.state === 'verified' ? <Text style={styles.seekerBadge}>{seekerLabel(seeker.sgt)} · VERIFIED</Text> : null}
           <Text style={T.subtle}>Your face and Seeker ID name show next to every bet you make.</Text>
           <Btn small kind="ghost" title="RANDOMIZE" onPress={() => setFace(randomFace())} />
         </View>
@@ -106,7 +113,7 @@ export function ProfileScreen() {
       <Text style={T.dim}>Saved on this phone. Heads only, crisp pixels; the same face shows in the arena and in your results.</Text>
 
       <View style={T.panel}>
-        <Text style={T.label}>STATS (DEVNET)</Text>
+        <Text style={T.label}>STATS (TEST SOL)</Text>
         {wallet.owner ? (
           myReady ? (
             <>
@@ -114,6 +121,9 @@ export function ProfileScreen() {
               <KV k="Wins" v={`${stats.wins}`} tone="up" />
               <KV k="Losses" v={`${stats.losses}`} tone="down" />
               <KV k="Refunds" v={`${stats.refunds}`} tone="gold" />
+              <KV k="Accuracy" v={accuracy === null ? '-' : `${Math.round(accuracy * 100)}%`} />
+              <KV k="Best win streak" v={streak.best > 0 ? `${streak.best}` : '-'} tone="up" />
+              <KV k="Current streak" v={streakWords(streak)} tone={streak.kind === 'win' ? 'up' : streak.kind === 'loss' ? 'down' : undefined} />
               <KV k="Net (finished rounds)" v={`${formatSol(stats.net, { sign: true })} SOL`} tone={stats.net >= 0n ? 'up' : 'down'} />
             </>
           ) : (
@@ -132,7 +142,8 @@ const styles = StyleSheet.create({
   hero: { flexDirection: 'row', gap: 14, alignItems: 'center' },
   heroText: { flex: 1, gap: 6 },
   name: { color: C.white, fontFamily: MONO, fontWeight: '900', fontSize: 15 },
-  bytes: { color: C.dim, fontFamily: MONO, fontSize: 10 },
+  addressLine: { color: C.dim, fontFamily: MONO, fontSize: 10 },
+  seekerBadge: { alignSelf: 'flex-start', color: C.upInk, backgroundColor: C.neonGreen, fontFamily: MONO, fontWeight: '900', fontSize: 11, paddingHorizontal: 8, paddingVertical: 3 },
   field: { gap: 6 },
   options: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   option: { borderWidth: 2, borderColor: 'transparent', padding: 1 },

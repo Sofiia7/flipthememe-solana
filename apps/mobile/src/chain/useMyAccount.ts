@@ -25,7 +25,7 @@ export type MyAccountData = {
   vault: VaultAccount | null;
   sessionAddress: Address | null;
   session: SessionAccount | null;
-  /** Devnet SOL on the session key (pays fees and position rent). */
+  /** Devnet SOL on the device key (pays the network fee of each bet). */
   keyLamports: bigint | null;
   /** Devnet SOL in the connected wallet. */
   walletLamports: bigint | null;

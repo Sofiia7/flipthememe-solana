@@ -17,16 +17,19 @@ function rng(seed: number) {
 
 /**
  * A burst of square pixel confetti from `origin` (fraction of the screen), driven by one native animation.
+ * `delayMs` holds the burst back (the squares stay invisible until it starts), for a second salvo.
  * Memoized with its interpolations, so a parent re-rendering every frame never rebuilds the native graph.
  */
 export const PixelConfetti = memo(function PixelConfetti({
   count = 44,
   durationMs = 1_500,
+  delayMs = 0,
   origin = { x: 0.5, y: 0.32 },
   seed = 7,
 }: {
   count?: number;
   durationMs?: number;
+  delayMs?: number;
   origin?: { x: number; y: number };
   seed?: number;
 }) {
@@ -36,7 +39,8 @@ export const PixelConfetti = memo(function PixelConfetti({
   const pieces = useMemo(() => {
     const rand = rng(seed);
     const steps = [0, 0.2, 0.4, 0.6, 0.8, 1];
-    const fade = progress.interpolate({ inputRange: [0, 0.75, 1], outputRange: [1, 1, 0] });
+    // Invisible until the burst starts (progress 0 during the delay), fading out over its last quarter.
+    const fade = progress.interpolate({ inputRange: [0, 0.001, 0.75, 1], outputRange: [0, 1, 1, 0] });
     return Array.from({ length: count }, (_, i) => {
       const angle = -Math.PI / 2 + (rand() - 0.5) * Math.PI * 1.3;
       const speed = 0.55 + rand() * 0.75;
@@ -66,10 +70,10 @@ export const PixelConfetti = memo(function PixelConfetti({
 
   useEffect(() => {
     progress.setValue(0);
-    const anim = Animated.timing(progress, { toValue: 1, duration: durationMs, easing: Easing.linear, useNativeDriver: true });
+    const anim = Animated.timing(progress, { toValue: 1, duration: durationMs, delay: delayMs, easing: Easing.linear, useNativeDriver: true });
     anim.start();
     return () => anim.stop();
-  }, [progress, durationMs]);
+  }, [progress, durationMs, delayMs]);
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>

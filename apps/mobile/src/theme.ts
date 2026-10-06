@@ -4,7 +4,6 @@ export const C = {
   bg: '#100d1f',
   panel: '#1c1830',
   panelDeep: '#19152a',
-  panelMine: '#20183a',
   chart: '#171326',
   border: '#454055',
   borderSoft: '#2e2842',
@@ -32,8 +31,6 @@ export const C = {
   neonYellow: '#ffe14d',
   neonPurple: '#b46cff',
   neonPink: '#ff4fd8',
-  tintUp: 'rgba(53, 223, 108, 0.10)',
-  tintDown: 'rgba(251, 96, 124, 0.10)',
 } as const;
 
 /** Gradient stops (top to bottom). */
@@ -42,7 +39,6 @@ export const GRAD = {
   down: ['#ff8aa2', '#f23f66', '#b81840'],
   gold: ['#ffe680', '#f6b62d', '#d9870f'],
   purple: ['#c58bff', '#8a3dff', '#5a1fc2'],
-  panel: ['#241c40', '#19142d'],
   win: ['#3b0f73', '#1a0b3a', '#07050f'],
   rekt: ['#4a0b1f', '#1d0712', '#07050f'],
   card: ['#34106a', '#160b33', '#07050f'],
@@ -52,9 +48,7 @@ export const MONO = 'monospace';
 
 export const T = StyleSheet.create({
   h1: { color: C.white, fontSize: 24, fontWeight: '900' },
-  h2: { color: C.white, fontSize: 16, fontWeight: '900' },
   label: { color: C.label, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
-  body: { color: C.text, fontSize: 13, lineHeight: 18 },
   subtle: { color: C.subtle, fontSize: 11, lineHeight: 16 },
   dim: { color: C.dim, fontSize: 10, lineHeight: 14 },
   mono: { color: C.white, fontFamily: MONO, fontWeight: '800' },

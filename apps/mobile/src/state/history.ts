@@ -219,6 +219,78 @@ export function historyStats(entries: readonly HistoryEntry[], nowSec: number): 
   return { rounds: entries.length, wins, losses, refunds, open, net: returned - staked };
 }
 
+/** Share of decided rounds that were won (0 to 1); null before any round was won or lost. Refunds are not decided rounds. */
+export function accuracyOf(stats: Pick<HistoryStats, 'wins' | 'losses'>): number | null {
+  const decided = stats.wins + stats.losses;
+  return decided > 0 ? stats.wins / decided : null;
+}
+
+/** How a row finished: null while its round is in play or its round data is missing. */
+function finishedKind(e: HistoryEntry): HistoryRecord['kind'] | null {
+  if (e.kind === 'stored') return e.record.kind;
+  const round = e.position.round;
+  if (!round || round.account.status !== RoundStatus.Final) return null;
+  // Once final the result no longer depends on the time (same reading as recordOf).
+  const r = positionResult(e.position.account, round.account, Number(round.account.exitEnd));
+  return r.kind === 'pending' ? null : r.kind;
+}
+
+export type Streak = {
+  /** Rounds in a row of the same kind, newest first; 0 when none was won or lost yet. */
+  current: number;
+  kind: 'win' | 'loss' | null;
+  /** The longest run of wins in this history. */
+  best: number;
+};
+
+/**
+ * Win and loss runs over finished rounds, newest first. A refund (tie, no price, no match, expired)
+ * neither extends nor breaks a run; a round still in play, or without round data, is left out.
+ * Rows may come in any order: they are read by round id.
+ */
+export function streakOf(entries: readonly HistoryEntry[]): Streak {
+  const decided: { id: bigint; win: boolean }[] = [];
+  for (const e of entries) {
+    if (e.roundId === null) continue;
+    const kind = finishedKind(e);
+    if (kind === 'won') decided.push({ id: e.roundId, win: true });
+    else if (kind === 'lost') decided.push({ id: e.roundId, win: false });
+  }
+  decided.sort((a, b) => (a.id > b.id ? -1 : a.id < b.id ? 1 : 0));
+  let current = 0;
+  for (const d of decided) {
+    if (d.win !== decided[0].win) break;
+    current++;
+  }
+  let best = 0;
+  let run = 0;
+  for (const d of decided) {
+    run = d.win ? run + 1 : 0;
+    best = Math.max(best, run);
+  }
+  return { current, kind: decided.length > 0 ? (decided[0].win ? 'win' : 'loss') : null, best };
+}
+
+/** The streak as it stood when round `roundId` finished (a queued result overlay must not count later rounds). */
+export function streakAsOf(entries: readonly HistoryEntry[], roundId: bigint): Streak {
+  return streakOf(entries.filter((e) => e.roundId !== null && e.roundId <= roundId));
+}
+
+/** "3 wins", "1 loss", "-" for the Profile row. */
+export function streakWords(s: Streak): string {
+  if (s.kind === null || s.current === 0) return '-';
+  const unit = s.kind === 'win' ? (s.current === 1 ? 'win' : 'wins') : s.current === 1 ? 'loss' : 'losses';
+  return `${s.current} ${unit}`;
+}
+
+/** The headline for a run worth showing (two or more): "3 IN A ROW", "LOST 2 IN A ROW"; null otherwise. */
+export function streakLabel(s: Streak): string | null {
+  if (s.current < 2) return null;
+  if (s.kind === 'win') return `${s.current} IN A ROW`;
+  if (s.kind === 'loss') return `LOST ${s.current} IN A ROW`;
+  return null;
+}
+
 type StoredRow = Omit<HistoryRecord, 'roundId' | 'stake' | 'accepted' | 'payout' | 'strike' | 'exit'> & {
   roundId: string;
   stake: string;

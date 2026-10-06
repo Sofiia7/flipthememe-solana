@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { RoundStatus, Side, winMultiplierBps } from '@flipthememe/client';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { RoundStatus, Side } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
 import { useSkrNames } from '../chain/skr';
@@ -21,15 +22,18 @@ import { chainNowSec, chainToLocalMs } from '../chain/useChainClock';
 import { isFeedStale, type PoolFeed } from '../chain/usePoolPrice';
 import { useRents } from '../chain/rent';
 import { peekTokenInfo, useTokenInfo } from '../chain/useTokenInfo';
+import { multiplierText } from '../chain/repeatBet';
 import { faceFromBytes } from '../face/faceModel';
+import { chipStates, effectiveAmount, maxBet, maxBetCaption } from '../lib/betChips';
 import { deltaView, formatCountdown, formatSol, roundLink } from '../lib/format';
-import { chatterOn, howItWorksSeen, useBoolStore } from '../lib/prefs';
+import { chatterOn, useBoolStore } from '../lib/prefs';
 import { useNow } from '../lib/usePolling';
 import { shareCard } from '../share/ShareCard';
 import { playSound } from '../sound/sound';
 import { sessionStatusOf, useApp, type SessionStatus } from '../state/AppProvider';
 import { awayText } from '../state/away';
-import { C, MONO } from '../theme';
+import { streakLabel, streakOf } from '../state/history';
+import { C, MONO, T } from '../theme';
 import { ArenaClock, type ClockSide } from '../ui/ArenaClock';
 import { ChallengeCard } from '../ui/ChallengeCard';
 import { PriceChart } from '../ui/Chart';
@@ -41,33 +45,27 @@ import { PixelText } from '../ui/PixelText';
 import { ExtraRoundLine, MyRoundPanel, NextRoundBar, OpenRoundPanel } from '../ui/RoundPanel';
 import { TokenHeader } from '../ui/TokenHeader';
 import { TopUpSheet } from '../ui/TopUpSheet';
-import { maxWinProfit } from '../wallet/topUpPlan';
+import { canRenewSession, minStakeOf } from '../wallet/playState';
+import { RENT_FALLBACK, maxWinProfit } from '../wallet/topUpPlan';
 
 type Mine = { round: RoundView; position: PositionView };
 type Standing = 'winning' | 'losing' | 'tie' | null;
 
 const sideName = (side: number) => (side === Side.Up ? 'UP' : 'DOWN');
 
-function multiplierText(feeWinBps: number): string {
-  const bps = winMultiplierBps(feeWinBps);
-  return `x${bps / 10_000n}.${((bps % 10_000n) / 100n).toString().padStart(2, '0')}`;
-}
-
 const SESSION_REASON: Record<Exclude<SessionStatus, 'active'>, string> = {
   none: 'One approval, then every bet is one tap.',
   expired: 'Your play session expired.',
   revoked: 'Your play session was revoked.',
-  'used-up': 'Session limit used up.',
+  'used-up': 'Your one-tap limit is used up.',
 };
-
-/** Position rent at the highest devnet rate, used until the real figure is read. */
-const POSITION_RENT_FALLBACK = 1_600_000n;
 
 export function ArenaScreen() {
   const app = useApp();
   const { arena, my, myReady, wallet, betting, pending, feed, myFeed, offsetSec } = app;
   // Each bet parks its position rent from the game balance until the keeper closes it (a day later).
-  const positionRent = useRents(app.rpc)?.position ?? POSITION_RENT_FALLBACK;
+  // Until the real figure is read the rent comes from the account size (RENT_FALLBACK, a hair above the real one).
+  const positionRent = useRents(app.rpc)?.position ?? RENT_FALLBACK.position;
   const nowMs = useNow(500);
   const nowSec = chainNowSec(offsetSec, nowMs);
   const nowWhole = Math.floor(nowSec);
@@ -86,22 +84,15 @@ export function ArenaScreen() {
   const { height: screenHeight } = useWindowDimensions();
   const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * (chatterShown ? 0.175 : 0.2))));
 
-  // The rules open by themselves once, on the first launch.
+  // The rules stay behind the "?" in the header: nothing opens by itself on the first launch.
   useEffect(() => {
-    let alive = true;
     void chatterOn.load();
-    void howItWorksSeen.load().then((seen) => {
-      if (alive && !seen) setHowOpen(true);
-    });
-    return () => {
-      alive = false;
-    };
   }, []);
-  const closeHow = useCallback(() => {
-    setHowOpen(false);
-    howItWorksSeen.set(true);
-  }, []);
+  const closeHow = useCallback(() => setHowOpen(false), []);
   const closeTopUp = useCallback(() => setTopUpOpen(false), []);
+
+  const streak = useMemo(() => streakOf(app.history), [app.history]);
+  const streakText = streak.kind === 'win' ? streakLabel(streak) : null;
 
   const groups: RoundGroups<RoundView> = useMemo(() => classifyRounds(arena.rounds, nowWhole), [arena.rounds, nowWhole]);
 
@@ -157,7 +148,7 @@ export function ArenaScreen() {
       ? {
           range: [chainToLocalMs(chartRound.account.strikeStart, offsetSec), chainToLocalMs(chartRound.account.strikeEnd, offsetSec)] as const,
           label:
-            chartStrike.kind === 'pending' ? `STRIKE IN ${formatCountdown(chartStrike.secondsLeft)}` : chartStrike.kind === 'fixing' ? 'FIXING STRIKE' : '',
+            chartStrike.kind === 'pending' ? `START PRICE IN ${formatCountdown(chartStrike.secondsLeft)}` : chartStrike.kind === 'fixing' ? 'LOCKING START' : '',
           strong: chartStrike.kind === 'pending' || chartStrike.kind === 'fixing',
         }
       : null;
@@ -172,9 +163,9 @@ export function ArenaScreen() {
     if (st.kind === 'fixed') {
       const p = priceOf(deltaRound.account.pool);
       const delta = p ? deltaView(st.strike, p.price) : null;
-      if (p && delta) clockSide = { kind: 'delta', delta, label: `${id} VS STRIKE`, stale: p.stale };
-    } else if (st.kind === 'pending') clockSide = { kind: 'note', text: `STRIKE IN ${formatCountdown(st.secondsLeft)}`, label: id };
-    else if (st.kind === 'fixing') clockSide = { kind: 'note', text: 'FIXING STRIKE', label: id };
+      if (p && delta) clockSide = { kind: 'delta', delta, label: `${id} VS START PRICE`, stale: p.stale };
+    } else if (st.kind === 'pending') clockSide = { kind: 'note', text: `START PRICE IN ${formatCountdown(st.secondsLeft)}`, label: id };
+    else if (st.kind === 'fixing') clockSide = { kind: 'note', text: 'LOCKING START', label: id };
   }
 
   // Header and chart describe the same pool: my round's while it plays, else the open round's, else the latest started one.
@@ -195,13 +186,19 @@ export function ArenaScreen() {
   const openSymbol = open && open.account.tokenMint !== tokenMint ? (openInfo?.symbol ?? null) : symbol;
 
   // Betting preconditions.
-  const minStake = open?.account.minStake ?? arena.config?.minStake ?? 10_000_000n;
+  const minStake = minStakeOf(open?.account.minStake, arena.config?.minStake);
   const status = sessionStatusOf(my.session, nowSec, minStake);
   const available = my.vault?.available ?? 0n;
   const remaining = my.session ? my.session.sessionCap - my.session.spent : 0n;
   const keyGasOk = (my.keyLamports ?? 0n) >= SESSION_RULES.gasPerBet;
-  // Money already in the game balance: fast bets come back with one approval and no deposit.
-  const canRenew = available >= minStake && (status !== 'active' || !keyGasOk);
+  // Money already in the game balance: one-tap bets come back with one approval and no deposit.
+  const canRenew = canRenewSession({ myReady, available, minStake, status, keyLamports: my.keyLamports });
+  // A bet takes its stake and the rent of its position account from the game balance; a session made
+  // before the allowance was widened is limited too. A chip over that is off, and the amount used
+  // falls back to the largest chip that fits (the choice itself returns once the balance does).
+  const maxAmount = maxBet({ available, positionRent, sessionLeft: my.session ? remaining : null });
+  const chips = chipStates(BET_AMOUNTS, maxAmount);
+  const betAmount = effectiveAmount(amount, BET_AMOUNTS, maxAmount);
   const inOpen = open ? mine.get(open.id) : undefined;
   const pendingHere = pending && open && pending.roundId === open.id ? pending : null;
   const working = betting.bet.phase === 'signing' || betting.bet.phase === 'sending' || betting.bet.phase === 'confirming';
@@ -212,7 +209,7 @@ export function ArenaScreen() {
   if (owner && myReady) {
     if (status !== 'active') topUpReason = SESSION_REASON[status];
     else if (available < minStake) topUpReason = 'Your game balance is empty.';
-    else if (!keyGasOk) topUpReason = 'The session key needs devnet SOL for fees.';
+    else if (!keyGasOk) topUpReason = 'The device key needs devnet SOL for fees.';
   }
 
   const arenaStaleSec = arena.updatedAt ? Math.floor((nowMs - arena.updatedAt) / 1000) : null;
@@ -223,29 +220,32 @@ export function ArenaScreen() {
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
-  else if (amount + positionRent > available) {
-    blocked = `Balance ${formatSol(available)} SOL - pick less or top up.`;
+  else if (betAmount + positionRent > available) {
+    // Only when no chip fits: the chips under the balance are always chosen first.
+    blocked = `Balance ${formatSol(available)} SOL - top up to bet.`;
     blockedByFunds = true;
-  } else if (amount > remaining) {
-    blocked = `Session limit left ${formatSol(remaining)} SOL - top up to renew.`;
+  } else if (betAmount > remaining) {
+    blocked = `One-tap limit left ${formatSol(remaining)} SOL - top up to renew.`;
     blockedByFunds = true;
-  } else if (amount > open.account.maxStake || amount < open.account.minStake) blocked = "Out of this round's limits.";
-  const upFits = open ? fitsDepth(open.account, Side.Up, amount) : false;
-  const downFits = open ? fitsDepth(open.account, Side.Down, amount) : false;
+  } else if (betAmount > open.account.maxStake || betAmount < open.account.minStake) blocked = "Out of this round's limits.";
+  const upFits = open ? fitsDepth(open.account, Side.Up, betAmount) : false;
+  const downFits = open ? fitsDepth(open.account, Side.Down, betAmount) : false;
   const feeWinBps = open?.account.feeWinBps ?? arena.config?.feeWinBps ?? 200;
   const multiplier = multiplierText(feeWinBps);
   // x1.96 pays on the matched part; this is the profit when the whole amount gets matched.
-  const winProfit = maxWinProfit(amount, feeWinBps);
+  const winProfit = maxWinProfit(betAmount, feeWinBps);
 
   // Countdown ticks in the last 5 seconds of entry.
   const tick = owner && open && !paused ? entryTick(secondsLeft) : null;
   useEffect(() => {
-    if (tick !== null) playSound('tick');
+    if (tick === null) return;
+    playSound('tick');
+    void Haptics.selectionAsync().catch(() => undefined);
   }, [tick, open?.id]);
 
   const placeBet = (side: Side) => {
     if (!open || blocked || working || inOpen || pendingHere) return;
-    void betting.place(open.id, side, amount);
+    void betting.place(open.id, side, betAmount);
   };
 
   // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
@@ -256,7 +256,7 @@ export function ArenaScreen() {
     const side = m.position.account.side;
     const info = peekTokenInfo(m.round.account.tokenMint);
     const symbol = info?.symbol ?? null;
-    const token = symbol ? `$${symbol}` : 'a fresh meme coin';
+    const token = symbol ? `$${symbol}` : 'a trending meme coin';
     const link = roundLink(m.round.id, { side: sideName(side), token: symbol, by: owner, name: myName });
     const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${m.round.id}${live ? ', live now' : ''} (Solana devnet, test SOL). Take the other side: rounds start every minute, join any time: ${link}`;
     setSharing(true);
@@ -282,7 +282,7 @@ export function ArenaScreen() {
   const inviteRound = challengeFocus || inOpen ? null : (open ?? groups.upcoming);
   const invite = (round: RoundView) => {
     const link = roundLink(round.id, { side: null, token: null, by: owner, name: myName });
-    const text = `Play FlipTheMeme with me: call UP or DOWN on a fresh Solana meme coin, a new 60-second round every minute (devnet, test SOL). Join me: ${link}`;
+    const text = `Play FlipTheMeme with me: call UP or DOWN on a busy Solana meme coin. A 1-minute move, result in about 2 minutes, a new round every minute (devnet, test SOL). Join me: ${link}`;
     setSharing(true);
     void shareCard({ kind: 'invite', face: app.face, roundId: round.id, name: myName }, text, 'Play with a friend').finally(() => setSharing(false));
   };
@@ -330,7 +330,7 @@ export function ArenaScreen() {
             nowMs={nowMs}
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}
-            strikeLabel={chartRound ? `STRIKE #${chartRound.id}` : undefined}
+            strikeLabel={chartRound ? `START #${chartRound.id}` : undefined}
             pairLabel={`${symbol ? symbol.toUpperCase() : 'TOKEN'} / SOL`}
             strikeWindow={strikeWindow}
             exitWindow={
@@ -351,6 +351,12 @@ export function ArenaScreen() {
           ) : (
             <ArenaClock timer={timer} side={clockSide} />
           )}
+          {streakText || (myUnresolved.length === 0 && !pendingHere) ? (
+            <View style={styles.hintRow}>
+              {streakText ? <Text style={styles.streakPill}>{streakText}</Text> : null}
+              {myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>Call the next minute. Result in about 2 minutes.</Text> : null}
+            </View>
+          ) : null}
 
           {panel.kind === 'mine' && focus && owner ? (
             <MyRoundPanel
@@ -391,9 +397,6 @@ export function ArenaScreen() {
 
           <ResultsStrip finals={groups.finals.filter((r) => stageFeed.pool !== null && r.account.pool === stageFeed.pool)} mine={mine} />
 
-          <Pressable onPress={() => tokenRound && void Linking.openURL(explorer.dexscreener(tokenRound.account.pool)).catch(() => undefined)}>
-            <Text style={styles.footer}>Devnet test SOL · price from the PumpSwap pool on mainnet</Text>
-          </Pressable>
         </ScrollView>
       </View>
 
@@ -406,18 +409,18 @@ export function ArenaScreen() {
         ) : null}
         <BetStatusLine openId={open?.id ?? null} visible={(roundId) => mine.has(roundId)} />
         {!owner ? (
-          // Visitors see the real buttons; a tap connects the wallet first.
+          // Visitors see the real buttons; a tap opens the top up sheet, which connects the wallet and approves in one go.
           <View style={styles.sides}>
             {[Side.Up, Side.Down].map((side) => (
               <NeonButton
                 key={side}
                 title={side === Side.Up ? 'UP ▲' : 'DOWN ▼'}
-                subtitle={wallet.busy === 'connect' ? 'connecting...' : 'tap to connect'}
+                subtitle={wallet.busy === 'connect' ? 'connecting...' : 'connect & play'}
                 kind={side === Side.Up ? 'up' : 'down'}
                 big
                 badge={multiplier}
                 busy={wallet.busy === 'connect'}
-                onPress={() => void wallet.connect()}
+                onPress={() => setTopUpOpen(true)}
                 style={styles.flex}
               />
             ))}
@@ -449,17 +452,25 @@ export function ArenaScreen() {
         ) : (
           <>
             <View style={styles.amounts}>
-              {BET_AMOUNTS.map((a) => (
-                <Pressable
-                  key={a.toString()}
-                  onPress={() => setAmount(a)}
-                  style={[styles.amount, amount === a && styles.amountActive]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: amount === a }}
-                >
-                  <Text style={[styles.amountText, amount === a && styles.amountTextActive]}>{formatSol(a)}</Text>
-                </Pressable>
-              ))}
+              {chips.map(({ amount: a, fits }) => {
+                const active = betAmount === a;
+                return (
+                  <Pressable
+                    key={a.toString()}
+                    disabled={!fits}
+                    onPress={() => {
+                      void Haptics.selectionAsync().catch(() => undefined);
+                      setAmount(a);
+                    }}
+                    style={[styles.amount, active && styles.amountActive, !fits && styles.amountOff]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active, disabled: !fits }}
+                  >
+                    <Text style={[styles.amountText, active && styles.amountTextActive]}>{formatSol(a)}</Text>
+                    {!fits ? <Text style={styles.amountCaption}>{maxBetCaption(maxAmount)}</Text> : null}
+                  </Pressable>
+                );
+              })}
               <Text style={styles.amountUnit}>SOL</Text>
             </View>
             <View style={styles.sides}>
@@ -595,6 +606,9 @@ const styles = StyleSheet.create({
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   devnet: { color: C.neonYellow, fontSize: 9, fontWeight: '900', fontFamily: MONO, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 4 },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  hintText: { flexShrink: 1 },
+  streakPill: { color: '#2a1a00', backgroundColor: C.neonYellow, fontFamily: MONO, fontWeight: '900', fontSize: 12, paddingHorizontal: 8, paddingVertical: 3 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   help: {
     width: 30,
@@ -620,7 +634,6 @@ const styles = StyleSheet.create({
   resultArrow: { fontSize: 13, fontWeight: '900' },
   resultWord: { fontSize: 8, fontWeight: '900', fontFamily: MONO, paddingVertical: 2 },
   resultId: { color: C.subtle, fontSize: 9, fontFamily: MONO },
-  footer: { color: C.dim, fontSize: 10, textAlign: 'center', textDecorationLine: 'underline' },
   dock: {
     paddingHorizontal: 14,
     paddingTop: 6,
@@ -631,9 +644,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#140f26',
   },
   amounts: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 5, alignItems: 'center' },
+  // A fixed height, so the caption of an off chip never moves the dock.
+  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 2, minHeight: 35, alignItems: 'center', justifyContent: 'center' },
+  amountOff: { opacity: 0.45 },
+  amountCaption: { color: C.subtle, fontSize: 8, lineHeight: 10, fontWeight: '800', fontFamily: MONO },
   amountActive: { backgroundColor: C.neonPurple, borderColor: '#d9b8ff' },
-  amountText: { color: C.white, fontSize: 15, fontWeight: '900', fontFamily: MONO },
+  amountText: { color: C.white, fontSize: 15, lineHeight: 17, fontWeight: '900', fontFamily: MONO },
   amountTextActive: { color: C.white },
   amountUnit: { color: C.subtle, fontSize: 10, fontWeight: '900', fontFamily: MONO },
   sides: { flexDirection: 'row', gap: 10 },

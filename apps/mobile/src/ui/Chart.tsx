@@ -8,14 +8,14 @@ import { areaPath, linePath, splitAtGaps, splitLinesAtLevel } from './chartPath'
 type Props = {
   points: readonly PricePoint[];
   nowMs: number;
-  /** Fixed strike of the round the chart follows (same units as the pool price). */
+  /** Fixed start price (the strike) of the round the chart follows, same units as the pool price. */
   strike?: bigint | null;
-  /** "STRIKE #101" */
+  /** "START #101" */
   strikeLabel?: string;
   /** "TESLA / SOL": the price is in SOL, not USD. */
   pairLabel?: string;
   /**
-   * The strike window with its label ("STRIKE IN 0:12"): strong while the strike is being fixed,
+   * The start price window with its label ("START PRICE IN 0:12"): strong while the start price is being fixed,
    * faint afterwards to show where the strike line comes from.
    */
   strikeWindow?: { range: readonly [number, number]; label: string; strong?: boolean } | null;
@@ -35,7 +35,7 @@ const AHEAD_MAX_MS = 110_000;
 /** Live points further apart than this (app in the background, another tab open) leave a gap in the line. */
 const LIVE_GAP_MS = 15_000;
 
-/** Live mainnet price: the strike as a dashed line with green above and red below, plus the round's windows. */
+/** Live mainnet price: the start price as a dashed line with green above and red below, plus the round's windows. */
 export function PriceChart({
   points,
   nowMs,
@@ -121,7 +121,7 @@ export function PriceChart({
   const sy = strikeValue !== null ? y(strikeValue) : null;
   const split = sy !== null ? splitLinesAtLevel(segments, sy) : null;
   const ticks = [-60_000, 0].map((offset) => ({ ms: nowMs + offset, label: offset === 0 ? 'now' : '-1m' }));
-  const strikeTag = strikeLabel ?? 'STRIKE';
+  const strikeTag = strikeLabel ?? 'START PRICE';
   const tagW = strikeTag.length * 6 + 8;
   const tagY = sy !== null ? (sy - 16 < 2 ? sy + 3 : sy - 16) : 0;
 

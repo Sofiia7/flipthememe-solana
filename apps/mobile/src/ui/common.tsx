@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { C, MONO, T } from '../theme';
 
@@ -87,18 +86,6 @@ export function ExtLink({ label, url, style }: { label: string; url: string; sty
   );
 }
 
-export function Section({ title, right, children, style }: { title: string; right?: ReactNode; children: ReactNode; style?: StyleProp<ViewStyle> }) {
-  return (
-    <View style={[styles.section, style]}>
-      <View style={styles.sectionHead}>
-        <Text style={T.label}>{title}</Text>
-        {right}
-      </View>
-      {children}
-    </View>
-  );
-}
-
 export function KV({ k, v, tone }: { k: string; v: string; tone?: 'up' | 'down' | 'gold' | 'dim' }) {
   const color = tone === 'up' ? C.up : tone === 'down' ? C.down : tone === 'gold' ? C.gold : tone === 'dim' ? C.subtle : C.white;
   return (
@@ -141,8 +128,6 @@ const styles = StyleSheet.create({
   banner: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, backgroundColor: C.panelDeep, paddingHorizontal: 8, paddingVertical: 6, gap: 10 },
   bannerText: { flex: 1, fontSize: 11, fontWeight: '700', lineHeight: 15 },
   bannerAction: { fontSize: 11, fontWeight: '900', textDecorationLine: 'underline' },
-  section: { gap: 6 },
-  sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, paddingVertical: 2 },
   kvKey: { color: C.subtle, fontSize: 12, flexShrink: 0 },
   kvValue: { fontFamily: MONO, fontWeight: '800', fontSize: 12, flexShrink: 1, textAlign: 'right' },

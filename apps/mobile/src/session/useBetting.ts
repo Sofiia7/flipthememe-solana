@@ -6,6 +6,7 @@ import type { SolanaRpc } from '../chain/rpc';
 import { observeSend } from '../chain/sendPhase';
 import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
 import { humanError } from '../lib/errors';
+import { playSound } from '../sound/sound';
 import { clearPendingBet, savePendingBet, type PendingBet } from './pendingBet';
 import type { SessionKey } from './sessionKey';
 
@@ -44,6 +45,9 @@ export function useBetting(input: {
       if (!owner || !sessionKey) return;
       busy.current = true;
       setBet({ phase: 'signing', roundId, side, amount, signature: null, error: null, at: Date.now() });
+      // The arcade feedback comes with the tap, not with the confirmation a second or two later
+      // (playSound is silent when muted in Profile).
+      playSound('bet');
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
       // Set once the bet is stored and about to go out: from then on only the chain decides its fate.
       let sent: PendingBet | null = null;

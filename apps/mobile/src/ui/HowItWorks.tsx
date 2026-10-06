@@ -57,7 +57,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="30s" color={C.neonYellow} size={12} />
       </Icon>
     ),
-    text: 'The strike is the average price of 10 s that start 30 s after entry closes. You call the next 60 s. Result in about 2 min.',
+    text: 'The start price is the average price over 10 s, 30 s after entry closes. You call the next minute. Result in about 2 min.',
   },
   {
     icon: (
@@ -89,7 +89,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="1" color={C.neonPink} size={16} />
       </Icon>
     ),
-    text: 'One arena, one token: a busy pump.fun coin whose pool is minutes old, so everyone plays the same chart. Price is TOKEN/SOL.',
+    text: 'One arena, one token: a busy pump.fun coin (its pool age is shown above the chart), so everyone plays the same chart. Price is TOKEN/SOL.',
   },
   {
     icon: (
@@ -101,7 +101,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
   },
 ];
 
-/** The rules in one screen: opened by the "?" in the arena header, and once by itself on the first launch. */
+/** The rules in one screen: opened by the "?" in the arena header. */
 export function HowItWorksSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
@@ -121,7 +121,7 @@ export function HowItWorksSheet({ visible, onClose }: { visible: boolean; onClos
             </View>
           ))}
         </ScrollView>
-        <Text style={styles.devnet}>Solana devnet · test SOL only</Text>
+        <Text style={styles.devnet}>Test SOL only</Text>
         <NeonButton title="LET'S PLAY" kind="purple" onPress={onClose} />
       </View>
     </Modal>

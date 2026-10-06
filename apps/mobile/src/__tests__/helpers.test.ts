@@ -167,18 +167,16 @@ test('rounds are classified and the one timer follows my earliest unresolved rou
 
   const watching = selectTimer({ nowSec: now, open: g.open, upcoming: g.upcoming, myUnresolved: [] });
   assert.equal(watching.kind, 'entry');
-  assert.equal(watching.label, 'ENTRY CLOSES IN');
   if (watching.kind === 'entry') assert.equal(watching.secondsLeft, 40);
 
   const result = selectTimer({ nowSec: now, open: g.open, upcoming: g.upcoming, myUnresolved: [measuring, open] });
   assert.equal(result.kind, 'result');
   if (result.kind === 'result') {
-    assert.equal(result.label, 'RESULT IN');
     assert.equal(result.stage, 'measuring');
     assert.equal(result.secondsLeft, 40);
   }
   const confirmingTimer = selectTimer({ nowSec: now, open: g.open, upcoming: null, myUnresolved: [confirming, measuring] });
-  assert.equal(confirmingTimer.label, 'CONFIRMING RESULT');
+  assert.equal(confirmingTimer.kind, 'confirming');
 
   const pause = round({ id: 9n, opensAt: BigInt(now - 70) });
   const t = selectTimer({ nowSec: now, open: null, upcoming: null, myUnresolved: [pause] });

@@ -10,7 +10,8 @@ export const CLUSTER = { id: 'solana:devnet', url: DEVNET_RPC } as const;
 export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com', icon: 'icon-512.png' };
 
 export const FAUCET_URL = 'https://faucet.solana.com';
-export const DEEP_LINK_PREFIX = 'flipthememe://round/';
+/** Live X chatter about the arena token (services/chatter, deployed as a Cloudflare Worker). */
+export const CHATTER_URL = 'https://ftm-chatter.sofiaseremeteva.workers.dev/v1/chatter';
 
 export const POLL = {
   arenaMs: 2_000,
@@ -46,6 +47,8 @@ const sol = (hundredths: bigint) => (LAMPORTS_PER_SOL * hundredths) / 100n;
 export const BET_AMOUNTS: readonly bigint[] = [sol(1n), sol(2n), sol(5n), sol(10n)];
 export const TOP_UP_AMOUNTS: readonly bigint[] = [sol(10n), sol(25n), sol(50n)];
 export const AIRDROP_LAMPORTS = LAMPORTS_PER_SOL;
+/** The program's usual minimum stake, used only until the config account has been read. */
+export const DEFAULT_MIN_STAKE = sol(1n);
 
 export const SESSION_RULES = {
   /**
@@ -54,6 +57,14 @@ export const SESSION_RULES = {
    */
   durationSecs: 7 * 24 * 60 * 60 - 10 * 60,
   maxPerBet: sol(10n),
+  /**
+   * The session's allowance (start_session's session_cap) is this many times what the account holds.
+   * The program counts every stake in `spent` and never gives it back, so the cap limits turnover,
+   * not loss: bets come out of the vault's available balance, and a stolen device key can neither
+   * withdraw nor bet more than max-per-bet per round. A cap equal to the deposit used up one-tap play
+   * after 5 bets on a 0.10 top up while the money was still there. See sessionCapFor (wallet/topUpPlan.ts).
+   */
+  capTurnoverFactor: 100n,
   /**
    * SOL sent to the device key, which pays only the network fee of each bet (5000 lamports): the
    * position rent comes from the game balance. 0.005 SOL lasts about 800 bets.

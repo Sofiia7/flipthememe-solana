@@ -98,7 +98,8 @@ test('a failed fresh authorization reports its step and code, without a retry', 
   assert.equal(error.step, 'authorize');
   assert.equal(error.walletCode, -1);
   assert.equal(t.sessions(), 1);
-  assert.match(humanError(error, 'topup'), /^The wallet did not connect\. .*\[authorize -1: /);
+  // The wallet's raw code and text stay in the console; the player reads one plain sentence.
+  assert.equal(humanError(error, 'topup'), 'The wallet did not connect. Check that it is set to Devnet and try again.');
 });
 
 test('a declined signature is reported as such and not retried', async () => {
@@ -118,7 +119,7 @@ test('a declined signature is reported as such and not retried', async () => {
   assert.equal(error.step, 'sign');
   assert.equal(error.walletCode, -3);
   assert.equal(t.sessions(), 1);
-  assert.match(humanError(error, 'topup'), /^Request declined in the wallet\. \[sign -3: /);
+  assert.equal(humanError(error, 'topup'), 'Request declined in the wallet.');
 });
 
 test('other failures while reauthorizing are not retried', async () => {

@@ -1,5 +1,5 @@
-// The session key: an ed25519 keypair made on this phone. The owner's wallet authorises it once
-// (start_session) to place bets within a budget; it can never withdraw. Signing is pure JS
+// The device key: an ed25519 keypair made on this phone. The owner's wallet authorises it once
+// (start_session) to place one-tap bets up to a max per bet; it can never withdraw. Signing is pure JS
 // (@noble/curves), not WebCrypto, so it works the same on every Android build.
 import * as SecureStore from 'expo-secure-store';
 import { ed25519 } from '@noble/curves/ed25519.js';
@@ -50,7 +50,7 @@ export function sessionKeyFromSecret(secret: Uint8Array): SessionKey {
   return { address, signer };
 }
 
-/** Loads the device session key from secure storage, creating it on first use. */
+/** Loads the device key from secure storage, creating it on first use. */
 export async function loadOrCreateSessionKey(): Promise<SessionKey> {
   const stored = await SecureStore.getItemAsync(STORE_KEY);
   if (stored) {

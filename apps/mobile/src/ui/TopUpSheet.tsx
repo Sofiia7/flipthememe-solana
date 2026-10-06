@@ -7,7 +7,9 @@ import { formatSol } from '../lib/format';
 import { sessionStatusOf, useApp } from '../state/AppProvider';
 import { C, MONO } from '../theme';
 import { isChecking } from '../wallet/pendingTx';
-import { topUpPlan } from '../wallet/topUpPlan';
+import { canRenewSession, minStakeOf } from '../wallet/playState';
+import { playRoute, topUpBill } from '../wallet/topUpFlow';
+import { RENT_FALLBACK, topUpPlan } from '../wallet/topUpPlan';
 import { ExtLink } from './common';
 import { NeonButton } from './NeonButton';
 import { PixelText } from './PixelText';
@@ -18,7 +20,9 @@ const solUp = (lamports: bigint) => formatSol(((lamports + 99_999n) / 100_000n) 
 /**
  * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with every
  * part of the amount listed before the wallet opens. With money already in the game balance the
- * sheet first offers to renew fast bets without a deposit.
+ * sheet first offers to renew one-tap bets without a deposit. For a visitor (no wallet connected yet)
+ * the same sheet connects and approves in one wallet session: the bill then assumes the worst case
+ * (new vault, new session, empty device key) and its total says "up to".
  */
 export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { wallet, my, myReady, rpc, arena, offsetSec } = useApp();
@@ -43,32 +47,34 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
     return undefined;
   }, [result, onClose]);
 
+  const route = playRoute(wallet.owner);
+  const connected = route.kind === 'top-up';
   const walletLamports = myReady ? my.walletLamports : null;
   const busy = wallet.busy !== null;
   // A sent top up or renew with no answer yet: its button waits for the chain instead of paying again.
   const topUpChecking = isChecking(wallet.pendingTx, 'topup');
   const renewChecking = isChecking(wallet.pendingTx, 'renew');
   const available = my.vault?.available ?? 0n;
-  const minStake = arena.config?.minStake ?? 10_000_000n;
+  const minStake = minStakeOf(arena.config?.minStake);
   const status = sessionStatusOf(my.session, chainNowSec(offsetSec, Date.now()), minStake);
-  const keyLow = (my.keyLamports ?? 0n) < SESSION_RULES.gasPerBet;
-  const canRenew = myReady && available >= minStake && (status !== 'active' || keyLow);
+  const canRenew = canRenewSession({ myReady, available, minStake, status, keyLamports: my.keyLamports });
 
-  const plan = topUpPlan({
+  const rents = rent ?? RENT_FALLBACK;
+  const { plan, upTo } = topUpBill({
+    known: connected && myReady,
     deposit: amount,
     vaultExists: my.vault !== null,
     sessionExists: my.session !== null,
     keyLamports: my.keyLamports,
-    rent,
-    gasMin: SESSION_RULES.gasMin,
-    gasTopUp: SESSION_RULES.gasTopUp,
+    rent: rents,
+    rules: SESSION_RULES,
   });
   const renewPlan = topUpPlan({
     deposit: 0n,
     vaultExists: true,
     sessionExists: my.session !== null,
     keyLamports: my.keyLamports,
-    rent,
+    rent: rents,
     gasMin: SESSION_RULES.gasMin,
     gasTopUp: SESSION_RULES.gasTopUp,
   });
@@ -78,6 +84,12 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
     ...(plan.setup > 0n ? ([['New accounts (rent)', plan.setup]] as [string, bigint][]) : []),
     ['Network fee', plan.networkFee],
   ];
+  const terms = `One-tap bets up to ${formatSol(SESSION_RULES.maxPerBet)} SOL per bet for 7 days. The device key can never withdraw.`;
+
+  const approve = () => {
+    setStarted(true);
+    void (route.kind === 'top-up' ? wallet.topUpAndPlay(amount) : wallet.connectAndPlay(amount));
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={busy ? () => undefined : onClose} statusBarTranslucent>
@@ -108,7 +120,7 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
                 void wallet.renewSession(available);
               }}
             />
-            <Text style={styles.terms}>7 days of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(available)} · the device key cannot withdraw</Text>
+            <Text style={styles.terms}>{terms}</Text>
             <Text style={styles.or}>OR ADD MORE</Text>
           </>
         ) : null}
@@ -130,40 +142,41 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
             </View>
           ))}
           <View style={[styles.billRow, styles.billTotal]}>
-            <Text style={[styles.billLabel, styles.billStrong]}>From your wallet</Text>
+            <Text style={[styles.billLabel, styles.billStrong]}>{upTo ? 'From your wallet (up to)' : 'From your wallet'}</Text>
             <Text style={[styles.billValue, styles.billStrong]}>{solUp(plan.total)} SOL</Text>
           </View>
         </View>
-        {!canRenew ? (
-          <Text style={styles.terms}>7 days of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(amount)} · the device key cannot withdraw</Text>
-        ) : null}
+        {!canRenew ? <Text style={styles.terms}>{terms}</Text> : null}
 
-        <Text style={styles.balance}>
-          Wallet: {walletLamports !== null ? `${formatSol(walletLamports)} SOL` : '...'} <Text style={styles.devnet}>devnet</Text>
-        </Text>
+        {connected ? (
+          <Text style={styles.balance}>
+            Wallet: {walletLamports !== null ? `${formatSol(walletLamports)} SOL` : '...'} <Text style={styles.devnet}>devnet</Text>
+          </Text>
+        ) : (
+          <Text style={styles.terms}>Your wallet opens once: it connects and approves in one step. Test SOL only.</Text>
+        )}
         <NeonButton
-          title={topUpChecking ? 'CHECKING...' : `APPROVE ${solUp(plan.total)} SOL`}
-          subtitle={topUpChecking ? 'waiting for devnet' : undefined}
+          title={connected ? (topUpChecking ? 'CHECKING...' : `APPROVE ${solUp(plan.total)} SOL`) : 'CONNECT & APPROVE'}
+          subtitle={connected ? (topUpChecking ? 'waiting for devnet' : undefined) : `up to ${solUp(plan.total)} SOL`}
           kind={canRenew ? 'purple' : 'gold'}
           big={!canRenew}
           busy={wallet.busy === 'topup' || topUpChecking}
           disabled={busy}
-          onPress={() => {
-            setStarted(true);
-            void wallet.topUpAndPlay(amount);
-          }}
+          onPress={approve}
         />
         <View style={styles.links}>
-          <Pressable
-            disabled={busy}
-            hitSlop={8}
-            onPress={() => {
-              setStarted(true);
-              void wallet.airdrop();
-            }}
-          >
-            <Text style={[styles.link, busy && styles.linkOff]}>{wallet.busy === 'airdrop' ? 'AIRDROPPING...' : 'AIRDROP 1 SOL'}</Text>
-          </Pressable>
+          {connected ? (
+            <Pressable
+              disabled={busy}
+              hitSlop={8}
+              onPress={() => {
+                setStarted(true);
+                void wallet.airdrop();
+              }}
+            >
+              <Text style={[styles.link, busy && styles.linkOff]}>{wallet.busy === 'airdrop' ? 'AIRDROPPING...' : 'AIRDROP 1 SOL'}</Text>
+            </Pressable>
+          ) : null}
           <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
         </View>
         {result ? (

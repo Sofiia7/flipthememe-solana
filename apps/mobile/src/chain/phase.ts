@@ -1,6 +1,6 @@
 // Pure round-phase logic shared by the screens: which round is open, which are in flight,
 // what the one labelled timer shows, and how a position ended. No React Native imports.
-import { Outcome, RefundReason, RoundStatus, Side, acceptedStake, positionPayout } from '@flipthememe/client';
+import { Outcome, RefundReason, RoundStatus, Side, acceptedStake, houseContext, positionPayout } from '@flipthememe/client';
 import type { PositionAccount, RoundAccount } from '@flipthememe/client';
 
 export type RoundRef = { id: bigint; account: RoundAccount };
@@ -43,21 +43,20 @@ export function classifyRounds<T extends RoundRef>(rounds: readonly T[], nowSec:
 export const OVERDUE_SECS = 120;
 
 export type TimerView =
-  | { kind: 'entry'; label: 'ENTRY CLOSES IN'; roundId: bigint; secondsLeft: number; mine: boolean }
+  | { kind: 'entry'; roundId: bigint; secondsLeft: number; mine: boolean }
   | {
       kind: 'result';
-      label: 'RESULT IN';
       roundId: bigint;
       secondsLeft: number;
       /** pause: waiting for the strike window; strike: strike window running; measuring: strike fixed. */
       stage: 'pause' | 'strike' | 'measuring';
     }
-  | { kind: 'confirming'; label: 'CONFIRMING RESULT'; roundId: bigint }
-  | { kind: 'next'; label: 'NEXT ROUND IN'; roundId: bigint; secondsLeft: number }
-  | { kind: 'waiting'; label: 'WAITING FOR THE NEXT ROUND' };
+  | { kind: 'confirming'; roundId: bigint }
+  | { kind: 'next'; roundId: bigint; secondsLeft: number }
+  | { kind: 'waiting' };
 
 /**
- * One labelled timer. It follows the player's earliest unresolved round (entry, then result,
+ * One timer (ArenaClock words it). It follows the player's earliest unresolved round (entry, then result,
  * then confirming); without one it shows the open round's entry deadline.
  */
 export function selectTimer(input: {
@@ -77,27 +76,26 @@ export function selectTimer(input: {
     const a = focus.account;
     const cutoff = Number(a.cutoffAt);
     const exitEnd = Number(a.exitEnd);
-    if (now < cutoff) return { kind: 'entry', label: 'ENTRY CLOSES IN', roundId: focus.id, secondsLeft: cutoff - now, mine: true };
+    if (now < cutoff) return { kind: 'entry', roundId: focus.id, secondsLeft: cutoff - now, mine: true };
     if (now < exitEnd) {
       // Live means the strike is on chain; before that the strike window is pending or running.
       const stage = a.status === RoundStatus.Live ? 'measuring' : now < Number(a.strikeStart) ? 'pause' : 'strike';
-      return { kind: 'result', label: 'RESULT IN', roundId: focus.id, secondsLeft: exitEnd - now, stage };
+      return { kind: 'result', roundId: focus.id, secondsLeft: exitEnd - now, stage };
     }
-    return { kind: 'confirming', label: 'CONFIRMING RESULT', roundId: focus.id };
+    return { kind: 'confirming', roundId: focus.id };
   }
   if (input.open) {
     return {
       kind: 'entry',
-      label: 'ENTRY CLOSES IN',
       roundId: input.open.id,
       secondsLeft: Number(input.open.account.cutoffAt) - now,
       mine: false,
     };
   }
   if (input.upcoming) {
-    return { kind: 'next', label: 'NEXT ROUND IN', roundId: input.upcoming.id, secondsLeft: Number(input.upcoming.account.opensAt) - now };
+    return { kind: 'next', roundId: input.upcoming.id, secondsLeft: Number(input.upcoming.account.opensAt) - now };
   }
-  return { kind: 'waiting', label: 'WAITING FOR THE NEXT ROUND' };
+  return { kind: 'waiting' };
 }
 
 export type ResultLabel = 'UP' | 'DOWN' | 'TIE' | 'NO PRICE' | 'EXPIRED' | 'REFUND' | 'NO MATCH' | 'PENDING';
@@ -138,7 +136,8 @@ export function bookFixed(a: Pick<RoundAccount, 'status' | 'strikeStart'>, nowSe
 }
 
 export function positionResult(
-  p: Pick<PositionAccount, 'side' | 'stake' | 'claimed' | 'payout'>,
+  /** `isHouse` matters only in an Expired round that holds a house stake: the house gets nothing, the others share its stake. */
+  p: Pick<PositionAccount, 'side' | 'stake' | 'claimed' | 'payout'> & { isHouse?: boolean },
   a: RoundAccount,
   nowSec: number,
 ): PositionResult {
@@ -146,11 +145,23 @@ export function positionResult(
   if (a.status !== RoundStatus.Final) return { kind: 'pending', payout: null, accepted };
   const payout = p.claimed
     ? p.payout
-    : positionPayout(a.rawUp, a.rawDown, a.outcome, a.feeWinBps, a.feeRefundBps, p.side, p.stake);
+    : positionPayout(a.rawUp, a.rawDown, a.outcome, a.feeWinBps, a.feeRefundBps, p.side, p.stake, houseContext(a, { isHouse: p.isHouse ?? false }));
   if (a.outcome === Outcome.NotActivated) return { kind: 'full-refund', payout, accepted: 0n };
   if (a.outcome === Outcome.Refund) return { kind: 'refund', payout, accepted };
   const won = (a.outcome === Outcome.Up && p.side === Side.Up) || (a.outcome === Outcome.Down && p.side === Side.Down);
   return { kind: won ? 'won' : 'lost', payout, accepted };
+}
+
+/**
+ * The headline of a refund toast. An Expired round can pay a player MORE than the stake: the house
+ * position forfeits its stake and the other positions share it, so the title says so when it did.
+ */
+export function refundTitle(r: { kind: 'refund' | 'full-refund'; label: ResultLabel; payout: bigint; stake: bigint }): string {
+  if (r.kind === 'full-refund') return 'No match - stake back';
+  if (r.label === 'TIE') return 'Tie - stake back';
+  if (r.label === 'NO PRICE') return 'No price - stake back';
+  if (r.label === 'EXPIRED') return r.payout > r.stake ? 'Expired - stake back plus a house share' : 'Expired - stake back';
+  return 'Refund - stake back';
 }
 
 /** Who is ahead right now against a fixed strike (instant price, not the exit window mean). */
