@@ -18,6 +18,7 @@ function round(over: Partial<RoundView> = {}): RoundView {
     rawUp: 0n,
     rawDown: 0n,
     houseAmount: 0n,
+    totalPaid: 0n,
     positionCount: 0,
     claimedCount: 0,
     feesSwept: false,
@@ -155,6 +156,17 @@ describe('nextStep: past settle_deadline', () => {
 describe('nextStep: final rounds', () => {
   test('empty round: close', () => {
     assert.equal(kind(round({ status: RoundStatus.Final, positionCount: 0 }), at(102)), 'close');
+  });
+
+  test('no position left but fees still due: sweep first, then close', () => {
+    const played = { status: RoundStatus.Final, positionCount: 0, rawUp: 50_000_000n, rawDown: 50_000_000n, totalPaid: 98_000_000n } as const;
+    assert.equal(kind(round(played), at(170)), 'sweep');
+    assert.equal(kind(round({ ...played, feesSwept: true }), at(170)), 'close');
+  });
+
+  test('no position left and the whole bank paid out: nothing to sweep, close', () => {
+    const refunded = { status: RoundStatus.Final, positionCount: 0, rawUp: 50_000_000n, rawDown: 0n, totalPaid: 50_000_000n } as const;
+    assert.equal(kind(round(refunded), at(170)), 'close');
   });
 
   test('claim every position, then sweep, then done', () => {

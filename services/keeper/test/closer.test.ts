@@ -12,9 +12,21 @@ import {
   roundAddress,
   vaultAddress,
   type PositionAccount,
+  type RoundAccount,
 } from '@flipthememe/client';
 import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from '@solana/kit';
-import { CLOSE_AFTER_SECS, CLOSE_BATCH, CLOSE_MARGIN_SECS, PositionCloser, effectiveCloseAfter } from '../src/closer.ts';
+import {
+  CLOSE_AFTER_SECS,
+  CLOSE_BATCH,
+  CLOSE_MARGIN_SECS,
+  CLOSE_REJECT_MS,
+  CLOSE_SCAN_MS,
+  MAX_ROUND_CHECKS,
+  MAX_ROUND_REJECTS,
+  PositionCloser,
+  ROUND_CLOSE_BATCH,
+  effectiveCloseAfter,
+} from '../src/closer.ts';
 import type { LogFields } from '../src/log.ts';
 import { FAKE_ACCOUNT_LAMPORTS, FakeChain, makeRound } from './fake-chain.ts';
 
@@ -35,9 +47,15 @@ async function setup(): Promise<Setup> {
 }
 
 /** A Final round whose exit window ended `age` seconds before NOW, with these positions. */
-async function finalRound(chain: FakeChain, id: bigint, age: bigint, positions: { owner: Address; claimed: boolean; isHouse?: boolean }[]): Promise<void> {
+async function finalRound(
+  chain: FakeChain,
+  id: bigint,
+  age: bigint,
+  positions: { owner: Address; claimed: boolean; isHouse?: boolean }[],
+  over: Partial<RoundAccount> = {},
+): Promise<void> {
   const opensAt = NOW - age - 160n; // exit_end = opens_at + 160
-  chain.rounds.set(id, makeRound(id, opensAt, POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: positions.length }));
+  chain.rounds.set(id, makeRound(id, opensAt, POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: positions.length, ...over }));
   const round = await roundAddress(id);
   const list: PositionAccount[] = positions.map((p) => ({
     round,
@@ -160,5 +178,359 @@ describe('PositionCloser', () => {
     chain.positions.set(7n, (chain.positions.get(7n) ?? []).filter((p) => p.authority === b));
     await pc.scan(0, NOW);
     assert.deepEqual([pc.queue.length, logs.at(-1)?.claimed, logs.at(-1)?.skipped], [0, 1, 1]);
+  });
+});
+
+// Audit L2: the Round account of a played round (about 0.0025 SOL of rent the keeper paid at
+// create_round) is returned once its last position is closed. The upgraded program decrements
+// round.position_count in close_position and lets close_empty_round close a swept Final round whose
+// count is 0; the fake chain has no program, so `applyUpgradedCloses` applies that to its state.
+describe('PositionCloser: returns the round rent after the last position', () => {
+  const programError = (name: string) =>
+    Object.assign(new Error('Transaction simulation failed'), { context: { logs: [`Program log: AnchorError occurred. Error Code: ${name}. Error Number: 6000.`] } });
+
+  /** close_position takes the position away and decrements both counters; close_empty_round removes the round. */
+  const upgradedProgram = (chain: FakeChain): void => chain.applyUpgradedCloses();
+
+  /** A round that is claimed and swept, with `n` claimed positions. */
+  const swept = (n: number): Partial<RoundAccount> => ({ feesSwept: true, claimedCount: n, rawUp: 10_000_000n, rawDown: 10_000_000n });
+  const names = (chain: FakeChain): string[][] => chain.sent.map((tx) => tx.map((ix) => ix.name));
+  const checks = (logs: LogFields[]): LogFields[] => logs.filter((l) => l.event === 'rounds_checked');
+
+  test('the last position of a swept round is closed: the round follows in a transaction of its own, its rent to the admin', async () => {
+    const { chain, keeper, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition']]);
+    // Read fresh after the batch: no positions left and the bank is swept, so the round is queued.
+    assert.deepEqual(checks(logs), [{ event: 'rounds_checked', checked: 1, closable: 1, lamports: FAKE_ACCOUNT_LAMPORTS, notEmpty: 0, unswept: 0 }]);
+    assert.equal(pc.hasWork(), true);
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition'], ['closeEmptyRound']]);
+    // config (read-only), the round, and the admin that gets the rent back.
+    assert.deepEqual(chain.sent[1]?.[0]?.accounts, [await configAddress(), await roundAddress(5n), keeper.address]);
+    const closed = logs.filter((l) => l.event === 'round_closed');
+    assert.equal(closed.length, 1);
+    assert.deepEqual([closed[0]?.round, closed[0]?.lamports, typeof closed[0]?.sig], [5n, FAKE_ACCOUNT_LAMPORTS, 'string']);
+    assert.deepEqual([pc.closedRounds, pc.closedRoundLamports, pc.hasWork()], [1, FAKE_ACCOUNT_LAMPORTS, false]);
+    // Nothing is left to do: the next scan and the next close send nothing.
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    assert.equal(chain.sent.length, 2);
+  });
+
+  test('the rent goes to the admin the scheduler hands over (config.admin), by default the keeper', async () => {
+    const { chain, keeper, closer } = await setup();
+    upgradedProgram(chain);
+    const [a, admin] = await owners(2);
+    if (!a || !admin) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    assert.equal(pc.admin, keeper.address);
+    pc.admin = admin;
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    await pc.closeNext(0);
+    assert.equal(chain.sent[1]?.[0]?.accounts[2], admin);
+  });
+
+  test('a round that still has positions is left alone and picked up when the last one is closed', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a, b] = await owners(2);
+    if (!a || !b) throw new Error('owners');
+    // a's position can be closed, b has not claimed yet.
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }, { owner: b, claimed: false }], { claimedCount: 1, rawUp: 10_000_000n, rawDown: 10_000_000n });
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual(checks(logs), [{ event: 'rounds_checked', checked: 1, closable: 0, lamports: 0n, notEmpty: 1, unswept: 0 }]);
+    assert.deepEqual([pc.hasWork(), pc.status().roundsPending], [false, 0]);
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition']]);
+    // b claims, the round is swept and the next scan queues b's position; closing it queues the round.
+    const round = chain.rounds.get(5n);
+    if (!round) throw new Error('round');
+    chain.rounds.set(5n, { ...round, claimedCount: 1, feesSwept: true });
+    chain.positions.set(5n, (chain.positions.get(5n) ?? []).map((p) => ({ ...p, claimed: true })));
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    assert.deepEqual(names(chain), [['closePosition'], ['closePosition'], ['closeEmptyRound']]);
+  });
+
+  test('a round whose bank is not swept yet is left alone and looked at again on the next scans', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], { ...swept(1), feesSwept: false });
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual(checks(logs).at(-1), { event: 'rounds_checked', checked: 1, closable: 0, lamports: 0n, notEmpty: 0, unswept: 1 });
+    assert.deepEqual([pc.hasWork(), pc.status().roundsPending], [false, 1]);
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    assert.deepEqual([pc.hasWork(), chain.sent.length], [false, 1]);
+    // The sweep lands: the next scan queues the round.
+    const round = chain.rounds.get(5n);
+    if (!round) throw new Error('round');
+    chain.rounds.set(5n, { ...round, feesSwept: true });
+    await pc.scan(2 * CLOSE_SCAN_MS, NOW);
+    assert.equal(pc.hasWork(), true);
+    await pc.closeNext(2 * CLOSE_SCAN_MS);
+    assert.deepEqual(names(chain), [['closePosition'], ['closeEmptyRound']]);
+  });
+
+  test(`a round that stays unswept is dropped after ${MAX_ROUND_CHECKS} looks, not read for ever`, async () => {
+    const { chain, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], { ...swept(1), feesSwept: false });
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0); // look 1, right after the batch
+    for (let k = 1; k < MAX_ROUND_CHECKS; k++) {
+      assert.equal(pc.status().roundsPending, 1, `still watched at look ${k}`);
+      await pc.scan(k * CLOSE_SCAN_MS, NOW);
+    }
+    assert.equal(pc.status().roundsPending, 0);
+    const reads = chain.reads;
+    await pc.scan(MAX_ROUND_CHECKS * CLOSE_SCAN_MS, NOW);
+    assert.deepEqual([chain.reads, chain.sent.length], [reads, 1]);
+  });
+
+  test('a round with no bank at all needs no sweep before it is closed', async () => {
+    const { chain, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], { claimedCount: 1, feesSwept: false, rawUp: 0n, rawDown: 0n });
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition'], ['closeEmptyRound']]);
+  });
+
+  test('a rejected round close is left alone for an hour, then tried once more', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    let attempts = 0;
+    chain.failWhen = (ixs) => (ixs.some((ix) => ix.name === 'closeEmptyRound') ? (attempts++, programError('NotClosable')) : null);
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    await assert.rejects(pc.closeNext(0));
+    assert.deepEqual(logs.at(-1), { event: 'round_close_failed', round: 5n, error: 'NotClosable', retry: 'after the cooldown' });
+    assert.deepEqual([attempts, pc.hasWork(), pc.closedRounds], [1, false, 0]);
+    // Scans inside the hour do not queue it again, however often they run.
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    await pc.scan(CLOSE_REJECT_MS - 1, NOW);
+    assert.deepEqual([attempts, pc.hasWork()], [1, false]);
+    // After the hour one more try; this time the chain accepts it.
+    chain.failWhen = null;
+    await pc.scan(CLOSE_REJECT_MS, NOW);
+    assert.equal(pc.hasWork(), true);
+    await pc.closeNext(CLOSE_REJECT_MS);
+    assert.deepEqual([names(chain), pc.closedRounds, pc.status().roundsPending], [[['closePosition'], ['closeEmptyRound']], 1, 0]);
+  });
+
+  test(`a round the program keeps refusing is given up after ${MAX_ROUND_REJECTS} tries`, async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    let attempts = 0;
+    chain.failWhen = (ixs) => (ixs.some((ix) => ix.name === 'closeEmptyRound') ? (attempts++, programError('NotClosable')) : null);
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    for (let k = 0; k < MAX_ROUND_REJECTS; k++) {
+      const at = k * CLOSE_REJECT_MS;
+      if (k > 0) await pc.scan(at, NOW);
+      await assert.rejects(pc.closeNext(at));
+    }
+    assert.equal(attempts, MAX_ROUND_REJECTS);
+    assert.deepEqual(logs.at(-1), { event: 'round_close_failed', round: 5n, error: 'NotClosable', retry: 'not again' });
+    await pc.scan(MAX_ROUND_REJECTS * CLOSE_REJECT_MS, NOW);
+    assert.deepEqual([attempts, pc.hasWork(), pc.status().roundsPending], [MAX_ROUND_REJECTS, false, 0]);
+  });
+
+  test('two rounds that end in the same batch are closed in one transaction, oldest first', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a, b] = await owners(2);
+    if (!a || !b) throw new Error('owners');
+    await finalRound(chain, 6n, 30n * HOUR, [{ owner: b, claimed: true }], swept(1));
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual(checks(logs), [{ event: 'rounds_checked', checked: 2, closable: 2, lamports: 2n * FAKE_ACCOUNT_LAMPORTS, notEmpty: 0, unswept: 0 }]);
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition', 'closePosition'], ['closeEmptyRound', 'closeEmptyRound']]);
+    assert.deepEqual(chain.sent[1]?.map((ix) => ix.accounts[1]), [await roundAddress(5n), await roundAddress(6n)]);
+    assert.deepEqual(logs.filter((l) => l.event === 'round_closed').map((l) => [l.round, l.lamports]), [[5n, FAKE_ACCOUNT_LAMPORTS], [6n, FAKE_ACCOUNT_LAMPORTS]]);
+    assert.deepEqual([pc.closedRounds, pc.closedRoundLamports], [2, 2n * FAKE_ACCOUNT_LAMPORTS]);
+  });
+
+  test('a round with more positions than one batch is read only after its last batch', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const many = await owners(CLOSE_BATCH + 2);
+    await finalRound(chain, 5n, 30n * HOUR, many.map((owner) => ({ owner, claimed: true })), swept(many.length));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    const reads = chain.reads;
+    await pc.closeNext(0);
+    assert.deepEqual([chain.reads, checks(logs).length], [reads, 0]);
+    await pc.closeNext(0);
+    assert.equal(checks(logs).length, 1);
+    await pc.closeNext(0);
+    assert.deepEqual(chain.sent.map((tx) => tx.length), [CLOSE_BATCH, 2, 1]);
+    assert.equal(chain.sent[2]?.[0]?.name, 'closeEmptyRound');
+  });
+
+  test(`${ROUND_CLOSE_BATCH} round closes fit one transaction, more go in the next; a scan finds rounds whose last position vanished`, async () => {
+    const { chain, logs, closer } = await setup();
+    const count = ROUND_CLOSE_BATCH + 2;
+    const ids = Array.from({ length: count }, (_, k) => 20n + BigInt(k));
+    for (const id of ids) await finalRound(chain, id, 30n * HOUR, [{ owner: (await owners(1))[0] as Address, claimed: true }], swept(1));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    assert.equal(pc.queue.length, count);
+    // Every position is closed by someone else before the next scan (or the keeper's confirmation was lost).
+    for (const id of ids) {
+      const round = chain.rounds.get(id);
+      if (!round) throw new Error('round');
+      chain.rounds.set(id, { ...round, positionCount: 0, claimedCount: 0 });
+      chain.positions.set(id, []);
+    }
+    upgradedProgram(chain);
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    assert.deepEqual([pc.queue.length, pc.status().roundsQueued], [0, count]);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    assert.deepEqual(chain.sent.map((tx) => tx.length), [ROUND_CLOSE_BATCH, 2]);
+    assert.ok(chain.sent.flat().every((ix) => ix.name === 'closeEmptyRound'));
+    assert.equal(logs.some((l) => l.event === 'close_batch_shrunk' || l.event === 'round_close_batch_shrunk'), false);
+    assert.deepEqual([pc.closedRounds, pc.hasWork()], [count, false]);
+  });
+
+  test('a round whose positions the old program closed keeps its count: it is read once and then forgotten', async () => {
+    const { chain, logs, closer } = await setup();
+    const [a, b] = await owners(2);
+    if (!a || !b) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }, { owner: b, claimed: true }], swept(2));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    // The old program closed both positions without touching round.position_count.
+    chain.positions.set(5n, []);
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    assert.deepEqual(checks(logs), [{ event: 'rounds_checked', checked: 1, closable: 0, lamports: 0n, notEmpty: 1, unswept: 0 }]);
+    const reads = chain.reads;
+    await pc.scan(2 * CLOSE_SCAN_MS, NOW);
+    await pc.scan(3 * CLOSE_SCAN_MS, NOW);
+    assert.deepEqual([chain.reads, chain.sent.length, pc.hasWork(), pc.status().roundsPending], [reads, 0, false, 0]);
+  });
+
+  test('an RPC error while reading the rounds does not fail the batch: it is logged and the next scan tries again', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    chain.readError = new Error('socket hang up');
+    await pc.closeNext(0);
+    assert.deepEqual(logs.find((l) => l.event === 'round_check_failed'), { event: 'round_check_failed', rounds: 1, error: 'socket hang up' });
+    assert.deepEqual([pc.closed, pc.hasWork(), pc.status().roundsPending, names(chain)], [1, false, 1, [['closePosition']]]);
+    chain.readError = null;
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    assert.deepEqual(names(chain), [['closePosition'], ['closeEmptyRound']]);
+  });
+
+  test('HTTP 429 while reading the rounds is passed on so the scheduler backs off, and the round is kept for the next scan', async () => {
+    const { chain, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    await pc.scan(0, NOW);
+    chain.readError = Object.assign(new Error('HTTP error (429): Too Many Requests'), { context: { statusCode: 429 } });
+    await assert.rejects(pc.closeNext(0));
+    assert.deepEqual([pc.closed, pc.status().roundsPending], [1, 1]);
+    chain.readError = null;
+    await pc.scan(CLOSE_SCAN_MS, NOW);
+    await pc.closeNext(CLOSE_SCAN_MS);
+    assert.deepEqual(names(chain), [['closePosition'], ['closeEmptyRound']]);
+  });
+
+  test('a failing round batch is retried one round per transaction, and the one the program refuses is set aside', async () => {
+    const { chain, logs, closer } = await setup();
+    upgradedProgram(chain);
+    const [a, b, c] = await owners(3);
+    if (!a || !b || !c) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    await finalRound(chain, 6n, 30n * HOUR, [{ owner: b, claimed: true }], swept(1));
+    await finalRound(chain, 7n, 30n * HOUR, [{ owner: c, claimed: true }], swept(1));
+    const stuck = await roundAddress(6n);
+    chain.failWhen = (ixs) => (ixs.some((ix) => ix.name === 'closeEmptyRound' && ix.accounts.includes(stuck)) ? programError('NotClosable') : null);
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    await assert.rejects(pc.closeNext(0));
+    assert.deepEqual(
+      logs.filter((l) => l.event === 'round_close_failed').map((l) => [l.round, l.error, l.retry]),
+      [[5n, 'NotClosable', 'one by one'], [6n, 'NotClosable', 'one by one'], [7n, 'NotClosable', 'one by one']],
+    );
+    await pc.closeNext(0);
+    await assert.rejects(pc.closeNext(0));
+    await pc.closeNext(0);
+    assert.deepEqual(names(chain), [['closePosition', 'closePosition', 'closePosition'], ['closeEmptyRound'], ['closeEmptyRound']]);
+    assert.deepEqual(chain.sent.slice(1).map((tx) => tx[0]?.accounts[1]), [await roundAddress(5n), await roundAddress(7n)]);
+    assert.deepEqual(logs.filter((l) => l.event === 'round_close_failed').at(-1), { event: 'round_close_failed', round: 6n, error: 'NotClosable', retry: 'after the cooldown' });
+    assert.deepEqual([pc.closedRounds, pc.hasWork(), pc.status().roundsPending], [2, false, 1]);
+  });
+
+  test('the status keeps its old fields in place and only adds the round counters', async () => {
+    const { chain, closer } = await setup();
+    upgradedProgram(chain);
+    const [a] = await owners(1);
+    if (!a) throw new Error('owners');
+    await finalRound(chain, 5n, 30n * HOUR, [{ owner: a, claimed: true }], swept(1));
+    const pc = closer();
+    assert.deepEqual(Object.keys(pc.status()), [
+      'closeAfterSecs',
+      'queued',
+      'queuedLamports',
+      'closed',
+      'closedLamports',
+      'nextScanAt',
+      'closedRounds',
+      'closedRoundLamports',
+      'roundsQueued',
+      'roundsPending',
+    ]);
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual([pc.status().roundsQueued, pc.status().roundsPending], [1, 1]);
+    await pc.closeNext(0);
+    const status = pc.status();
+    assert.deepEqual([status.closed, status.closedRounds, status.closedRoundLamports, status.roundsQueued, status.roundsPending], [1, 1, FAKE_ACCOUNT_LAMPORTS, 0, 0]);
   });
 });

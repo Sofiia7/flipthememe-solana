@@ -535,6 +535,48 @@ describe('scheduler: October 2026 upgrade', () => {
       await vaultAddress(owners[0] as Address),
     ]);
   });
+
+  test('once the last position of a round is closed the round is closed too, its rent to config.admin, in a later quiet tick', async (t) => {
+    // The success cooldown of a step runs on the real clock: move Date along with the ticks.
+    const clock = clockAt(t, (MINUTE + 10) * 1000);
+    const h = await harness({ closer: (chain, signer, logs) => new PositionCloser({ rpc: chain.rpc(), signer, logger: (f) => logs.push(f), startMs: 0 }) });
+    if (!h.chain.config) throw new Error('no config');
+    h.chain.config = { ...h.chain.config, admin: ADMIN_ELSEWHERE };
+    h.chain.applyUpgradedCloses();
+    const round2 = await roundAddress(2n);
+    const owners = [(await generateKeyPairSigner()).address, (await generateKeyPairSigner()).address];
+    // Round 2 is older than the per-tick window (ids 4 to 9): the closer alone takes care of it.
+    h.chain.rounds.set(2n, makeRound(2n, BigInt(MINUTE - 2 * 86_400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: 2, claimedCount: 2, feesSwept: true, rawUp: SOL / 100n, rawDown: SOL / 100n }));
+    h.chain.positions.set(
+      2n,
+      owners.map((owner) => ({ round: round2, authority: owner, side: Side.Up, stake: SOL / 100n, face: new Uint8Array(8), isHouse: false, claimed: true, payout: 0n, bump: 250 })),
+    );
+    await tick(h, MINUTE + 10); // scan
+    clock.setOffsetSecs(11);
+    await tick(h, MINUTE + 21); // both positions in one transaction; the round is read and queued behind it
+    assert.deepEqual(h.chain.sent.map((tx) => tx.map((ix) => ix.name)), [['closePosition', 'closePosition']]);
+    assert.equal(h.logs.some((l) => l.event === 'round_closed'), false);
+    clock.setOffsetSecs(15);
+    await tick(h, MINUTE + 25); // within CLOSE_INTERVAL_MS of the last one
+    assert.equal(h.chain.sent.length, 1);
+    clock.setOffsetSecs(22);
+    await tick(h, MINUTE + 32);
+    assert.deepEqual(h.chain.sent.slice(1).map((tx) => tx.map((ix) => ix.name)), [['closeEmptyRound']]);
+    assert.deepEqual(h.chain.sent[1]?.[0]?.accounts, [await configAddress(), round2, ADMIN_ELSEWHERE]);
+    assert.deepEqual(h.logs.filter((l) => l.event === 'round_closed').map((l) => [l.round, l.lamports]), [[2n, 2_000_000n]]);
+    assert.deepEqual(h.scheduler.status().positions, {
+      closeAfterSecs: 86_400n,
+      queued: 0,
+      queuedLamports: 0n,
+      closed: 2,
+      closedLamports: 4_000_000n,
+      nextScanAt: new Date((MINUTE + 10) * 1000 + 300_000).toISOString(),
+      closedRounds: 1,
+      closedRoundLamports: 2_000_000n,
+      roundsQueued: 0,
+      roundsPending: 0,
+    });
+  });
 });
 
 /** The tests below move the clock by hand: only Date is mocked, promises and the fake chain stay real. */

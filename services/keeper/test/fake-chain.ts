@@ -233,10 +233,48 @@ export class FakeChain {
   readonly signed: SentSignatures[] = [];
   /** Set to make sendTransaction fail (like a simulation error) for the transactions it returns an Error for. */
   failWhen: ((instructions: SentInstruction[]) => Error | null) | null = null;
+  /**
+   * Called with the instructions of every transaction that was accepted. The fake never applies a
+   * transaction by itself; a test that needs the chain to move on (a position that is gone after
+   * its close) changes `rounds` and `positions` here.
+   */
+  afterSend: ((instructions: SentInstruction[]) => void | Promise<void>) | null = null;
+  /** Set to make every getMultipleAccounts call fail (a dropped connection, an HTTP 429). */
+  readError: Error | null = null;
+  /** How many getMultipleAccounts calls were made (rounds, config and balances are all read this way). */
+  reads = 0;
 
   constructor(keeper: Address) {
     this.keeper = keeper;
     this.house = keeper;
+  }
+
+  /**
+   * Makes the fake behave like the upgraded program for the two closes that matter to the keeper
+   * (audit L2): close_position takes the position away and decrements both counters of its round,
+   * close_empty_round removes the round. Replaces `afterSend`.
+   */
+  applyUpgradedCloses(): void {
+    const roundIdAt = async (at: Address | undefined): Promise<bigint | undefined> => {
+      for (const id of this.rounds.keys()) if ((await roundAddress(id)) === at) return id;
+      return undefined;
+    };
+    this.afterSend = async (instructions) => {
+      for (const ix of instructions) {
+        const id = await roundIdAt(ix.accounts[1]);
+        if (id === undefined) continue;
+        if (ix.name === 'closePosition') {
+          const keep: PositionAccount[] = [];
+          for (const p of this.positions.get(id) ?? []) if ((await positionAddress(p.round, p.authority)) !== ix.accounts[2]) keep.push(p);
+          this.positions.set(id, keep);
+          const round = this.rounds.get(id);
+          if (round) this.rounds.set(id, { ...round, positionCount: round.positionCount - 1, claimedCount: round.claimedCount - 1 });
+        } else if (ix.name === 'closeEmptyRound') {
+          this.rounds.delete(id);
+          this.positions.delete(id);
+        }
+      }
+    };
   }
 
   private async byAddress(): Promise<Map<string, { data: Uint8Array; lamports: bigint; system: boolean }>> {
@@ -294,6 +332,8 @@ export class FakeChain {
     const fake = {
       getMultipleAccounts: (keys: Address[]) =>
         send(async () => {
+          this.reads++;
+          if (this.readError) throw this.readError;
           const map = await this.byAddress();
           return { context: { slot: 1n }, value: keys.map((k) => { const entry = map.get(k); return entry ? this.info(entry) : null; }) };
         }),
@@ -321,8 +361,9 @@ export class FakeChain {
       getLatestBlockhash: () =>
         send(() => ({ context: { slot: 1n }, value: { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1_000n } })),
       sendTransaction: (wire: string) =>
-        send(() => {
+        send(async () => {
           this.record(wire);
+          await this.afterSend?.(this.sent.at(-1) ?? []);
           return 'fake-signature';
         }),
       getSignatureStatuses: () =>

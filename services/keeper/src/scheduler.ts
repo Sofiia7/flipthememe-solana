@@ -3,7 +3,7 @@
  * rounds from devnet, then starts, per round, the first step that is due (see steps.ts). Steps run
  * in the background, one at a time per round, so a slow confirmation never stalls the other
  * rounds; a failed step is logged and retried on a later tick. On a quiet tick, paid positions
- * are closed so their rent goes back (closer.ts).
+ * are closed so their rent goes back, and the Round account after its last position (closer.ts).
  */
 import {
   DEPTH_K,
@@ -70,7 +70,7 @@ export const RATE_LIMIT_PAUSE_MS = 4_000;
 /** Dispatch order when more steps are due than slots: time-critical first. */
 const PRIORITY: Record<StepKind | 'create', number> = { create: 0, fill: 1, strike: 2, settle: 2, expire: 3, claim: 4, sweep: 4, close: 4 };
 /**
- * Closing paid positions never competes with the rounds: a scan or a batch starts only on a tick
+ * Returning rent (paid positions, finished rounds) never competes with the rounds: a scan or a batch starts only on a tick
  * where nothing else is in flight, inside the quiet part of the minute (strike and settle fall due
  * at second 41, claims follow, the next round is created from second 45), at most one every
  * CLOSE_INTERVAL_MS. So it holds at most one of the MAX_PARALLEL_STEPS slots, and only then.
@@ -211,6 +211,8 @@ export class Scheduler {
       return;
     }
     const me = this.signer.address;
+    // close_empty_round pays the rent of a finished round to config.admin.
+    this.closer.admin = config.admin;
     if (snap.keeperLamports < LOW_BALANCE_LAMPORTS) {
       this.warn('balance', { event: 'keeper_balance_low', lamports: snap.keeperLamports });
     }

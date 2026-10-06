@@ -284,10 +284,25 @@ Measured on devnet on 5 October 2026 (rent there is 5080 lamports per byte inclu
 - Empty round (nobody bets): create, strike (ends NotActivated), close = 3 fees of 5000 lamports;
   the round rent (0.00184 SOL) comes back on close. 0.0009 SOL per hour.
 - Played round: 6 fees (create, house fill, strike, settle, claim, sweep) plus the round's rent
-  (0.00184 SOL), which stays on chain as history. Since 6 October the house position's rent
-  (0.00116 SOL) comes out of the house Vault and goes back into it when the keeper closes the
-  position a day later, and the 2% fee goes to the separate treasury at the sweep; the house stake
-  itself is won or lost inside the house Vault.
+  (0.00184 SOL), which stays on chain until the round is closed (next paragraph). Since 6 October
+  the house position's rent (0.00116 SOL) comes out of the house Vault and goes back into it when
+  the keeper closes the position a day later, and the 2% fee goes to the separate treasury at the
+  sweep; the house stake itself is won or lost inside the house Vault.
+
+The round rent comes back too (audit L2; about 3.6 SOL a day on mainnet at one round a minute).
+After the keeper has closed the last position of a round it reads the round again and, when it is
+Final with no positions left and its fees swept (or no bank), sends `close_empty_round` (up to 10
+rounds per transaction, the rent goes to `config.admin`, the keeper key). This works only for rounds
+whose positions are closed by the upgraded program, which makes `close_position` decrement
+`round.position_count`: on a round whose positions the old program closed the count stays above 0
+for ever, so its rent stays on chain. A refused round close is left alone for an hour and given up
+after 3 refusals; the list of rounds to watch lives in memory only, so a round whose last position
+was closed just before a restart is not found again. New log events: `round_closed` (round,
+lamports, sig), `round_close_failed` (round, error, retry), `rounds_checked`, `round_check_failed`;
+the `positions` block of `status.json` gains `closedRounds`, `closedRoundLamports`, `roundsQueued`
+and `roundsPending`. Deploy the new keeper image together with the program upgrade: the old
+keeper's `close_position` passes the round read-only, which the upgraded program refuses (it has to
+write the counters), so an old keeper would stop returning position rent altogether.
 
 ## RPC limits
 

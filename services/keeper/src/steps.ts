@@ -26,6 +26,7 @@ export type RoundView = Pick<
   | 'rawUp'
   | 'rawDown'
   | 'houseAmount'
+  | 'totalPaid'
   | 'positionCount'
   | 'claimedCount'
   | 'feesSwept'
@@ -45,7 +46,8 @@ const ms = (secs: bigint): number => Number(secs) * 1000;
 /**
  * The first step that is due for `round` at local time `nowMs`:
  *
- * - Final: claim every position, then sweep the fees; a round without positions is closed.
+ * - Final: claim every position, then sweep the fees; a round without positions is closed (after its
+ *   sweep, when it still holds something to sweep).
  * - Not final and the devnet clock is past `settle_deadline`: refund_expired.
  * - Open after `strike_end` (+1 s locally, and the devnet clock past it too) and while the devnet
  *   clock is before `exit_start`: set_strike. The program itself turns a round without a matched
@@ -58,7 +60,12 @@ const ms = (secs: bigint): number => Number(secs) * 1000;
  */
 export function nextStep(round: RoundView, nowMs: number, ctx: StepContext): Step {
   if (round.status === RoundStatus.Final) {
-    if (round.positionCount === 0) return { kind: 'close' };
+    if (round.positionCount === 0) {
+      // The program closes a round with no position left only once its fees are swept, or when
+      // nothing is left to sweep (the whole bank was paid out). Positions closed early by anyone can
+      // leave a played round here with the sweep still due.
+      return round.feesSwept || round.totalPaid === round.rawUp + round.rawDown ? { kind: 'close' } : { kind: 'sweep' };
+    }
     if (round.claimedCount < round.positionCount) return { kind: 'claim' };
     if (!round.feesSwept) return { kind: 'sweep' };
     return { kind: 'done' };
