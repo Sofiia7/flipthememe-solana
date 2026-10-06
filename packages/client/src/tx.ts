@@ -133,6 +133,11 @@ export const PROGRAM_ERRORS = [
   'HouseDailyCapExceeded',
   'AttestorRequired',
   'InvalidAttestor',
+  // Strike window and round bounds; append only.
+  'StrikeWindowClosed',
+  'RoundTooLong',
+  'SettleDeadlineTooFar',
+  'MaxBankBelowMin',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 

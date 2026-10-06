@@ -331,23 +331,28 @@ impl Env {
     /// Round `id` opening at `open`, with the production cadence: 60 s entry, 30 s pause,
     /// 10 s strike window, exit window 60 s after the strike window starts.
     fn create_round(&mut self, id: u64, open: i64, max_bank: u64) -> Result<(), String> {
-        let cutoff = open + 60;
-        let args = CreateRoundArgs {
-            token_mint: Pubkey::new_unique(),
-            pool: Pubkey::new_unique(),
-            opens_at: open,
-            cutoff_at: cutoff,
-            strike_start: cutoff + 30,
-            strike_end: cutoff + 40,
-            exit_start: cutoff + 90,
-            exit_end: cutoff + 100,
-            settle_deadline: cutoff + 700,
-            max_bank,
-        };
+        self.create_round_with(id, round_args(open, max_bank))
+    }
+
+    fn create_round_with(&mut self, id: u64, args: CreateRoundArgs) -> Result<(), String> {
         self.send_admin(ix(
             acc::CreateRound { config: config_pda(), round: round_pda(id), admin: self.admin.pubkey(), system_program: system_program::ID },
             ixs::CreateRound { round_id: id, args },
         ))
+    }
+
+    /// Anyone may turn a round nobody priced in time into a refund; a stranger pays the fee here.
+    fn expire(&mut self, id: u64) -> Result<(), String> {
+        let stranger = Keypair::new();
+        self.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
+        self.send(vec![ix(acc::RefundExpired { round: round_pda(id) }, ixs::RefundExpired {})], &stranger, &[&stranger])
+    }
+
+    /// New rounds get this refund fee (the live devnet config has 0).
+    fn set_refund_fee(&mut self, bps: u16) {
+        let mut params = self.params();
+        params.fee_refund_bps = bps;
+        self.send_admin(ix(acc::AdminConfig { config: config_pda(), admin: self.admin.pubkey() }, ixs::UpdateConfig { params })).unwrap();
     }
 
     fn bet(&mut self, id: u64, p: &Player, side: Side, amount: u64) -> Result<(), String> {
@@ -434,6 +439,24 @@ impl Env {
         self.set_strike(id, &admin, samples(100, &[strike; 6])).unwrap();
         self.warp(r.exit_end);
         self.settle(id, samples(200, &[exit; 6])).unwrap();
+    }
+}
+
+/// The keeper's cadence from `open`: cutoff +60, strike window +90..+100, exit window +150..+160,
+/// settle deadline 600 s after the exit window.
+fn round_args(open: i64, max_bank: u64) -> CreateRoundArgs {
+    let cutoff = open + 60;
+    CreateRoundArgs {
+        token_mint: Pubkey::new_unique(),
+        pool: Pubkey::new_unique(),
+        opens_at: open,
+        cutoff_at: cutoff,
+        strike_start: cutoff + 30,
+        strike_end: cutoff + 40,
+        exit_start: cutoff + 90,
+        exit_end: cutoff + 100,
+        settle_deadline: cutoff + 700,
+        max_bank,
     }
 }
 
@@ -796,8 +819,10 @@ fn empty_rounds_close_and_return_rent() {
     env.warp(T0 + 60);
     env.bet(1, &a, Side::Up, CSOL).unwrap();
     let admin = env.admin.insecure_clone();
-    env.warp(T0 + 160);
+    // Each strike goes in its own window, from strike_end up to exit_start.
+    env.warp(T0 + 100);
     env.set_strike(0, &admin, vec![]).unwrap();
+    env.warp(T0 + 160);
     env.set_strike(1, &admin, vec![]).unwrap();
     let close = |id| {
         ix(
@@ -1325,13 +1350,15 @@ fn an_attestor_outage_ends_in_the_normal_refund_and_unmatched_rounds_need_no_att
     env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
     env.warp(T0 + 60);
     env.bet(1, &c, Side::Up, 5 * CSOL).unwrap();
+    // Round 0 is matched and the attestor never signs its price.
+    env.warp(env.round(0).strike_end);
+    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "AttestorRequired");
     // Round 1 has no matched bank: it ends NotActivated at the strike, no price, no attestor.
     let r1 = env.round(1);
     env.warp(r1.strike_end);
     env.set_strike(1, &admin, vec![]).unwrap();
     assert_eq!(env.round(1).outcome, Outcome::NotActivated);
-    // Round 0 is matched and the attestor never signs: after the deadline anyone refunds it.
-    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "AttestorRequired");
+    // After the deadline anyone refunds round 0.
     env.warp(env.round(0).settle_deadline + 1);
     let anyone = Keypair::new();
     env.svm.airdrop(&anyone.pubkey(), SOL).unwrap();
@@ -1343,6 +1370,483 @@ fn an_attestor_outage_ends_in_the_normal_refund_and_unmatched_rounds_need_no_att
     }
     env.claim(1, &c.owner.pubkey()).unwrap();
     assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - env.position_rent());
+}
+
+/// Two matched players on round 0 (opens T0): `a` UP and `b` DOWN, 5 CSOL each.
+fn matched_round() -> (Env, Player, Player) {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    (env, a, b)
+}
+
+#[test]
+fn the_strike_window_opens_exactly_at_strike_end() {
+    let (mut env, _a, _b) = matched_round();
+    let admin = env.admin.insecure_clone();
+    let r = env.round(0);
+    env.warp(r.strike_end - 1);
+    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "NotDue");
+    env.warp(r.strike_end);
+    env.set_strike(0, &admin, samples(100, &[1_000; 6])).unwrap();
+    assert_eq!((env.round(0).status, env.round(0).strike_price), (RoundStatus::Live, 1_000));
+}
+
+#[test]
+fn the_last_second_before_the_exit_window_still_takes_a_strike() {
+    let (mut env, _a, _b) = matched_round();
+    let admin = env.admin.insecure_clone();
+    let r = env.round(0);
+    env.warp(r.exit_start - 1);
+    env.set_strike(0, &admin, samples(100, &[1_000; 6])).unwrap();
+    assert_eq!(env.round(0).status, RoundStatus::Live);
+}
+
+#[test]
+fn no_strike_can_be_set_once_the_exit_window_has_started() {
+    let (mut env, _a, _b) = matched_round();
+    let admin = env.admin.insecure_clone();
+    let r = env.round(0);
+    // From exit_start on, through the time the exit price is known and up to the deadline.
+    for now in [r.exit_start, r.exit_start + 1, r.exit_end, r.settle_deadline] {
+        env.warp(now);
+        assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "StrikeWindowClosed");
+    }
+    let r = env.round(0);
+    assert_eq!((r.status, r.strike_price, r.strike_samples), (RoundStatus::Open, 0, 0));
+}
+
+#[test]
+fn a_round_whose_strike_was_never_set_ends_through_refund_expired() {
+    let mut env = Env::new();
+    let (a, b, c) = (env.player(SOL), env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0, SOL).unwrap();
+    // Round 0 is matched, round 1 holds a lone bet; nobody sets a strike in time.
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    env.bet(1, &c, Side::Up, 5 * CSOL).unwrap();
+    let r = env.round(0);
+    env.warp(r.exit_start);
+    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "StrikeWindowClosed");
+    assert_err(env.set_strike(1, &admin, vec![]), "StrikeWindowClosed");
+    env.warp(r.exit_end);
+    assert_err(env.settle(0, samples(200, &[900; 6])), "NotDue");
+    // Strict: the round is still open at the deadline itself and expires one second later.
+    env.warp(r.settle_deadline);
+    assert_err(env.expire(0), "NotDue");
+    env.warp(r.settle_deadline + 1);
+    env.expire(0).unwrap();
+    env.expire(1).unwrap();
+    let (r0, r1) = (env.round(0), env.round(1));
+    assert_eq!((r0.status, r0.outcome, r0.refund_reason), (RoundStatus::Final, Outcome::Refund, RefundReason::Expired));
+    assert_eq!((r1.status, r1.outcome, r1.refund_reason), (RoundStatus::Final, Outcome::NotActivated, RefundReason::None));
+    let rent = env.position_rent();
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100 - rent);
+    }
+    env.claim(1, &c.owner.pubkey()).unwrap();
+    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - rent);
+    env.assert_books(&[0, 1]);
+}
+
+/// Round 0 on a fresh env: UP players [0] and [1], DOWN player [2], and the house fills the
+/// whole gap on DOWN. Returns the players in that order.
+fn house_backed_round(env: &mut Env, stakes: [u64; 3]) -> [Player; 3] {
+    let admin = env.admin.insecure_clone();
+    let players = [env.player(SOL), env.player(SOL), env.player(SOL)];
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &players[0], Side::Up, stakes[0]).unwrap();
+    env.bet(0, &players[1], Side::Up, stakes[1]).unwrap();
+    env.bet(0, &players[2], Side::Down, stakes[2]).unwrap();
+    env.warp(T0 + 60);
+    let r = env.round(0);
+    env.house_fill(0, &admin, r.raw_up - r.raw_down).unwrap();
+    players
+}
+
+#[test]
+fn an_expired_round_takes_the_house_stake_and_the_players_share_it() {
+    let mut env = Env::new();
+    env.set_refund_fee(0);
+    let admin = env.admin.insecure_clone();
+    let [a, c, b] = house_backed_round(&mut env, [6 * CSOL, 2 * CSOL, 2 * CSOL]);
+    let rent = env.position_rent();
+    let r = env.round(0);
+    assert_eq!((r.raw_up, r.raw_down, r.house_amount), (8 * CSOL, 8 * CSOL, 6 * CSOL));
+    let house = env.vault(&admin.pubkey());
+    assert_eq!(house.locked, 6 * CSOL);
+
+    env.warp(r.settle_deadline + 1);
+    env.expire(0).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.status, r.outcome, r.refund_reason), (RoundStatus::Final, Outcome::Refund, RefundReason::Expired));
+    for owner in [a.owner.pubkey(), c.owner.pubkey(), b.owner.pubkey(), admin.pubkey()] {
+        env.claim(0, &owner).unwrap();
+    }
+    // The other stakes total 0.10 SOL and the house put in 0.06: each gets its stake back (refunds
+    // are free at 0 bps) plus 0.06 * stake / 0.10.
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - rent + 36 * CSOL / 10);
+    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - rent + 12 * CSOL / 10);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - rent + 12 * CSOL / 10);
+    // The house gets nothing back: its stake is unlocked and gone.
+    let after = env.vault(&admin.pubkey());
+    assert_eq!((after.available, after.locked), (house.available, 0));
+    let house_position: Position = env.read(&position_pda(&round_pda(0), &admin.pubkey()));
+    assert_eq!((house_position.is_house, house_position.claimed, house_position.payout), (true, true, 0));
+    // Every lamport of the bank went to the players, so the treasury gets nothing.
+    let r = env.round(0);
+    assert_eq!(r.total_paid, r.raw_up + r.raw_down);
+    env.assert_books(&[0]);
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()), before);
+}
+
+#[test]
+fn the_share_of_a_forfeited_house_stake_is_floored_and_the_dust_goes_to_the_treasury() {
+    let mut env = Env::new();
+    let admin = env.admin.insecure_clone();
+    let stakes = [6 * CSOL + 7, 2 * CSOL + 3, 2 * CSOL + 1];
+    let [a, c, b] = house_backed_round(&mut env, stakes);
+    let rent = env.position_rent();
+    let r = env.round(0);
+    let (house, bank) = (r.house_amount, r.raw_up + r.raw_down);
+    let others = bank - house;
+    assert_eq!(others, stakes.iter().sum::<u64>());
+    env.warp(r.settle_deadline + 1);
+    env.expire(0).unwrap();
+
+    // Refunds still cost 1% here (100 bps): the fee applies to the player's own stake and the
+    // forfeited house stake comes on top, floored.
+    let mut paid = 0;
+    for (p, stake) in [(&a, stakes[0]), (&c, stakes[1]), (&b, stakes[2])] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+        let payout = stake * 99 / 100 + (house as u128 * stake as u128 / others as u128) as u64;
+        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - stake - rent + payout);
+        paid += payout;
+    }
+    env.claim(0, &admin.pubkey()).unwrap();
+    assert_eq!(env.round(0).total_paid, paid);
+    assert!(paid <= bank);
+    env.assert_books(&[0]);
+    // The remainder (1% of the players' stakes plus rounding dust) goes to the treasury.
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - before, bank - paid);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn a_round_priced_at_the_start_but_never_settled_also_takes_the_house_stake() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    let house = env.vault(&admin.pubkey());
+    let r = env.round(0);
+    env.warp(r.strike_end);
+    env.set_strike(0, &admin, samples(100, &[1_000; 6])).unwrap();
+    assert_eq!(env.round(0).status, RoundStatus::Live);
+
+    // The exit price never comes (say the house would lose); anyone expires the Live round.
+    env.warp(r.exit_end);
+    env.warp(r.settle_deadline);
+    assert_err(env.expire(0), "NotDue");
+    env.warp(r.settle_deadline + 1);
+    env.expire(0).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.status, r.outcome, r.refund_reason), (RoundStatus::Final, Outcome::Refund, RefundReason::Expired));
+    assert_eq!((r.strike_price, r.exit_price), (1_000, 0));
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.claim(0, &admin.pubkey()).unwrap();
+    // The player's own stake less the 1% refund fee, plus the whole house stake.
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL - rent + 5 * CSOL * 99 / 100 + 5 * CSOL);
+    let after = env.vault(&admin.pubkey());
+    assert_eq!((after.available, after.locked), (house.available, 0));
+    env.assert_books(&[0]);
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 5 * CSOL / 100);
+}
+
+#[test]
+fn an_expired_round_without_a_house_position_pays_as_before() {
+    let (mut env, a, b) = matched_round();
+    let rent = env.position_rent();
+    let r = env.round(0);
+    env.warp(r.settle_deadline + 1);
+    env.expire(0).unwrap();
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100 - rent);
+    }
+    env.assert_books(&[0]);
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 10 * CSOL / 100);
+}
+
+#[test]
+fn rotating_the_house_key_does_not_rescue_a_forfeited_stake() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    let house = env.vault(&admin.pubkey());
+    // The operator hands the house role to another key before the round expires.
+    let mut params = env.params();
+    params.house_authority = Keypair::new().pubkey();
+    env.send_admin(ix(acc::AdminConfig { config: config_pda(), admin: admin.pubkey() }, ixs::UpdateConfig { params })).unwrap();
+    env.warp(env.round(0).settle_deadline + 1);
+    env.expire(0).unwrap();
+    env.claim(0, &admin.pubkey()).unwrap();
+    // The position says it is the house's, whoever holds the role now.
+    assert_eq!(env.vault(&admin.pubkey()).available, house.available);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn a_tie_or_an_unpriced_window_still_returns_the_house_stake() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    env.bet(1, &b, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 100);
+    env.set_strike(0, &admin, samples(100, &[1_000; 6])).unwrap();
+    env.warp(T0 + 120);
+    env.house_fill(1, &admin, 5 * CSOL).unwrap();
+    // T0 + 160 is round 0's exit end and round 1's strike end.
+    env.warp(T0 + 160);
+    env.settle(0, samples(200, &[1_000; 6])).unwrap();
+    env.set_strike(1, &admin, samples(100, &[1_000; 4])).unwrap();
+    let (r0, r1) = (env.round(0), env.round(1));
+    assert_eq!((r0.outcome, r0.refund_reason), (Outcome::Refund, RefundReason::Tie));
+    assert_eq!((r1.outcome, r1.refund_reason), (Outcome::Refund, RefundReason::Unpriceable));
+    for (id, player) in [(0, &a), (1, &b)] {
+        env.claim(id, &player.owner.pubkey()).unwrap();
+        env.claim(id, &admin.pubkey()).unwrap();
+    }
+    // Not withholding cases: the house is refunded like everyone (99% at 100 bps), twice.
+    let kept = 5 * CSOL - 5 * CSOL * 99 / 100;
+    assert_eq!(env.vault(&admin.pubkey()).available, 5 * SOL - 2 * rent - 2 * kept);
+    env.assert_books(&[0, 1]);
+}
+
+#[test]
+fn refunds_cost_nothing_at_zero_refund_bps() {
+    let mut env = Env::new();
+    env.set_refund_fee(0);
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 6 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 4 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.bet(1, &a, Side::Up, 6 * CSOL).unwrap();
+    env.bet(1, &b, Side::Down, 4 * CSOL).unwrap();
+    // Round 0 ties, round 1 expires: the matched part and the surplus both come back whole.
+    env.price_round(0, 1_000, 1_000);
+    assert_eq!((env.round(0).outcome, env.round(0).refund_reason), (Outcome::Refund, RefundReason::Tie));
+    env.warp(env.round(1).settle_deadline + 1);
+    env.expire(1).unwrap();
+    assert_eq!((env.round(1).outcome, env.round(1).refund_reason), (Outcome::Refund, RefundReason::Expired));
+    for id in [0, 1] {
+        env.claim(id, &a.owner.pubkey()).unwrap();
+        env.claim(id, &b.owner.pubkey()).unwrap();
+        assert_eq!(env.round(id).total_paid, 10 * CSOL);
+    }
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 2 * rent);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 2 * rent);
+    env.assert_books(&[0, 1]);
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    env.sweep(1).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()), before);
+}
+
+#[test]
+fn a_winning_house_position_is_paid_after_the_house_key_rotates() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    let house = env.vault(&admin.pubkey());
+    let mut params = env.params();
+    params.house_authority = Keypair::new().pubkey();
+    env.send_admin(ix(acc::AdminConfig { config: config_pda(), admin: admin.pubkey() }, ixs::UpdateConfig { params })).unwrap();
+    env.price_round(0, 1_000, 900);
+    // Claim is permissionless and pays the position's own authority, not the current house key.
+    env.claim(0, &admin.pubkey()).unwrap();
+    let after = env.vault(&admin.pubkey());
+    assert_eq!((after.available, after.locked), (house.available + 5 * CSOL * 196 / 100, 0));
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn the_house_fill_respects_the_depth_cap() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, 4 * CSOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    // Matching 3 would make the accepted bank 6, above the cap of 4; matching 2 reaches it.
+    assert_err(env.house_fill(0, &admin, 3 * CSOL), "BankTooLargeForPool");
+    assert_eq!((env.round(0).raw_down, env.round(0).house_amount, env.house_limits().spent), (0, 0, 0));
+    env.house_fill(0, &admin, 2 * CSOL).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.raw_up, r.raw_down, r.house_amount), (5 * CSOL, 2 * CSOL, 2 * CSOL));
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn issuing_a_session_again_resets_its_budget_and_revocation() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let session = session_pda(&vault, &a.key.pubkey());
+    for (id, open) in [(0, T0), (1, T0 + 60), (2, T0 + 120), (3, T0 + 125)] {
+        env.create_round(id, open, SOL).unwrap();
+    }
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    assert_eq!(env.read::<Session>(&session).spent, 5 * CSOL);
+
+    // Revoked: the key is dead until the owner issues it again, which also starts a fresh budget.
+    let revoke = ix(acc::RevokeSession { vault, session, authority: owner.pubkey() }, ixs::RevokeSession {});
+    env.send(vec![revoke], &owner, &[&owner]).unwrap();
+    env.warp(T0 + 60);
+    assert_err(env.bet(1, &a, Side::Up, CSOL), "SessionInvalid");
+    env.start_session(&owner, &a.key, T0 + 7_200, 10 * CSOL, SOL).unwrap();
+    let s: Session = env.read(&session);
+    assert_eq!((s.revoked, s.spent, s.expiry), (false, 0, T0 + 7_200));
+    env.bet(1, &a, Side::Up, 5 * CSOL).unwrap();
+    assert_eq!(env.read::<Session>(&session).spent, 5 * CSOL);
+
+    // Expired: same story with a second device key.
+    let k2 = Keypair::new();
+    env.svm.airdrop(&k2.pubkey(), SOL).unwrap();
+    env.warp(T0 + 120);
+    env.start_session(&owner, &k2, T0 + 125, 10 * CSOL, SOL).unwrap();
+    let p2 = Player { owner: owner.insecure_clone(), key: k2 };
+    env.bet(2, &p2, Side::Up, 5 * CSOL).unwrap();
+    let session2 = session_pda(&vault, &p2.key.pubkey());
+    assert_eq!(env.read::<Session>(&session2).spent, 5 * CSOL);
+    env.warp(T0 + 125);
+    assert_err(env.bet(3, &p2, Side::Up, CSOL), "SessionInvalid");
+    env.start_session(&owner, &p2.key, T0 + 7_200, 10 * CSOL, SOL).unwrap();
+    let s2: Session = env.read(&session2);
+    assert_eq!((s2.revoked, s2.spent, s2.expiry), (false, 0, T0 + 7_200));
+    env.bet(3, &p2, Side::Up, 5 * CSOL).unwrap();
+    assert_eq!(env.read::<Session>(&session2).spent, 5 * CSOL);
+}
+
+#[test]
+fn sixteen_samples_are_accepted_and_a_zero_price_is_rejected() {
+    let (mut env, _a, _b) = matched_round();
+    let admin = env.admin.insecure_clone();
+    let r = env.round(0);
+    env.warp(r.strike_end);
+    let mut zero = samples(100, &[1_000; 6]);
+    zero[3].price = 0;
+    assert_err(env.set_strike(0, &admin, zero), "InvalidSamples");
+    env.set_strike(0, &admin, samples(100, &[1_000; 16])).unwrap();
+    let s = env.round(0);
+    assert_eq!((s.status, s.strike_price, s.strike_samples), (RoundStatus::Live, 1_000, 16));
+
+    env.warp(r.exit_end);
+    let mut zero = samples(200, &[900; 6]);
+    zero[0].price = 0;
+    assert_err(env.settle(0, zero), "InvalidSamples");
+    assert_eq!(env.round(0).status, RoundStatus::Live);
+    env.settle(0, samples(200, &[900; 16])).unwrap();
+    let s = env.round(0);
+    assert_eq!((s.status, s.outcome, s.exit_price, s.exit_samples), (RoundStatus::Final, Outcome::Down, 900, 16));
+}
+
+#[test]
+fn anyone_may_sweep_but_only_to_the_configured_treasury() {
+    let (mut env, a, b) = matched_round();
+    env.price_round(0, 1_000, 900);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.claim(0, &b.owner.pubkey()).unwrap();
+    let stranger = Keypair::new();
+    env.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
+    let sweep_to = |treasury: Pubkey| ix(acc::SweepFees { config: config_pda(), round: round_pda(0), treasury }, ixs::SweepFees {});
+    // A wrong destination, even the sender's own account, is refused: only the fee is charged.
+    let before = env.lamports(&stranger.pubkey());
+    assert_err(env.send(vec![sweep_to(stranger.pubkey())], &stranger, &[&stranger]), "Unauthorized");
+    assert_eq!(env.lamports(&stranger.pubkey()), before - 5_000);
+    assert!(!env.round(0).fees_swept);
+    // Sweeping needs no admin: a stranger pays the fee and the 2% lands at the treasury.
+    let treasury_before = env.lamports(&env.treasury.pubkey());
+    env.send(vec![sweep_to(env.treasury.pubkey())], &stranger, &[&stranger]).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - treasury_before, 10 * CSOL * 2 / 100);
+    assert!(env.round(0).fees_swept);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn round_times_and_the_bank_cap_are_bounded() {
+    let mut env = Env::new();
+    // The keeper's cadence is inside every bound.
+    let ok = round_args(T0, SOL);
+    assert_eq!((ok.exit_end - ok.opens_at, ok.settle_deadline - ok.exit_end), (160, 600));
+
+    // The deadline for a price: at most an hour after the exit window.
+    for deadline in [ok.exit_end + 3_601, i64::MAX] {
+        assert_err(env.create_round_with(0, CreateRoundArgs { settle_deadline: deadline, ..ok.clone() }), "SettleDeadlineTooFar");
+    }
+    // Opening to the end of the exit window: at most 15 minutes.
+    let ending = |exit_end: i64| CreateRoundArgs { exit_end, settle_deadline: exit_end + 600, ..ok.clone() };
+    assert_err(env.create_round_with(0, ending(T0 + 901)), "RoundTooLong");
+    let day_long_entry = CreateRoundArgs {
+        cutoff_at: T0 + 86_400,
+        strike_start: T0 + 86_430,
+        strike_end: T0 + 86_440,
+        exit_start: T0 + 86_490,
+        exit_end: T0 + 86_500,
+        settle_deadline: T0 + 87_100,
+        ..ok.clone()
+    };
+    assert_err(env.create_round_with(0, day_long_entry), "RoundTooLong");
+    assert_err(env.create_round_with(0, CreateRoundArgs { opens_at: i64::MIN, ..ok.clone() }), "RoundTooLong");
+    // The bank cap may not sit below the configured minimum bank (0.02 SOL here).
+    assert_err(env.create_round_with(0, CreateRoundArgs { max_bank: 2 * CSOL - 1, ..ok.clone() }), "MaxBankBelowMin");
+    assert_err(env.create_round_with(0, CreateRoundArgs { max_bank: 0, ..ok.clone() }), "InvalidAmount");
+    // Nothing above created a round or used up an id.
+    assert_eq!(env.read::<Config>(&config_pda()).next_round_id, 0);
+
+    // The limits themselves are allowed.
+    env.create_round_with(0, ending(T0 + 900)).unwrap();
+    env.create_round_with(1, CreateRoundArgs { settle_deadline: ok.exit_end + 3_600, ..ok.clone() }).unwrap();
+    env.create_round_with(2, CreateRoundArgs { max_bank: 2 * CSOL, ..ok.clone() }).unwrap();
+    env.create_round_with(3, ok).unwrap();
+    assert_eq!(env.read::<Config>(&config_pda()).next_round_id, 4);
 }
 
 /// The live program's own positions under this build. Needs the program as it runs on devnet:

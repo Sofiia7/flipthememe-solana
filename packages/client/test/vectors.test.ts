@@ -153,9 +153,23 @@ test('account decoders read the program layout', () => {
 });
 
 test('payout mirror agrees with payout.rs', () => {
-  assert.equal(vectors.payouts.length, 60);
+  // 60 plain books, then 80 books with a house position (claim_payout).
+  assert.equal(vectors.payouts.length, 140);
+  let withHouse = 0;
+  let forfeits = 0;
+  let shares = 0;
   for (const v of vectors.payouts) {
-    const got = positionPayout(BigInt(v.rawUp), BigInt(v.rawDown), v.outcome, v.feeWinBps, v.feeRefundBps, v.side, BigInt(v.stake));
+    const house =
+      v.houseAmount === undefined ? undefined : { refundReason: v.refundReason, houseAmount: BigInt(v.houseAmount), isHouse: v.isHouse };
+    const got = positionPayout(BigInt(v.rawUp), BigInt(v.rawDown), v.outcome, v.feeWinBps, v.feeRefundBps, v.side, BigInt(v.stake), house);
     assert.equal(got, BigInt(v.payout), JSON.stringify(v));
+    if (house === undefined) continue;
+    withHouse++;
+    const isExpiredRefund = v.outcome === Outcome.Refund && v.refundReason === RefundReason.Expired && house.houseAmount > 0n;
+    if (isExpiredRefund && v.isHouse) forfeits++;
+    if (isExpiredRefund && !v.isHouse) shares++;
   }
+  // The vectors must exercise the house rule, on both sides of it.
+  assert.equal(withHouse, 80);
+  assert.ok(forfeits >= 3 && shares >= 3, `forfeits ${forfeits}, shares ${shares}`);
 });

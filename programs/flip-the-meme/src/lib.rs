@@ -12,6 +12,11 @@ pub const MAX_SAMPLES: usize = 16;
 pub const MAX_FEE_WIN_BPS: u16 = 200;
 pub const MAX_FEE_REFUND_BPS: u16 = 100;
 pub const MAX_SESSION_SECS: i64 = 7 * 24 * 60 * 60;
+/// What the admin (the keeper's hot key) may schedule, so no round can hold bets for long: at most
+/// this long from a round's opening to the end of its exit window ...
+pub const MAX_ROUND_SECS: i64 = 15 * 60;
+/// ... and from the end of the exit window to the deadline after which anyone may refund it.
+pub const MAX_SETTLE_GRACE_SECS: i64 = 60 * 60;
 /// A paid position stays on chain this long after its round's exit window as readable history,
 /// then anyone may close it and its rent goes back to the owner.
 pub const POSITION_CLOSE_DELAY_SECS: i64 = 60 * 60;
@@ -196,6 +201,17 @@ pub mod flip_the_meme {
             ErrorCode::InvalidRoundTime
         );
         require!(args.max_bank > 0, ErrorCode::InvalidAmount);
+        // A round that cannot be activated would hold a lone bet until it expires.
+        require!(args.max_bank >= config.min_bank, ErrorCode::MaxBankBelowMin);
+        // Saturating: an absurd timestamp saturates to a huge span and fails, it never wraps.
+        require!(
+            args.exit_end.saturating_sub(args.opens_at) <= MAX_ROUND_SECS,
+            ErrorCode::RoundTooLong
+        );
+        require!(
+            args.settle_deadline.saturating_sub(args.exit_end) <= MAX_SETTLE_GRACE_SECS,
+            ErrorCode::SettleDeadlineTooFar
+        );
         config.next_round_id = round_id.checked_add(1).ok_or(ErrorCode::Arithmetic)?;
 
         let round = &mut ctx.accounts.round;
@@ -373,18 +389,20 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Fixes the strike from observations taken after the pause. A round without a matched
-    /// bank ends here as NotActivated and returns every stake in full; no price is used for it,
-    /// so it needs no attestor either.
+    /// Fixes the strike from observations taken after the pause, from `strike_end` up to but not
+    /// including `exit_start`: once the exit window has begun the exit price is on its way, so a
+    /// strike fixed later could be chosen with it in view. A round whose strike is not set in time
+    /// stays Open and ends through `refund_expired` after the settle deadline. A round without a
+    /// matched bank ends here as NotActivated and returns every stake in full; no price is used
+    /// for it, so it needs no attestor either, but it too must be closed in this window.
     pub fn set_strike(ctx: Context<PriceUpdate>, samples: Vec<PriceSample>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
         require!(
-            round.status == RoundStatus::Open
-                && now >= round.strike_end
-                && now <= round.settle_deadline,
+            round.status == RoundStatus::Open && now >= round.strike_end,
             ErrorCode::NotDue
         );
+        require!(now < round.exit_start, ErrorCode::StrikeWindowClosed);
         if !payout::is_activated(round.raw_up, round.raw_down, round.min_bank) {
             finalize(round, Outcome::NotActivated, RefundReason::None);
             return Ok(());
@@ -435,8 +453,11 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Anyone can end a round the keeper failed to price in time. It never needs the attestor,
-    /// so an attestor outage only delays a round into this refund.
+    /// Anyone can end a round the keeper failed to price in time, whether its strike was never
+    /// set (Open) or only its exit price is missing (Live). It never needs the attestor, so an
+    /// attestor outage only delays a round into this refund. A matched round ends as Refund with
+    /// reason Expired, and claim then takes the house's stake and shares it among the other
+    /// positions (payout::claim_payout), so withholding a price is no free option for the house.
     pub fn refund_expired(ctx: Context<RefundExpired>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -458,14 +479,17 @@ pub mod flip_the_meme {
         let position = &mut ctx.accounts.position;
         require!(round.status == RoundStatus::Final, ErrorCode::NotFinal);
         require!(!position.claimed, ErrorCode::AlreadyClaimed);
-        let amount = payout::position_payout(
+        let amount = payout::claim_payout(
             round.raw_up,
             round.raw_down,
+            round.house_amount,
             round.outcome,
+            round.refund_reason,
             round.fee_win_bps,
             round.fee_refund_bps,
             position.side,
             position.stake,
+            position.is_house,
         )
         .ok_or(ErrorCode::Arithmetic)?;
         let total_paid = round.total_paid.checked_add(amount).ok_or(ErrorCode::Arithmetic)?;
@@ -745,7 +769,8 @@ pub enum Side {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
 pub enum RoundStatus {
-    /// Entry open until `cutoff_at`, then waiting for the strike.
+    /// Entry open until `cutoff_at`, then waiting for the strike (set from `strike_end` until
+    /// `exit_start`; unset by then, the round expires).
     Open,
     /// Strike fixed, waiting for the exit window.
     Live,
@@ -757,7 +782,8 @@ pub enum Outcome {
     Pending,
     Up,
     Down,
-    /// Activated round returned minus `fee_refund_bps` (tie, no price, expired).
+    /// Activated round returned minus `fee_refund_bps` (tie, no price, expired). When it expired,
+    /// the house position forfeits its stake to the other positions (payout::claim_payout).
     Refund,
     /// No matched bank: every stake returns in full.
     NotActivated,
@@ -1238,4 +1264,13 @@ pub enum ErrorCode {
     AttestorRequired,
     #[msg("Attestor does not match the oracle config")]
     InvalidAttestor,
+    // Added with the strike-window and round-bounds fix (October 2026): append only.
+    #[msg("The strike can no longer be set: the exit window has started")]
+    StrikeWindowClosed,
+    #[msg("Round runs too long from opening to the end of its exit window")]
+    RoundTooLong,
+    #[msg("The settle deadline is too far after the end of the exit window")]
+    SettleDeadlineTooFar,
+    #[msg("The round's bank cap is below the minimum bank")]
+    MaxBankBelowMin,
 }

@@ -1,5 +1,5 @@
 // Mirror of programs/flip-the-meme/src/payout.rs. Both must agree on test/vectors.json.
-import { Outcome, Side } from './constants.ts';
+import { Outcome, RefundReason, Side } from './constants.ts';
 
 const BPS = 10_000n;
 
@@ -16,7 +16,58 @@ export function acceptedStake(rawUp: bigint, rawDown: bigint, side: Side, stake:
   return (stake * other) / mine;
 }
 
+/**
+ * What claim needs beyond the book. Only a matched round that expired unpriced looks at it: the
+ * house position then forfeits its stake and the other positions share it (see `positionPayout`).
+ */
+export type HouseContext = {
+  /** Round.refundReason. */
+  refundReason: RefundReason;
+  /** Round.houseAmount: everything the house put into the round. */
+  houseAmount: bigint;
+  /** Position.isHouse. */
+  isHouse: boolean;
+};
+
+/** The `HouseContext` of one position, from its round account and its own account. */
+export function houseContext(
+  round: { refundReason: RefundReason; houseAmount: bigint },
+  position: { isHouse: boolean },
+): HouseContext {
+  return { refundReason: round.refundReason, houseAmount: round.houseAmount, isHouse: position.isHouse };
+}
+
+/**
+ * Lamports credited to a position once its round is final: the claim payout of the program
+ * (`claim_payout` in payout.rs). Without `house` it is the plain payout of the book. With it, an
+ * Expired refund also applies the house rule:
+ *   house position:       0
+ *   any other position:   its normal refund + floor(houseAmount * stake / otherStakes)
+ * where otherStakes = rawUp + rawDown - houseAmount. If the house stake is the whole bank
+ * (otherStakes = 0) there is nobody to compensate and nothing is forfeited. Every other outcome
+ * and refund reason, and a round with no house stake, pay exactly as without `house`.
+ */
 export function positionPayout(
+  rawUp: bigint,
+  rawDown: bigint,
+  outcome: Outcome,
+  feeWinBps: number,
+  feeRefundBps: number,
+  side: Side,
+  stake: bigint,
+  house?: HouseContext,
+): bigint | null {
+  const base = bookPayout(rawUp, rawDown, outcome, feeWinBps, feeRefundBps, side, stake);
+  if (base === null || house === undefined) return base;
+  if (outcome !== Outcome.Refund || house.refundReason !== RefundReason.Expired || house.houseAmount === 0n) return base;
+  const otherStakes = rawUp + rawDown - house.houseAmount;
+  if (otherStakes < 0n) return null;
+  if (otherStakes === 0n) return base;
+  if (house.isHouse) return 0n;
+  return base + (house.houseAmount * stake) / otherStakes;
+}
+
+function bookPayout(
   rawUp: bigint,
   rawDown: bigint,
   outcome: Outcome,

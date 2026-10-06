@@ -3,8 +3,11 @@
 //! Matched 1:1 bank: `m = min(up, down)` plays on each side. The larger side's surplus
 //! comes back pro rata without a fee. A winner gets exactly `2 * (1 - fee_win)` of the
 //! accepted stake (1.96x at 200 bps), whatever the book looks like.
+//!
+//! One exception to "a refund returns the stake": a matched round that expires unpriced takes the
+//! house stake and hands it to the other positions (see `claim_payout`).
 
-use crate::{Outcome, Side};
+use crate::{Outcome, RefundReason, Side};
 
 pub const BPS: u128 = 10_000;
 
@@ -68,6 +71,46 @@ pub fn position_payout(
     }
 }
 
+/// What `claim` credits: `position_payout`, except in one case. When a matched round expires
+/// (nobody priced it in time) the house position forfeits its stake and the other positions
+/// share it pro rata to their stakes:
+///   house position:       0
+///   any other position:   its normal refund + floor(house_amount * stake / other_stakes)
+/// with `other_stakes = raw_up + raw_down - house_amount`. The operator runs both the keeper and
+/// the house, so without this a house that is losing could withhold the price and take its stake
+/// back for free. Tie, no-price and unmatched refunds are not withholding cases and stay as they
+/// were. Floors only: the payouts sum to at most the bank, the dust goes to `sweep_fees`.
+///
+/// If the house stake is the whole bank there is nobody to compensate: no forfeiture. Not
+/// reachable with a real book, since the house never takes the larger side.
+#[allow(clippy::too_many_arguments)]
+pub fn claim_payout(
+    raw_up: u64,
+    raw_down: u64,
+    house_amount: u64,
+    outcome: Outcome,
+    refund_reason: RefundReason,
+    fee_win_bps: u16,
+    fee_refund_bps: u16,
+    side: Side,
+    stake: u64,
+    is_house: bool,
+) -> Option<u64> {
+    let base = position_payout(raw_up, raw_down, outcome, fee_win_bps, fee_refund_bps, side, stake)?;
+    if outcome != Outcome::Refund || refund_reason != RefundReason::Expired || house_amount == 0 {
+        return Some(base);
+    }
+    let other_stakes = raw_up.checked_add(raw_down)?.checked_sub(house_amount)?;
+    if other_stakes == 0 {
+        return Some(base);
+    }
+    if is_house {
+        return Some(0);
+    }
+    let share = (house_amount as u128).checked_mul(stake as u128)? / other_stakes as u128;
+    base.checked_add(u64::try_from(share).ok()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +119,10 @@ mod tests {
 
     fn pay(up: u64, down: u64, outcome: Outcome, side: Side, stake: u64) -> u64 {
         position_payout(up, down, outcome, 200, 100, side, stake).unwrap()
+    }
+
+    fn pay_with(up: u64, down: u64, outcome: Outcome, fee_refund_bps: u16, side: Side, stake: u64) -> u64 {
+        position_payout(up, down, outcome, 200, fee_refund_bps, side, stake).unwrap()
     }
 
     #[test]
@@ -152,6 +199,119 @@ mod tests {
                 assert!(paid <= up + down, "paid {paid} > bank {} for {outcome:?}", up + down);
                 if outcome == Outcome::NotActivated {
                     assert_eq!(paid, up + down);
+                }
+            }
+        }
+    }
+
+    /// What claim pays: every refund reason, with the house's share of the book.
+    #[allow(clippy::too_many_arguments)]
+    fn claim(
+        up: u64,
+        down: u64,
+        house: u64,
+        outcome: Outcome,
+        reason: RefundReason,
+        fee_refund_bps: u16,
+        side: Side,
+        stake: u64,
+        is_house: bool,
+    ) -> u64 {
+        claim_payout(up, down, house, outcome, reason, 200, fee_refund_bps, side, stake, is_house).unwrap()
+    }
+
+    #[test]
+    fn an_expired_round_pays_the_house_stake_to_the_other_positions() {
+        // 0.08 UP from two players (0.06 and 0.02), 0.02 DOWN from one; the house filled DOWN with 0.06.
+        let (up, down, house) = (8 * SOL / 100, 8 * SOL / 100, 6 * SOL / 100);
+        let expired = |side, stake, is_house| claim(up, down, house, Outcome::Refund, RefundReason::Expired, 0, side, stake, is_house);
+        // Other stakes total 0.10: each gets its stake back plus 0.06 * stake / 0.10.
+        assert_eq!(expired(Side::Up, 6 * SOL / 100, false), 6 * SOL / 100 + 36 * SOL / 1000);
+        assert_eq!(expired(Side::Up, 2 * SOL / 100, false), 2 * SOL / 100 + 12 * SOL / 1000);
+        assert_eq!(expired(Side::Down, 2 * SOL / 100, false), 2 * SOL / 100 + 12 * SOL / 1000);
+        assert_eq!(expired(Side::Down, 6 * SOL / 100, true), 0);
+    }
+
+    #[test]
+    fn an_expired_round_without_a_house_position_pays_like_any_refund() {
+        let (up, down) = (3 * SOL / 10, SOL / 10);
+        for fee in [0, 100] {
+            for (side, stake) in [(Side::Up, up), (Side::Down, down)] {
+                let plain = pay_with(up, down, Outcome::Refund, fee, side, stake);
+                assert_eq!(claim(up, down, 0, Outcome::Refund, RefundReason::Expired, fee, side, stake, false), plain);
+            }
+        }
+    }
+
+    #[test]
+    fn only_an_expired_refund_takes_the_house_stake() {
+        let (up, down, house) = (SOL / 10, SOL / 10, SOL / 20);
+        for reason in [RefundReason::Tie, RefundReason::Unpriceable, RefundReason::None] {
+            for is_house in [true, false] {
+                let plain = pay_with(up, down, Outcome::Refund, 100, Side::Down, SOL / 20);
+                assert_eq!(claim(up, down, house, Outcome::Refund, reason, 100, Side::Down, SOL / 20, is_house), plain);
+            }
+        }
+        // A priced round and an unmatched one never look at the house either.
+        for outcome in [Outcome::Up, Outcome::Down, Outcome::NotActivated] {
+            let plain = pay_with(up, down, outcome, 100, Side::Down, SOL / 20);
+            assert_eq!(claim(up, down, house, outcome, RefundReason::Expired, 100, Side::Down, SOL / 20, true), plain);
+        }
+    }
+
+    #[test]
+    fn with_nobody_to_compensate_the_house_gets_its_refund() {
+        // Not reachable with a real book (the house never takes the larger side), but the rule must hold.
+        let (up, down) = (SOL / 10, SOL / 10);
+        let plain = pay_with(up, down, Outcome::Refund, 100, Side::Up, up);
+        assert_eq!(claim(up, down, up + down, Outcome::Refund, RefundReason::Expired, 100, Side::Up, up, true), plain);
+    }
+
+    #[test]
+    fn a_pending_round_has_no_payout_whoever_asks() {
+        assert_eq!(claim_payout(1, 1, 1, Outcome::Pending, RefundReason::Expired, 200, 0, Side::Up, 1, false), None);
+        assert_eq!(claim_payout(1, 1, 1, Outcome::Pending, RefundReason::Expired, 200, 0, Side::Up, 1, true), None);
+    }
+
+    #[test]
+    fn expired_payouts_with_a_house_never_exceed_the_bank() {
+        let mut rng = Rng(0x1234_5678_9abc_def1);
+        for _ in 0..2_000 {
+            let ups: Vec<u64> = (0..1 + rng.next() % 6).map(|_| rng.stake()).collect();
+            let downs: Vec<u64> = (0..1 + rng.next() % 6).map(|_| rng.stake()).collect();
+            let (up_players, down_players) = (ups.iter().sum::<u64>(), downs.iter().sum::<u64>());
+            // The house tops the smaller side up by part of the gap, in one or two fills.
+            let (house_side, gap) = if up_players < down_players {
+                (Side::Up, down_players - up_players)
+            } else {
+                (Side::Down, up_players - down_players)
+            };
+            let first = if gap == 0 { 0 } else { 1 + rng.next() % gap };
+            let second = if gap > first { rng.next() % (gap - first + 1) } else { 0 };
+            let house_stakes: Vec<u64> = [first, second].into_iter().filter(|&h| h > 0).collect();
+            let house: u64 = house_stakes.iter().sum();
+            let (up, down) = match house_side {
+                Side::Up => (up_players + house, down_players),
+                Side::Down => (up_players, down_players + house),
+            };
+            for fee in [0u16, 100] {
+                let mut paid = 0u64;
+                for &s in &ups {
+                    paid += claim(up, down, house, Outcome::Refund, RefundReason::Expired, fee, Side::Up, s, false);
+                }
+                for &s in &downs {
+                    paid += claim(up, down, house, Outcome::Refund, RefundReason::Expired, fee, Side::Down, s, false);
+                }
+                for &s in &house_stakes {
+                    let got = claim(up, down, house, Outcome::Refund, RefundReason::Expired, fee, house_side, s, true);
+                    assert_eq!(got, 0, "the house keeps nothing of an expired round");
+                    paid += got;
+                }
+                assert!(paid <= up + down, "paid {paid} > bank {} (house {house}, fee {fee})", up + down);
+                if fee == 0 && house > 0 {
+                    // Floors lose at most one lamport per other position.
+                    let others = (ups.len() + downs.len()) as u64;
+                    assert!(up + down - paid <= others, "dust {} for {others} positions", up + down - paid);
                 }
             }
         }

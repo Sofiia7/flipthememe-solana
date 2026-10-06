@@ -5,7 +5,7 @@
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::solana_program::instruction::AccountMeta;
 use anchor_lang::{system_program, AccountSerialize, Discriminator, InstructionData, ToAccountMetas};
-use flip_the_meme::payout::position_payout;
+use flip_the_meme::payout::{claim_payout, position_payout};
 use flip_the_meme::{
     accounts as acc, instruction as ixs, BetPlaced, Claimed, Config, ConfigParams, CreateRoundArgs, ErrorCode,
     HouseLimits, OracleConfig, Outcome, Position, PositionClosed, PriceSample, RefundReason, Round, RoundSettled,
@@ -186,7 +186,8 @@ fn write_vectors() {
         InvalidAmount, Arithmetic, InsufficientAvailable, SessionInvalid, SessionCapExceeded, InvalidSession, RoundNotOpen,
         InvalidRoundTime, InvalidRoundId, NotDue, NotFinal, AlreadyClaimed, FeeTooHigh, BankTooLargeForPool, InvalidSamples,
         Paused, Unauthorized, InvalidAccount, NotFillWindow, NothingToFill, NotSweepable, NotClosable, Insolvent, NotClaimed,
-        HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor,
+        HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor, StrikeWindowClosed, RoundTooLong,
+        SettleDeadlineTooFar, MaxBankBelowMin,
     ];
 
     let config = Config {
@@ -316,6 +317,41 @@ fn write_vectors() {
         rows.push(format!(
             "    {{ \"rawUp\": \"{up}\", \"rawDown\": \"{down}\", \"outcome\": {}, \"side\": {}, \"stake\": \"{stake}\", \"feeWinBps\": {fee_win}, \"feeRefundBps\": {fee_refund}, \"payout\": \"{payout}\" }}",
             outcome as u8, side as u8
+        ));
+    }
+    // Books with a house position, for every refund reason: what claim pays (an expired round takes
+    // the house stake and shares it among the other positions). The rows above stay as they were.
+    let refund_reasons = [RefundReason::None, RefundReason::Tie, RefundReason::Unpriceable, RefundReason::Expired];
+    let house_outcomes = [Outcome::Up, Outcome::Down, Outcome::Refund, Outcome::Refund, Outcome::Refund, Outcome::NotActivated];
+    for _ in 0..80 {
+        let up_players = 10_000_000 + next() % 300_000_000;
+        let down_players = 10_000_000 + next() % 300_000_000;
+        // The house tops up the smaller side by part of the gap.
+        let (house_side, gap) = if up_players < down_players {
+            (Side::Up, down_players - up_players)
+        } else {
+            (Side::Down, up_players - down_players)
+        };
+        let house = if gap == 0 { 0 } else { 1 + next() % gap };
+        let (up, down) = match house_side {
+            Side::Up => (up_players + house, down_players),
+            Side::Down => (up_players, down_players + house),
+        };
+        let (side, stake, is_house) = if house > 0 && next() % 4 == 0 {
+            (house_side, house, true)
+        } else {
+            let side = if next() % 2 == 0 { Side::Up } else { Side::Down };
+            let players = if side == Side::Up { up_players } else { down_players };
+            (side, 1 + next() % players, false)
+        };
+        let outcome = house_outcomes[(next() % 6) as usize];
+        let reason = refund_reasons[(next() % 4) as usize];
+        let fee_win = (next() % 201) as u16;
+        let fee_refund = (next() % 101) as u16;
+        let payout = claim_payout(up, down, house, outcome, reason, fee_win, fee_refund, side, stake, is_house).unwrap();
+        rows.push(format!(
+            "    {{ \"rawUp\": \"{up}\", \"rawDown\": \"{down}\", \"houseAmount\": \"{house}\", \"isHouse\": {is_house}, \"outcome\": {}, \"refundReason\": {}, \"side\": {}, \"stake\": \"{stake}\", \"feeWinBps\": {fee_win}, \"feeRefundBps\": {fee_refund}, \"payout\": \"{payout}\" }}",
+            outcome as u8, reason as u8, side as u8
         ));
     }
     json.push_str(&rows.join(",\n"));
