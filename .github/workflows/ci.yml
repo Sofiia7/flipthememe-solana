@@ -1,0 +1,58 @@
+name: CI
+
+# Offline checks on every push to main and every pull request: the TypeScript test suites and the
+# app typecheck. No secrets are used. The Rust program tests are not run here: the flow and vectors
+# suites need the compiled program (`cargo build-sbf`, Agave toolchain), see README "Build and test".
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typescript:
+    name: TypeScript tests and typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: pnpm via corepack
+        run: |
+          npm install -g corepack@latest
+          corepack enable
+          echo "node $(node --version), pnpm $(pnpm --version)"
+
+      - name: Locate pnpm store
+        id: pnpm-store
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Tests (client, keeper, attestor, chatter, link, app helpers)
+        run: pnpm test
+
+      - name: Typecheck the app
+        run: pnpm --filter @flipthememe/mobile typecheck

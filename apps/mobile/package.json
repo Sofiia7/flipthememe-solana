@@ -9,7 +9,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@flipthememe/arena-core": "workspace:*",
     "@flipthememe/client": "workspace:*",
     "@noble/curves": "^2.4.0",
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -17,9 +16,7 @@
     "@wallet-ui/react-native-kit": "^4.3.0",
     "expo": "~57.0.22",
     "expo-audio": "~57.0.5",
-    "expo-build-properties": "~57.0.17",
     "expo-clipboard": "~57.0.2",
-    "expo-constants": "~57.0.18",
     "expo-dev-client": "~57.0.19",
     "expo-file-system": "~57.0.7",
     "expo-haptics": "~57.0.3",

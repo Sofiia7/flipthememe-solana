@@ -1,4 +1,4 @@
-> Status: superseded on 2026-10-05 by [README.md](README.md) and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the economics (pari-mutuel bank, 1% of the losing pool, no house) and the build state described here are not current.
+> Status: superseded on 2026-10-05 by [README.md](../../README.md) and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the economics (pari-mutuel bank, 1% of the losing pool, no house) and the build state described here are not current.
 
 # FlipTheMeme / MemePred - задание на разработку MVP
 
@@ -145,7 +145,7 @@ SCHEDULED → OPEN → LOCKED → ACTIVE → SETTLED_UP / SETTLED_DOWN
 2. Определить воспроизводимое правило P0/P1: точные интервалы, метод усреднения, единицы, округление, минимальное покрытие окна и допустимую давность.
 3. Проверить редкие сделки, отсутствие наблюдений, миграцию и остановку пула. Зафиксировать, когда раунд не открывается, а когда возвращается.
 4. Установить фильтры допуска и лимит общего банка с учётом глубины рынка. Отдельный per-wallet cap не заменяет общий лимит.
-5. Записать результат в `docs/implementation/price-source.md`, приложить воспроизводимую проверку и примеры данных. Затем включить этот адаптер в рабочий раунд.
+5. Записать результат в `docs/archive/price-source.md`, приложить воспроизводимую проверку и примеры данных. Затем включить этот адаптер в рабочий раунд.
 
 Можно параллельно делать UI на явно помеченном mock-источнике и денежную программу на devnet с тестовыми значениями. Mock не выдаётся за живой рынок.
 
@@ -182,9 +182,9 @@ API/профиль не имеет полномочий изменять ден�
 
 ## 11. Пиксельные лица: обязательное направление
 
-![Концепт пиксельных лиц](docs/design-references/pixel-faces-concept.png)
+![Концепт пиксельных лиц](../design-references/pixel-faces-concept.png)
 
-Изображение - сохранённое направление внешности, не готовый атлас и не доказательство работоспособности всех комбинаций. Оно создано встроенным ImageGen; точный prompt и назначение записаны в [описании референса](docs/design-references/pixel-faces-concept.md).
+Изображение - сохранённое направление внешности, не готовый атлас и не доказательство работоспособности всех комбинаций. Оно создано встроенным ImageGen; точный prompt и назначение записаны в [описании референса](../design-references/pixel-faces-concept.md).
 
 - Ориентиры: Pixels / MattleFun. Sims относится только к возможности настраивать внешность.
 - Только лицо/голова с волосами. Ни тел, ни плеч, ни фигур в полный рост даже в редакторе.
@@ -263,8 +263,8 @@ API/профиль не имеет полномочий изменять ден�
 
 ## 16. Контекст, если понадобится
 
-- [Рабочий дизайн от 11 сентября](docs/superpowers/specs/2026-09-11-flipthememe-arena-design.md) - объяснение выбора механик.
-- [Исследование от 10 сентября](docs/research/2026-09-10-solana-mobile/review.md) - факты и гипотезы по рынку; не источник старых решений о 1:1.
+- [Рабочий дизайн от 11 сентября](2026-09-11-flipthememe-arena-design.md) - объяснение выбора механик.
+- [Исследование от 10 сентября](../research/2026-09-10-solana-mobile/review.md) - факты и гипотезы по рынку; не источник старых решений о 1:1.
 - Дизайн от 10 сентября с картой и старый интерактивный макет 1:1 - история. Не использовать их как актуальное ТЗ.
 
 **Начать с этапа 1, затем довести один полный devnet-сценарий до работы на устройстве. Форму арены, тотализатор и пиксельные лица заново не выбирать.**

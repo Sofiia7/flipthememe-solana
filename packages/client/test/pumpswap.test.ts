@@ -8,20 +8,17 @@ import {
   type RpcTransport,
 } from '@solana/kit';
 import {
-  DEFAULT_POOL_GATE,
   PRICE_SCALE,
   PUMPSWAP_PROGRAM_ID,
   WSOL_MINT,
   GECKOTERMINAL_MULTI_LIMIT,
   GeckoTerminalHttpError,
   decodePumpSwapPool,
-  discoverPumpSwapPools,
   fetchNewPumpSwapPools,
   fetchPumpSwapPoolsByAddress,
   fetchTopPumpSwapPools,
   loadPool,
   observePrice,
-  passesGate,
   priceOf,
   quoteReserveLamports,
   readTokenAmount,
@@ -337,37 +334,7 @@ describe('windowMean', () => {
   });
 });
 
-describe('passesGate', () => {
-  const NOW = Date.parse('2026-10-05T12:00:00Z');
-  const HOUR = 60 * 60 * 1000;
-  const candidate = (createdAtMs: number, txM5: number): PoolCandidate => ({
-    pool: HIGGS_POOL,
-    baseMint: HIGGS_MINT,
-    name: 'HIGGS / SOL',
-    reserveUsd: 150_000,
-    createdAtMs,
-    txM5,
-    volumeH1Usd: 300_000,
-  });
-
-  test('defaults: younger than 7 days and at least 20 transactions in 5 minutes', () => {
-    assert.deepEqual(DEFAULT_POOL_GATE, { maxAgeMs: 7 * 24 * HOUR, minTxM5: 20 });
-    assert.equal(passesGate(candidate(NOW - HOUR, 20), NOW), true);
-    assert.equal(passesGate(candidate(NOW - HOUR, 19), NOW), false);
-    assert.equal(passesGate(candidate(NOW - 7 * 24 * HOUR + 1, 500), NOW), true);
-    assert.equal(passesGate(candidate(NOW - 7 * 24 * HOUR, 500), NOW), false);
-    assert.equal(passesGate(candidate(Number.NaN, 500), NOW), false);
-  });
-
-  test('custom options', () => {
-    const old = candidate(NOW - 30 * 24 * HOUR, 25);
-    assert.equal(passesGate(old, NOW), false);
-    assert.equal(passesGate(old, NOW, { maxAgeMs: Number.POSITIVE_INFINITY, minTxM5: 20 }), true);
-    assert.equal(passesGate(old, NOW, { maxAgeMs: Number.POSITIVE_INFINITY, minTxM5: 30 }), false);
-  });
-});
-
-describe('discoverPumpSwapPools', () => {
+describe('fetchTopPumpSwapPools: row parsing', () => {
   type FetchCall = { url: string; headers: Record<string, string> };
 
   function geckoFetch(pages: Record<number, unknown>, status = 200) {
@@ -386,24 +353,20 @@ describe('discoverPumpSwapPools', () => {
     return structuredClone(row);
   };
 
-  test('parses the two real pages, sorted by 5-minute transactions', async () => {
-    const { fetchFn, calls } = geckoFetch({ 1: GECKO_PAGE_1, 2: GECKO_PAGE_2 });
-    const pools = await discoverPumpSwapPools(fetchFn, GECKO_SNAPSHOT_MS);
+  test('parses the real page 1 into candidates, in API order', async () => {
+    const { fetchFn, calls } = geckoFetch({ 1: GECKO_PAGE_1 });
+    const pools = await fetchTopPumpSwapPools(fetchFn, 1, GECKO_SNAPSHOT_MS);
 
     const base = 'https://api.geckoterminal.com/api/v2/networks/solana/dexes/pumpswap/pools';
-    assert.deepEqual(
-      calls.map((c) => c.url),
-      [`${base}?page=1&sort=h24_tx_count_desc`, `${base}?page=2&sort=h24_tx_count_desc`],
-    );
+    assert.deepEqual(calls.map((c) => c.url), [`${base}?page=1&sort=h24_tx_count_desc`]);
     assert.match(calls[0]?.headers.accept ?? '', /^application\/json/);
 
-    assert.equal(pools.length, 40);
-    assert.equal(new Set(pools.map((p) => p.pool)).size, 40);
-    for (let i = 1; i < pools.length; i++) {
-      assert.ok((pools[i - 1]?.txM5 ?? 0) >= (pools[i]?.txM5 ?? 0), 'not sorted by txM5');
-    }
-    assert.equal(pools[0]?.name, 'AGENTCAT / SOL');
-    assert.equal(pools[0]?.txM5, 303);
+    assert.equal(pools.length, 20);
+    assert.equal(new Set(pools.map((p) => p.pool)).size, 20);
+    assert.deepEqual(
+      pools.map((p) => p.pool),
+      GECKO_PAGE_1.data.map((r) => (r.attributes as { address: string }).address),
+    );
     assert.deepEqual(
       pools.find((p) => p.pool === HIGGS_POOL),
       {
@@ -418,32 +381,9 @@ describe('discoverPumpSwapPools', () => {
     );
   });
 
-  test('gate over the captured snapshot', async () => {
-    const { fetchFn } = geckoFetch({ 1: GECKO_PAGE_1, 2: GECKO_PAGE_2 });
-    const pools = await discoverPumpSwapPools(fetchFn, GECKO_SNAPSHOT_MS);
-    const passing = pools.filter((p) => passesGate(p, GECKO_SNAPSHOT_MS));
-    assert.deepEqual(
-      passing.map((p) => `${p.name} ${p.txM5}`),
-      [
-        'AGENTCAT / SOL 303',
-        'BATONROGUE / SOL 184',
-        'AIKOL / SOL 164',
-        'UDR / SOL 107',
-        'DOTF / SOL 106',
-        'ATFS / SOL 100',
-        'SM / SOL 66',
-        'Agency / SOL 47',
-        'Human / SOL 35',
-        'HIGGS / SOL 28',
-        'Ash / SOL 21',
-        'Attention+ / SOL 21',
-      ],
-    );
-  });
-
-  test('de-duplicates pools that show up on both pages', async () => {
-    const { fetchFn } = geckoFetch({ 1: GECKO_PAGE_1, 2: GECKO_PAGE_1 });
-    assert.equal((await discoverPumpSwapPools(fetchFn, GECKO_SNAPSHOT_MS)).length, 20);
+  test('keeps the first occurrence of a pool that shows up twice on a page', async () => {
+    const { fetchFn } = geckoFetch({ 1: { data: [higgsRow(), higgsRow()] } });
+    assert.equal((await fetchTopPumpSwapPools(fetchFn, 1, GECKO_SNAPSHOT_MS)).length, 1);
   });
 
   test('skips malformed rows and pools not quoted in wSOL', async () => {
@@ -476,23 +416,23 @@ describe('discoverPumpSwapPools', () => {
         higgsRow(),
       ],
     };
-    const { fetchFn } = geckoFetch({ 1: page, 2: { data: [] } });
-    const pools = await discoverPumpSwapPools(fetchFn, GECKO_SNAPSHOT_MS);
+    const { fetchFn } = geckoFetch({ 1: page });
+    const pools = await fetchTopPumpSwapPools(fetchFn, 1, GECKO_SNAPSHOT_MS);
     assert.deepEqual(pools.map((p) => p.pool), [HIGGS_POOL]);
   });
 
   test('skips pools dated more than 5 minutes after nowMs', async () => {
-    const { fetchFn } = geckoFetch({ 1: { data: [higgsRow()] }, 2: { data: [] } });
+    const { fetchFn } = geckoFetch({ 1: { data: [higgsRow()] } });
     // HIGGS pool_created_at is 2026-10-04T12:36:16Z
-    assert.equal((await discoverPumpSwapPools(fetchFn, Date.parse('2026-10-04T12:31:00Z'))).length, 0);
-    assert.equal((await discoverPumpSwapPools(fetchFn, Date.parse('2026-10-04T12:32:00Z'))).length, 1);
+    assert.equal((await fetchTopPumpSwapPools(fetchFn, 1, Date.parse('2026-10-04T12:31:00Z'))).length, 0);
+    assert.equal((await fetchTopPumpSwapPools(fetchFn, 1, Date.parse('2026-10-04T12:32:00Z'))).length, 1);
   });
 
   test('throws on an HTTP error or a body without data', async () => {
-    const limited = geckoFetch({ 1: GECKO_PAGE_1, 2: GECKO_PAGE_2 }, 429);
-    await assert.rejects(discoverPumpSwapPools(limited.fetchFn, GECKO_SNAPSHOT_MS), /HTTP 429/);
-    const noData = geckoFetch({ 1: GECKO_PAGE_1, 2: { errors: [{ status: '401' }] } });
-    await assert.rejects(discoverPumpSwapPools(noData.fetchFn, GECKO_SNAPSHOT_MS), /page=2.*no data array/);
+    const limited = geckoFetch({ 1: GECKO_PAGE_1 }, 429);
+    await assert.rejects(fetchTopPumpSwapPools(limited.fetchFn, 1, GECKO_SNAPSHOT_MS), /HTTP 429/);
+    const noData = geckoFetch({ 2: { errors: [{ status: '401' }] } });
+    await assert.rejects(fetchTopPumpSwapPools(noData.fetchFn, 2, GECKO_SNAPSHOT_MS), /page=2.*no data array/);
   });
 });
 

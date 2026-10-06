@@ -21,6 +21,8 @@ const ORIGIN = 'https://sol.flipthememe.com';
 /** Every release carries the APK under this fixed name, so the newest one is always this URL. */
 const APK_URL = 'https://github.com/Sofiia7/flipthememe-solana/releases/latest/download/FlipTheMeme.apk';
 const OG_IMAGE = 'https://flipthememe.com/og-cover.png';
+/** The one promise, worded the same on every page: the move is one minute, the result takes about two. */
+const PROMISE = 'A 1-minute move on a busy Solana memecoin. Result in about 2 minutes.';
 
 const ASSET_LINKS = [
   {
@@ -117,6 +119,7 @@ function page(opts: { title: string; description: string; url: string; body: str
   .big { font-size: 34px; font-weight: 900; line-height: 1.1; overflow-wrap: anywhere; }
   .up { color: var(--green); } .down { color: var(--red); }
   .round { color: var(--dim); font-size: 14px; letter-spacing: 2px; }
+  .sub { color: var(--text); font-size: 14px; line-height: 1.5; }
   .call { font-size: 22px; font-weight: 900; color: #fff; letter-spacing: 1px; }
   a.btn { display: block; text-align: center; text-decoration: none; font-weight: 900; font-size: 18px; letter-spacing: 1px; padding: 16px; border: 3px solid; }
   a.go { background: linear-gradient(#ffe680, #f6b62d 60%, #d9870f); color: #2a1a00; border-color: #fff3b0; }
@@ -137,7 +140,7 @@ function challengePage(c: Challenge, url: string): string {
   // No side but a sender: an invitation to play from outside a bet, not a call to answer.
   const invite = side === null && c.by !== null;
   const other = side === 'up' ? 'down' : side === 'down' ? 'up' : null;
-  const token = ticker ? `$${ticker}` : 'a fresh memecoin';
+  const token = ticker ? `$${ticker}` : 'a busy memecoin';
   const title = side
     ? `I'm ${side.toUpperCase()} on ${token}. Take the other side.`
     : invite
@@ -151,11 +154,12 @@ function challengePage(c: Challenge, url: string): string {
     : `<div class="big">${invite ? `${name ? who : 'A FRIEND'} INVITES YOU` : 'PICK A SIDE'}</div><div class="call">UP &#9650; OR DOWN &#9660;</div>`;
   return page({
     title,
-    description: '60-second UP/DOWN calls on fresh Solana memecoins, matched 1:1. Devnet, test SOL.',
+    description: `${PROMISE} Matched 1:1. Devnet, test SOL.`,
     url,
     body: `<div class="card">
 ${headline}
 <div class="round">${invite ? 'A NEW ROUND EVERY MINUTE' : `ROUND #${escapeHtml(round)}`}</div>
+<div class="sub">${PROMISE}</div>
 </div>
 <a class="btn go" href="${escapeHtml(appIntent(c))}">OPEN FLIPTHEMEME</a>
 <a class="btn get" href="${escapeHtml(getLink(c))}">GET THE ANDROID APP</a>
@@ -167,9 +171,9 @@ ${headline}
 function getPage(c: Challenge | null): string {
   return page({
     title: 'FlipTheMeme for Android',
-    description: '60-second UP/DOWN calls on fresh Solana memecoins. Android app on Solana devnet.',
+    description: `${PROMISE} Android app on Solana devnet.`,
     url: `${ORIGIN}/get`,
-    body: `<div class="card"><div class="big">60 SECONDS.<br>UP OR DOWN.</div><div class="round">FRESH SOLANA MEMECOINS</div></div>
+    body: `<div class="card"><div class="big">ONE MINUTE.<br>UP OR DOWN.</div><div class="sub">${PROMISE}</div></div>
 <a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>${
       c
         ? `

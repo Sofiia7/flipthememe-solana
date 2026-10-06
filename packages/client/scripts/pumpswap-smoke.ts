@@ -1,7 +1,8 @@
 /**
  * Live smoke run of the PumpSwap price source against mainnet (not part of the test suite):
- * discover pools on GeckoTerminal, take the first one that passes the gate, load it, observe the
- * price 5 times 1 s apart and print the SOL depth of the pool.
+ * read the top PumpSwap pools from GeckoTerminal, take the most active one with at least 20
+ * transactions in 5 minutes, load it, observe the price 5 times 1 s apart and print the SOL depth
+ * of the pool.
  *
  *   cd packages/client
  *   node scripts/pumpswap-smoke.ts
@@ -12,10 +13,9 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createSolanaRpc } from '@solana/kit';
 import {
-  discoverPumpSwapPools,
+  fetchTopPumpSwapPools,
   loadPool,
   observePrice,
-  passesGate,
   quoteReserveLamports,
   windowMean,
   type PoolCandidate,
@@ -26,6 +26,7 @@ const RPC_URLS = process.env.SOLANA_RPC_URL
   ? [process.env.SOLANA_RPC_URL]
   : ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'];
 const OBSERVATIONS = 5;
+const MIN_TX_M5 = 20; // smoke-run gate: at least this many transactions in the last 5 minutes
 const LAMPORTS_PER_SOL_DECIMALS = 9;
 const MIN_QUOTE_RESERVE_LAMPORTS = 50n * 10n ** 9n; // design gate: 50 SOL of quote depth
 // price = lamports per raw unit * 10^12; pump.fun tokens have 6 decimals, so SOL per token = price / 10^15
@@ -82,11 +83,12 @@ async function runOnChain(rpcUrl: string, candidate: PoolCandidate): Promise<voi
 
 async function main(): Promise<void> {
   const nowMs = Date.now();
-  const candidates = await discoverPumpSwapPools(fetch, nowMs);
-  const passing = candidates.filter((c) => passesGate(c, nowMs));
+  const candidates = (await fetchTopPumpSwapPools(fetch, 1, nowMs)).sort((a, b) => b.txM5 - a.txM5);
+  const passesGate = (c: PoolCandidate): boolean => c.txM5 >= MIN_TX_M5;
+  const passing = candidates.filter(passesGate);
   console.log(`GeckoTerminal: ${candidates.length} PumpSwap pools quoted in SOL, ${passing.length} pass the gate`);
   for (const c of candidates.slice(0, 10)) {
-    console.log(`  ${passesGate(c, nowMs) ? 'PASS' : '    '} ${describeCandidate(c, nowMs)}`);
+    console.log(`  ${passesGate(c) ? 'PASS' : '    '} ${describeCandidate(c, nowMs)}`);
   }
 
   const picked = passing[0] ?? candidates[0];

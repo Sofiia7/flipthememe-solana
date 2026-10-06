@@ -5,8 +5,8 @@
  * - `observePrice` reads both vaults in one `getMultipleAccounts` call (commitment `confirmed`) and
  *   returns the integer price together with the mainnet slot of the read.
  * - `windowMean` turns the observations of one window into the strike or exit price.
- * - `discoverPumpSwapPools` + `passesGate` rank candidate pools from the free GeckoTerminal API;
- *   the SOL depth gate stays on chain (`quoteReserveLamports`).
+ * - The SOL depth gate stays on chain (`quoteReserveLamports`); the keeper's own pool selection and
+ *   gate live in `services/keeper` (`discovery.ts`, `poolgate.ts`, `selector.ts`).
  * - `fetchNewPumpSwapPools` (the network-wide `new_pools` list, newest first, filtered to PumpSwap),
  *   `fetchPumpSwapPoolsByAddress` (`pools/multi`, up to 30 pools) and `fetchTopPumpSwapPools` (one
  *   page by 24 h transactions) are single GeckoTerminal requests for callers that track fresh pools
@@ -64,7 +64,6 @@ const GECKOTERMINAL_MULTI_URL = `${GECKOTERMINAL_SOLANA_URL}/pools/multi`;
 const GECKOTERMINAL_TRENDING_URL = `${GECKOTERMINAL_SOLANA_URL}/trending_pools`;
 // GeckoTerminal pins the response format to an API version through the Accept header.
 const GECKOTERMINAL_ACCEPT = 'application/json;version=20230203';
-const DISCOVERY_PAGES = [1, 2];
 const GECKOTERMINAL_SOLANA_PREFIX = 'solana_';
 const GECKOTERMINAL_PUMPSWAP_DEX = 'pumpswap';
 /** Pools per `pools/multi` request on the free API. */
@@ -116,14 +115,7 @@ export type PoolCandidate = {
   volumeH1Usd: number;
 };
 
-export type PoolGateOptions = { maxAgeMs: number; minTxM5: number };
-
-export const DEFAULT_POOL_GATE: Readonly<PoolGateOptions> = Object.freeze({
-  maxAgeMs: 7 * 24 * 60 * 60 * 1000,
-  minTxM5: 20,
-});
-
-/** The subset of `fetch` that discovery needs; the global `fetch` satisfies it. */
+/** The subset of `fetch` that the GeckoTerminal readers need; the global `fetch` satisfies it. */
 export type GeckoTerminalFetch = (
   url: string,
   init: { headers: Record<string, string> },
@@ -298,27 +290,6 @@ export function windowMean(
 }
 
 /**
- * Candidate pools from GeckoTerminal (pages 1 and 2 of PumpSwap pools by 24h transactions),
- * de-duplicated by pool and sorted by 5-minute transactions, most active first (ties keep the API
- * order). Rows that are malformed, not quoted in wSOL, or dated more than 5 minutes after `nowMs`
- * are skipped. Throws when a page request fails or its body has no `data` array.
- */
-export async function discoverPumpSwapPools(
-  fetchFn: GeckoTerminalFetch = fetch,
-  nowMs: number = Date.now(),
-): Promise<PoolCandidate[]> {
-  const byPool = new Map<Address, PoolCandidate>();
-  for (const page of DISCOVERY_PAGES) {
-    for (const candidate of await fetchTopPumpSwapPools(fetchFn, page, nowMs)) {
-      if (!byPool.has(candidate.pool)) {
-        byPool.set(candidate.pool, candidate);
-      }
-    }
-  }
-  return [...byPool.values()].sort((a, b) => b.txM5 - a.txM5);
-}
-
-/**
  * One page (1..10) of PumpSwap pools by 24 h transactions, in API order. Rows that are malformed,
  * not quoted in wSOL, or dated more than 5 minutes after `nowMs` are skipped. Throws
  * `GeckoTerminalHttpError` on an HTTP error and an `Error` when the body has no `data` array.
@@ -397,19 +368,6 @@ export async function fetchPumpSwapPoolsByAddress(
     found.set(c.pool, c);
   }
   return wanted.flatMap((pool) => found.get(pool) ?? []);
-}
-
-/**
- * Age and activity gate (pool younger than `maxAgeMs`, at least `minTxM5` transactions in 5
- * minutes). The SOL depth gate is checked on chain by the caller.
- */
-export function passesGate(
-  c: PoolCandidate,
-  nowMs: number,
-  opts: PoolGateOptions = DEFAULT_POOL_GATE,
-): boolean {
-  const ageMs = nowMs - c.createdAtMs;
-  return ageMs < opts.maxAgeMs && c.txM5 >= opts.minTxM5;
 }
 
 function readVault(

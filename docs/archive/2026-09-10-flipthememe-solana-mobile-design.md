@@ -1,4 +1,4 @@
-> Status: superseded on 2026-10-05 by [README.md](../../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the economics and code described here are not current.
+> Status: superseded on 2026-10-05 by [README.md](../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the economics and code described here are not current.
 
 # FlipTheMeme на Solana: мобильная заявка на Clock In
 

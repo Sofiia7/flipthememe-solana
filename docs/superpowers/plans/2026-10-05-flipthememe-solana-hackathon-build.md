@@ -18,8 +18,8 @@
 
 - Не коммитить: коммиты делает координатор после проверки. Не запускать `pnpm install` без координатора (один lockfile, Windows).
 - Никаких длинных тире (U+2014) и en dash (U+2013) ни в коде, ни в текстах. Только `-`.
-- Секреты (keypair, keystore, пароли) только вне репозитория: `C:\Users\sofia\.flipthememe\`.
-- Для VPS openclaw - только `bash /c/Server/twitter_hermes/tools/vps.sh`, один заход за раз, и только по команде координатора.
+- Секреты (keypair, keystore, пароли) только вне репозитория: `<secrets-dir>` (a folder outside the repository on the developer machine).
+- Для VPS - только через обёртку `<your VPS wrapper>`, один заход за раз, и только по команде координатора.
 
 ## Карта файлов
 
@@ -100,11 +100,11 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 ## Трек A. Программа
 
 ### A0. Тулчейн Solana на Windows
-- [ ] Скачать `solana-release-x86_64-pc-windows-msvc.tar.bz2` (Agave 3.1.x, последний патч с Windows-сборкой) из GitHub `anza-xyz/agave`, распаковать в `C:\Users\sofia\.local\agave\`, добавить `bin` в PATH сессии.
+- [ ] Скачать `solana-release-x86_64-pc-windows-msvc.tar.bz2` (Agave 3.1.x, последний патч с Windows-сборкой) из GitHub `anza-xyz/agave`, распаковать в `<tools-dir>\agave\`, добавить `bin` в PATH сессии.
 - [ ] `solana --version`, `cargo-build-sbf --version`.
 - [ ] `cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml` на текущем черновике. Ожидание: `target/deploy/flip_the_meme.so`.
 - [ ] Если сборка под Windows не идёт за 40 минут: собирать `.so` в GitHub Actions (ubuntu, `agave-install`), скачивать артефакт `gh run download`.
-- [ ] Ключи: `solana-keygen new --no-bip39-passphrase -o C:\Users\sofia\.flipthememe\keeper.json` и `...\program-id.json`. Airdrop devnet на keeper: `solana airdrop 2 -u devnet` (повторить до 6 SOL; при 429 - попросить Софию пополнить через faucet.solana.com).
+- [ ] Ключи: `solana-keygen new --no-bip39-passphrase -o <secrets-dir>\keeper.json` и `...\program-id.json`. Airdrop devnet на keeper: `solana airdrop 2 -u devnet` (повторить до 6 SOL; при 429 - попросить Софию пополнить через faucet.solana.com).
 
 ### A1. Переписать программу по контракту
 - [ ] `payout.rs`: `pub fn position_payout(raw_up, raw_down, outcome, fee_win_bps, fee_refund_bps, side, stake) -> Option<u64>` и `pub fn is_activated(raw_up, raw_down, min_bank) -> bool`, u128 внутри.
@@ -142,7 +142,7 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 - [ ] C5. `house.ts`: сумма заполнения `min(разница, кап раунда, max_bank/2 - меньшая сторона, остаток бюджета)`; бюджет по суткам UTC в файле состояния.
 - [ ] C6. Восстановление при старте и `refund_expired` для просроченных.
 - [ ] C7. Прогон на ноутбуке 30 минут против devnet: раунды каждую минуту, пустые закрываются, лог без исключений.
-- [ ] C8. Сборка в один файл (esbuild), `Dockerfile`, `docker-compose.yml` (volume для состояния и ключа). Деплой на VPS одним `vps.sh push` после согласия Софии.
+- [ ] C8. Сборка в один файл (esbuild), `Dockerfile`, `docker-compose.yml` (volume для состояния и ключа). Деплой на VPS одним вызовом `<your VPS wrapper> push` после согласия Софии.
 
 ## Трек D. Приложение `apps/mobile`
 
@@ -159,7 +159,7 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 ## Трек E. Сборка и репозиторий
 
 - [ ] E1. `.gitattributes` (`* text=auto eol=lf`), приватный репозиторий `Sofiia7/flipthememe-solana`, первый push.
-- [ ] E2. Ключ подписи (PKCS12) в `C:\Users\sofia\.flipthememe\release.p12` + пароль в `release.txt`; секреты GitHub `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`.
+- [ ] E2. Ключ подписи (PKCS12) в `<secrets-dir>\release.p12` + пароль в `release.txt`; секреты GitHub `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`.
 - [ ] E3. `.github/workflows/android.yml`: pnpm, `expo prebuild --platform android`, подпись через config-плагин `apps/mobile/plugins/withReleaseSigning.js`, `assembleRelease`, артефакт `FlipTheMeme-<version>.apk`.
 - [ ] E4. Первая сборка текущего каркаса - проверить, что нативная часть (MWA, quick-crypto, nitro) собирается, до готовности фич.
 

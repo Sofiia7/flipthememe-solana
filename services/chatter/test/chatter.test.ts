@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import worker, { cleanText, moodOf, toItems } from '../src/index.ts';
+import { mock, test } from 'node:test';
+import worker, { UPSTREAM_TIMEOUT_MS, cleanText, moodOf, toItems } from '../src/index.ts';
 
 test('mood: scam words win, moon words and emoji, neutral otherwise', () => {
   assert.equal(moodOf('this is going to the moon lfg'), 'moon');
@@ -43,4 +43,66 @@ test('worker validates input and refuses without a key', async () => {
   assert.equal((await call('/v1/chatter?symbol=AIKOL&mint=0OIl')).status, 400);
   assert.equal((await call('/v1/chatter?symbol=AIKOL')).status, 503);
   assert.equal((await call('/elsewhere')).status, 404);
+});
+
+const KEYED = { SOCIALDATA_API_KEY: 'test-key' };
+const callWorker = (symbol: string) => worker.fetch(new Request(`https://w.dev/v1/chatter?symbol=${symbol}`), KEYED);
+const tweetsBody = JSON.stringify({ tweets: [{ id_str: '1', full_text: 'moon soon $AIKOL', user: { screen_name: 'a' } }] });
+
+test('the upstream request has an 8 second timeout', () => {
+  assert.equal(UPSTREAM_TIMEOUT_MS, 8_000);
+});
+
+test('a hanging upstream is cut off by the timeout and answered like an upstream error', async (t) => {
+  // The stub never answers; it only fails when the Worker's own signal fires. The timeout is
+  // shortened to 20 ms here, but the Worker must have asked for UPSTREAM_TIMEOUT_MS.
+  let asked = -1;
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    asked = ms;
+    return realTimeout(20);
+  });
+  t.mock.method(globalThis, 'fetch', (_url: string, init: { signal: AbortSignal }) =>
+    new Promise<Response>((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+      if (init.signal.aborted) reject(init.signal.reason);
+    }),
+  );
+  const res = await callWorker('HANGS');
+  assert.equal(asked, UPSTREAM_TIMEOUT_MS);
+  assert.equal(res.status, 502);
+  assert.deepEqual(await res.json(), { symbol: 'HANGS', items: [], error: 'upstream timeout' });
+});
+
+test('a fetch that rejects with TimeoutError, or fails otherwise, answers 502 without throwing', async (t) => {
+  let error: Error = new DOMException('The operation timed out.', 'TimeoutError');
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw error;
+  });
+  const timeout = await callWorker('SLOW');
+  assert.equal(timeout.status, 502);
+  assert.equal(((await timeout.json()) as { error: string }).error, 'upstream timeout');
+  error = new TypeError('fetch failed');
+  const down = await callWorker('DOWN');
+  assert.equal(down.status, 502);
+  assert.equal(((await down.json()) as { error: string }).error, 'upstream error');
+});
+
+test('a timeout after a good answer serves the last good answer, as an upstream error does', async (t) => {
+  let fail = false;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (fail) throw new DOMException('The operation timed out.', 'TimeoutError');
+    return new Response(tweetsBody, { status: 200 });
+  });
+  const first = await callWorker('STALE');
+  assert.equal(first.status, 200);
+  const firstBody = (await first.json()) as { items: unknown[] };
+  assert.equal(firstBody.items.length, 1);
+  // The cache is fresh for 60 s; jump past it so the Worker goes upstream again.
+  const real = Date.now();
+  t.mock.method(Date, 'now', () => real + 61_000);
+  fail = true;
+  const second = await callWorker('STALE');
+  assert.equal(second.status, 200);
+  assert.deepEqual(await second.json(), firstBody);
 });

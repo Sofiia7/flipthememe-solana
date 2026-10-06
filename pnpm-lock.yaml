@@ -10,9 +10,6 @@ importers:
 
   apps/mobile:
     dependencies:
-      '@flipthememe/arena-core':
-        specifier: workspace:*
-        version: link:../../packages/arena-core
       '@flipthememe/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -34,15 +31,9 @@ importers:
       expo-audio:
         specifier: ~57.0.5
         version: 57.0.5(expo-asset@57.0.17(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@10.2.2)(typescript@5.9.3))(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
-      expo-build-properties:
-        specifier: ~57.0.17
-        version: 57.0.22(expo@57.0.22)
       expo-clipboard:
         specifier: ~57.0.2
         version: 57.0.2(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)
-      expo-constants:
-        specifier: ~57.0.18
-        version: 57.0.18(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(supports-color@10.2.2)
       expo-dev-client:
         specifier: ~57.0.19
         version: 57.0.19(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))
@@ -2386,11 +2377,6 @@ packages:
       expo-asset: '*'
       react: '*'
       react-native: '*'
-
-  expo-build-properties@57.0.22:
-    resolution: {integrity: sha512-A5oRf2I02XDRu2NnqKo7Au5kUu244unvyoRMUsB+xvg/BOlsR+G/oyDFGkjbda1cJbeKm9eqposIXbA2ri5UrQ==}
-    peerDependencies:
-      expo: '*'
 
   expo-clipboard@57.0.2:
     resolution: {integrity: sha512-VB4Au8X/RbvJKUtJk+87vdtveWSNEa5RzY3ooeO6VNF7Rd49RbQXZOu3/TfEW9p7mU8TCfyTvjyCiAUwSoSJ4w==}
@@ -6389,13 +6375,6 @@ snapshots:
       expo-asset: 57.0.17(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@10.2.2)(typescript@5.9.3)
       react: 19.2.3
       react-native: 0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1)
-
-  expo-build-properties@57.0.22(expo@57.0.22):
-    dependencies:
-      '@expo/schema-utils': 57.0.2
-      expo: 57.0.22(@babel/core@7.29.7(supports-color@10.2.2))(@expo/dom-webview@57.0.1)(react-dom@19.3.0(react@19.2.3))(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3)(supports-color@10.2.2)(typescript@5.9.3)
-      resolve-from: 5.0.0
-      semver: 7.8.5
 
   expo-clipboard@57.0.2(expo@57.0.22)(react-native@0.86.0(@babel/core@7.29.7(supports-color@10.2.2))(@types/react@19.2.18)(react@19.2.3)(supports-color@8.1.1))(react@19.2.3):
     dependencies:

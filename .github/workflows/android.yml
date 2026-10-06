@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       abis:
-        description: "ABIs to build, comma separated (armeabi-v7a,arm64-v8a,x86,x86_64)"
+        description: "ABIs to build, comma separated (armeabi-v7a,arm64-v8a,x86,x86_64). Default is phones only; add x86_64 for the Android emulator."
         required: false
-        default: "arm64-v8a,x86_64"
+        default: "arm64-v8a"
   push:
     tags:
       - "v*"
@@ -24,8 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
-      # arm64-v8a: phones (Seeker, Saga, any modern Android); x86_64: the Android emulator.
-      ABIS: ${{ inputs.abis || 'arm64-v8a,x86_64' }}
+      # arm64-v8a: phones (Seeker, Saga, any modern Android). x86_64 (the Android emulator) only on
+      # request through the `abis` input, so the release APK stays small.
+      ABIS: ${{ inputs.abis || 'arm64-v8a' }}
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       EXPO_NO_TELEMETRY: "1"
 

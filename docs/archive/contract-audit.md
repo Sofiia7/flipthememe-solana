@@ -1,4 +1,4 @@
-> Status: superseded on 2026-10-05 by [README.md](../../README.md) and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; it reviews the September program draft (`MOCK_ONLY`, `lock_round` / `activate_round`, `settle_round` with two prices, the example program id), which was replaced. The current review is [docs/audits/2026-10-05-product-code-ux-audit.md](../audits/2026-10-05-product-code-ux-audit.md).
+> Status: superseded on 2026-10-05 by [README.md](../../README.md) and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; it reviews the September program draft (`MOCK_ONLY`, `lock_round` / `activate_round`, `settle_round` with two prices, the example program id), which was replaced. The later review notes (5 and 6 October 2026) were local working notes and are not part of the repository.
 
 # Статический аудит - 15 сентября 2026
 

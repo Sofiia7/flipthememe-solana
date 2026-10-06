@@ -165,3 +165,21 @@ test('other paths: home and /get explain the app, the rest redirects, writes are
   assert.equal(handle(new Request('https://sol.flipthememe.com/r/1', { method: 'POST' })).status, 405);
   assert.ok(appIntent({ round: '5', side: null, ticker: null, by: null, name: null }).endsWith(';end'));
 });
+
+const HERO = 'ONE MINUTE.<br>UP OR DOWN.';
+const SUB = 'A 1-minute move on a busy Solana memecoin. Result in about 2 minutes.';
+
+test('the home, /get and challenge pages use the canonical wording and stay honest about devnet', async () => {
+  const hero = ['/', '/get', `/get?r=496&side=up&t=Tesla&by=${BY}`];
+  const challenge = ['/r/496', '/r/496?side=up', '/r/496?side=down&t=Tesla', `/r/496?by=${BY}&n=OxBla.skr`];
+  for (const path of [...hero, ...challenge]) {
+    const body = await get(path).text();
+    assert.ok(body.includes(SUB), `${path}: sub line missing`);
+    assert.ok(!/fresh|60 seconds|60-second/i.test(body), `${path}: old wording left`);
+    assert.match(body, /DEVNET/, path);
+    assert.match(body, /test SOL/, path);
+    assert.match(body, /<meta name="description" content="[^"]*1-minute move[^"]*about 2 minutes[^"]*">/, path);
+  }
+  for (const path of hero) assert.ok((await get(path).text()).includes(HERO), `${path}: hero missing`);
+  assert.match(await get('/r/496?side=down').text(), /ON A BUSY MEMECOIN/);
+});

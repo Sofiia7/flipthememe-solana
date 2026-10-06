@@ -1,8 +1,8 @@
-> Status: superseded on 2026-10-05 by [README.md](../../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the pari-mutuel economics described here were replaced by the matched 1:1 bank, and the code described here is not current.
+> Status: superseded on 2026-10-05 by [README.md](../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the pari-mutuel economics described here were replaced by the matched 1:1 bank, and the code described here is not current.
 
 # FlipTheMeme: общая арена и настраиваемые пиксельные лица
 
-> Для передачи в разработку использовать [DEVELOPMENT_BRIEF.md](../../../DEVELOPMENT_BRIEF.md).
+> Для передачи в разработку использовать [DEVELOPMENT_BRIEF.md](DEVELOPMENT_BRIEF.md).
 > Он сводит решения в единое задание и уточняет критерии реализации.
 
 Дата: 11 сентября 2026. Текущая рабочая версия дизайна после обсуждения.

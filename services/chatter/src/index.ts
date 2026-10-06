@@ -23,6 +23,8 @@ const CACHE_MS = 60_000;
 /** Upstream calls allowed per isolate per hour: SocialData bills per tweet returned. */
 const HOURLY_BUDGET = 40;
 const MAX_ITEMS = 12;
+/** Longest wait for SocialData: a hanging upstream must not hang the Worker. */
+export const UPSTREAM_TIMEOUT_MS = 8_000;
 
 const MOON_WORDS = /\b(moon\w*|pump\w*|send it|sending|gem|ape|aped|aping|bullish|lfg|\d+x|ath|wagmi|buy\w*|long|rocket\w*)\b/i;
 const MOON_EMOJI = /🚀|🔥|💎|📈/u;
@@ -115,14 +117,25 @@ export default {
     if (!spendBudget(now)) return json(hit?.body ?? JSON.stringify({ symbol, items: [], error: 'budget' }));
 
     const query = mint ? `($${symbol} OR ${mint}) -filter:nativeretweets` : `$${symbol} -filter:nativeretweets`;
-    const upstream = await fetch(
-      `https://api.socialdata.tools/twitter/search?query=${encodeURIComponent(query)}&type=Latest`,
-      { headers: { Authorization: `Bearer ${env.SOCIALDATA_API_KEY}`, Accept: 'application/json' } },
-    );
-    if (!upstream.ok) {
-      return json(hit?.body ?? JSON.stringify({ symbol, items: [], error: `upstream ${upstream.status}` }), hit ? 200 : 502);
+    // An upstream that fails, answers late or sends rubbish is one case: the last good answer if
+    // there is one, otherwise a 502 with an empty list.
+    const failed = (reason: string) => json(hit?.body ?? JSON.stringify({ symbol, items: [], error: reason }), hit ? 200 : 502);
+    let data: { tweets?: RawTweet[] };
+    try {
+      const upstream = await fetch(
+        `https://api.socialdata.tools/twitter/search?query=${encodeURIComponent(query)}&type=Latest`,
+        {
+          headers: { Authorization: `Bearer ${env.SOCIALDATA_API_KEY}`, Accept: 'application/json' },
+          // The signal also covers reading the body.
+          signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+        },
+      );
+      if (!upstream.ok) return failed(`upstream ${upstream.status}`);
+      data = (await upstream.json()) as { tweets?: RawTweet[] };
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+      return failed(timedOut ? 'upstream timeout' : 'upstream error');
     }
-    const data = (await upstream.json()) as { tweets?: RawTweet[] };
     const body = JSON.stringify({ symbol, items: toItems(data.tweets ?? []), fetchedAt: new Date(now).toISOString() });
     cache.set(key, { at: now, body });
     if (cache.size > 50) cache.delete(cache.keys().next().value as string);
