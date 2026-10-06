@@ -11,7 +11,7 @@ export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com
 
 export const FAUCET_URL = 'https://faucet.solana.com';
 /** Live X chatter about the arena token (services/chatter, deployed as a Cloudflare Worker). */
-export const CHATTER_URL = 'https://ftm-chatter.sofiaseremeteva.workers.dev/v1/chatter';
+export const CHATTER_URL = 'https://sol.flipthememe.com/v1/chatter';
 
 export const POLL = {
   arenaMs: 2_000,

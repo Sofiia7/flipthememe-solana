@@ -4,6 +4,9 @@
   "name": "ftm-chatter",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-05",
+  // The app calls https://sol.flipthememe.com/v1/chatter (a more specific route than the link
+  // Worker's sol.flipthememe.com/*). workers_dev stays on for the builds installed before the move.
   "workers_dev": true,
+  "routes": [{ "pattern": "sol.flipthememe.com/v1/chatter*", "zone_name": "flipthememe.com" }],
   "observability": { "enabled": true }
 }

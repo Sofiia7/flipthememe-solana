@@ -14,7 +14,11 @@
   "compatibility_date": "2026-10-05",
   // @solana/kit's workerd build imports node:events, node:fs/promises and node:path.
   "compatibility_flags": ["nodejs_compat"],
+  // Public health at https://sol.flipthememe.com/v1/attestor (the route also covers POST /v1/attest);
+  // a more specific route than the link Worker's sol.flipthememe.com/*. The keeper may keep using the
+  // workers.dev URL: both reach the same Worker and the same Durable Object.
   "workers_dev": true,
+  "routes": [{ "pattern": "sol.flipthememe.com/v1/attest*", "zone_name": "flipthememe.com" }],
   "vars": {
     // Largest gap between the keeper's mean price and the attestor's, in basis points of the attestor's.
     // Not calibrated yet: tighten it after a day of attests.maxDiffBps in GET /v1/attestor (see README.md).
