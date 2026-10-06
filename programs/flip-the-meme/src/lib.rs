@@ -12,6 +12,11 @@ pub const MAX_SAMPLES: usize = 16;
 pub const MAX_FEE_WIN_BPS: u16 = 200;
 pub const MAX_FEE_REFUND_BPS: u16 = 100;
 pub const MAX_SESSION_SECS: i64 = 7 * 24 * 60 * 60;
+/// A paid position stays on chain this long after its round's exit window as readable history,
+/// then anyone may close it and its rent goes back to the owner.
+pub const POSITION_CLOSE_DELAY_SECS: i64 = 60 * 60;
+/// The house's daily cap counts per UTC day: `unix_timestamp / SECS_PER_DAY`.
+pub const SECS_PER_DAY: i64 = 24 * 60 * 60;
 
 #[program]
 pub mod flip_the_meme {
@@ -40,6 +45,50 @@ pub mod flip_the_meme {
     /// Stops new bets only. Settlement, refunds, claims and withdrawals keep working.
     pub fn set_pause(ctx: Context<AdminConfig>, paused: bool) -> Result<()> {
         ctx.accounts.config.paused = paused;
+        Ok(())
+    }
+
+    /// On-chain ceiling for the house: per round and per UTC day. Zero disables house fills.
+    pub fn init_house_limits(ctx: Context<InitHouseLimits>, round_cap: u64, daily_cap: u64) -> Result<()> {
+        let limits = &mut ctx.accounts.house_limits;
+        limits.round_cap = round_cap;
+        limits.daily_cap = daily_cap;
+        limits.day = Clock::get()?.unix_timestamp.div_euclid(SECS_PER_DAY);
+        limits.spent = 0;
+        limits.bump = ctx.bumps.house_limits;
+        Ok(())
+    }
+
+    /// New caps apply at once; what the house already spent today still counts.
+    pub fn update_house_limits(ctx: Context<UpdateHouseLimits>, round_cap: u64, daily_cap: u64) -> Result<()> {
+        let limits = &mut ctx.accounts.house_limits;
+        limits.round_cap = round_cap;
+        limits.daily_cap = daily_cap;
+        Ok(())
+    }
+
+    /// The independent price attestor. While `required` is false, prices need no second signer.
+    pub fn init_oracle(ctx: Context<InitOracle>, attestor: Pubkey, required: bool) -> Result<()> {
+        validate_attestor(attestor, required)?;
+        let oracle = &mut ctx.accounts.oracle;
+        oracle.attestor = attestor;
+        oracle.required = required;
+        oracle.bump = ctx.bumps.oracle;
+        Ok(())
+    }
+
+    /// The admin is the keeper's hot key, so alone it may only strengthen the oracle: require an
+    /// attestor, or pick one while none is required. Switching a required attestor off or
+    /// replacing it needs the attestor in office to co-sign.
+    pub fn set_oracle(ctx: Context<SetOracle>, attestor: Pubkey, required: bool) -> Result<()> {
+        validate_attestor(attestor, required)?;
+        let oracle = &ctx.accounts.oracle;
+        if oracle.required && (!required || attestor != oracle.attestor) {
+            check_attestor(oracle, &ctx.accounts.current_attestor)?;
+        }
+        let oracle = &mut ctx.accounts.oracle;
+        oracle.attestor = attestor;
+        oracle.required = required;
         Ok(())
     }
 
@@ -241,12 +290,14 @@ pub mod flip_the_meme {
     }
 
     /// After entry closes, the house may bring the smaller side up to the larger one, so a
-    /// lone player still gets a matched round. It never takes the larger side.
+    /// lone player still gets a matched round. It never takes the larger side. HouseLimits caps
+    /// the house total in one round and the house spend per UTC day.
     pub fn house_fill(ctx: Context<HouseFill>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
         let round = &mut ctx.accounts.round;
         let vault = &mut ctx.accounts.house_vault;
+        let limits = &mut ctx.accounts.house_limits;
         require!(
             round.status == RoundStatus::Open && now >= round.cutoff_at && now < round.strike_start,
             ErrorCode::NotFillWindow
@@ -265,11 +316,23 @@ pub mod flip_the_meme {
             within_depth(raw_up, raw_down, round.max_bank),
             ErrorCode::BankTooLargeForPool
         );
+        // One house position per round and key, but a rotated house key could fill again: the
+        // cap is on the round's house total.
+        let house_amount = round.house_amount.checked_add(amount).ok_or(ErrorCode::Arithmetic)?;
+        require!(house_amount <= limits.round_cap, ErrorCode::HouseRoundCapExceeded);
+        let today = now.div_euclid(SECS_PER_DAY);
+        if today > limits.day {
+            limits.day = today;
+            limits.spent = 0;
+        }
+        let spent = limits.spent.checked_add(amount).ok_or(ErrorCode::Arithmetic)?;
+        require!(spent <= limits.daily_cap, ErrorCode::HouseDailyCapExceeded);
 
         lock_stake(vault, config, amount)?;
+        limits.spent = spent;
         round.raw_up = raw_up;
         round.raw_down = raw_down;
-        round.house_amount = round.house_amount.checked_add(amount).ok_or(ErrorCode::Arithmetic)?;
+        round.house_amount = house_amount;
         round.position_count = round.position_count.checked_add(1).ok_or(ErrorCode::Arithmetic)?;
 
         let position = &mut ctx.accounts.position;
@@ -294,7 +357,8 @@ pub mod flip_the_meme {
     }
 
     /// Fixes the strike from observations taken after the pause. A round without a matched
-    /// bank ends here as NotActivated and returns every stake in full.
+    /// bank ends here as NotActivated and returns every stake in full; no price is used for it,
+    /// so it needs no attestor either.
     pub fn set_strike(ctx: Context<PriceUpdate>, samples: Vec<PriceSample>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -308,6 +372,7 @@ pub mod flip_the_meme {
             finalize(round, Outcome::NotActivated, RefundReason::None);
             return Ok(());
         }
+        check_attestor(&ctx.accounts.oracle, &ctx.accounts.attestor)?;
         let mean = mean_price(&samples)?;
         round.strike_samples = samples.len() as u8;
         match mean {
@@ -334,6 +399,7 @@ pub mod flip_the_meme {
                 && now <= round.settle_deadline,
             ErrorCode::NotDue
         );
+        check_attestor(&ctx.accounts.oracle, &ctx.accounts.attestor)?;
         let mean = mean_price(&samples)?;
         round.exit_samples = samples.len() as u8;
         match mean {
@@ -352,7 +418,8 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Anyone can end a round the keeper failed to price in time.
+    /// Anyone can end a round the keeper failed to price in time. It never needs the attestor,
+    /// so an attestor outage only delays a round into this refund.
     pub fn refund_expired(ctx: Context<RefundExpired>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -450,6 +517,29 @@ pub mod flip_the_meme {
         );
         Ok(())
     }
+
+    /// Anyone may close a paid position an hour after its round's exit window; the rent goes to
+    /// the owner's wallet. Claim needs the account, and an unclaimed stake is still locked in the
+    /// vault, so only claimed positions close. A Final round never opens again, so place_bet and
+    /// house_fill cannot create the account anew and nothing can be claimed twice.
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let round = &ctx.accounts.round;
+        let position = &ctx.accounts.position;
+        require!(round.status == RoundStatus::Final, ErrorCode::NotFinal);
+        require!(position.claimed, ErrorCode::NotClaimed);
+        require!(
+            now.saturating_sub(round.exit_end) >= POSITION_CLOSE_DELAY_SECS,
+            ErrorCode::NotDue
+        );
+        emit!(PositionClosed {
+            round_id: round.id,
+            authority: position.authority,
+            is_house: position.is_house,
+            lamports: position.to_account_info().lamports(),
+        });
+        Ok(())
+    }
 }
 
 fn add_to_side(raw_up: u64, raw_down: u64, side: Side, amount: u64) -> Result<(u64, u64)> {
@@ -488,6 +578,27 @@ fn mean_price(samples: &[PriceSample]) -> Result<Option<u64>> {
     }
     let sum: u128 = samples.iter().map(|s| s.price as u128).sum();
     Ok(Some((sum / samples.len() as u128) as u64))
+}
+
+/// While the oracle requires it, the configured attestor must be among the signers: for a price,
+/// and for a change that weakens the oracle (Anchor already rejects an account that did not sign).
+fn check_attestor(oracle: &OracleConfig, attestor: &Option<Signer>) -> Result<()> {
+    if !oracle.required {
+        return Ok(());
+    }
+    let attestor = attestor.as_ref().ok_or(ErrorCode::AttestorRequired)?;
+    require_keys_eq!(attestor.key(), oracle.attestor, ErrorCode::InvalidAttestor);
+    Ok(())
+}
+
+/// A required attestor must be a key that can sign: not the default key, and not the program id,
+/// which stands for "no account" in the optional attestor slot.
+fn validate_attestor(attestor: Pubkey, required: bool) -> Result<()> {
+    require!(
+        !required || (attestor != Pubkey::default() && attestor != crate::ID),
+        ErrorCode::InvalidAttestor
+    );
+    Ok(())
 }
 
 fn finalize(round: &mut Round, outcome: Outcome, refund_reason: RefundReason) {
@@ -690,6 +801,28 @@ pub struct Position {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct HouseLimits {
+    /// Most the house may put into one round, over all its fills.
+    pub round_cap: u64,
+    /// Most the house may put into rounds per UTC day.
+    pub daily_cap: u64,
+    /// `unix_timestamp / SECS_PER_DAY` of the day `spent` belongs to.
+    pub day: i64,
+    pub spent: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct OracleConfig {
+    /// Second signer of set_strike and settle while `required` is true.
+    pub attestor: Pubkey,
+    pub required: bool,
+    pub bump: u8,
+}
+
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
     #[account(init, payer = admin, space = 8 + Config::INIT_SPACE, seeds = [b"config"], bump)]
@@ -704,6 +837,49 @@ pub struct AdminConfig<'info> {
     #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
     pub config: Account<'info, Config>,
     pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitHouseLimits<'info> {
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(init, payer = admin, space = 8 + HouseLimits::INIT_SPACE, seeds = [b"house_limits"], bump)]
+    pub house_limits: Account<'info, HouseLimits>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateHouseLimits<'info> {
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"house_limits"], bump = house_limits.bump)]
+    pub house_limits: Account<'info, HouseLimits>,
+    pub admin: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct InitOracle<'info> {
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(init, payer = admin, space = 8 + OracleConfig::INIT_SPACE, seeds = [b"oracle"], bump)]
+    pub oracle: Account<'info, OracleConfig>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetOracle<'info> {
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"oracle"], bump = oracle.bump)]
+    pub oracle: Account<'info, OracleConfig>,
+    pub admin: Signer<'info>,
+    /// The attestor in office, co-signing a change that weakens a required oracle; otherwise the
+    /// program id stands in this slot.
+    pub current_attestor: Option<Signer<'info>>,
 }
 
 #[derive(Accounts)]
@@ -799,6 +975,8 @@ pub struct HouseFill<'info> {
     pub round: Account<'info, Round>,
     #[account(mut, seeds = [b"vault", house_authority.key().as_ref()], bump = house_vault.bump)]
     pub house_vault: Account<'info, Vault>,
+    #[account(mut, seeds = [b"house_limits"], bump = house_limits.bump)]
+    pub house_limits: Account<'info, HouseLimits>,
     #[account(init, payer = house_authority, space = 8 + Position::INIT_SPACE, seeds = [b"position", round.key().as_ref(), house_authority.key().as_ref()], bump)]
     pub position: Account<'info, Position>,
     #[account(mut)]
@@ -813,6 +991,10 @@ pub struct PriceUpdate<'info> {
     #[account(mut, seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
     pub price_authority: Signer<'info>,
+    #[account(seeds = [b"oracle"], bump = oracle.bump)]
+    pub oracle: Account<'info, OracleConfig>,
+    /// Second signer while `oracle.required`; without it the program id stands in this slot.
+    pub attestor: Option<Signer<'info>>,
 }
 
 #[derive(Accounts)]
@@ -855,6 +1037,24 @@ pub struct CloseEmptyRound<'info> {
     pub admin: UncheckedAccount<'info>,
 }
 
+#[derive(Accounts)]
+pub struct ClosePosition<'info> {
+    #[account(seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
+    pub round: Account<'info, Round>,
+    #[account(
+        mut,
+        close = authority,
+        seeds = [b"position", round.key().as_ref(), position.authority.as_ref()],
+        bump = position.bump,
+        has_one = round @ ErrorCode::InvalidAccount,
+        has_one = authority @ ErrorCode::Unauthorized,
+    )]
+    pub position: Account<'info, Position>,
+    /// CHECK: the owner's wallet, which gets the rent; its address is pinned by `position.authority`.
+    #[account(mut)]
+    pub authority: UncheckedAccount<'info>,
+}
+
 #[event]
 pub struct BetPlaced {
     pub round_id: u64,
@@ -885,6 +1085,15 @@ pub struct Claimed {
     pub round_id: u64,
     pub authority: Pubkey,
     pub payout: u64,
+}
+
+#[event]
+pub struct PositionClosed {
+    pub round_id: u64,
+    pub authority: Pubkey,
+    pub is_house: bool,
+    /// Rent returned to `authority`.
+    pub lamports: u64,
 }
 
 #[error_code]
@@ -935,4 +1144,15 @@ pub enum ErrorCode {
     NotClosable,
     #[msg("Config would not cover its obligations")]
     Insolvent,
+    // Added in the October 2026 upgrade. The app maps codes by position: append only.
+    #[msg("Only claimed positions can be closed")]
+    NotClaimed,
+    #[msg("House fill would exceed the house cap for one round")]
+    HouseRoundCapExceeded,
+    #[msg("House fill would exceed the house cap for the UTC day")]
+    HouseDailyCapExceeded,
+    #[msg("This price needs the attestor's signature")]
+    AttestorRequired,
+    #[msg("Attestor does not match the oracle config")]
+    InvalidAttestor,
 }

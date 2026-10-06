@@ -25,6 +25,11 @@ export const IX = {
   claim: new Uint8Array([62, 198, 214, 193, 213, 159, 108, 210]),
   sweepFees: new Uint8Array([175, 225, 98, 71, 118, 66, 34, 148]),
   closeEmptyRound: new Uint8Array([13, 204, 252, 231, 59, 21, 152, 146]),
+  closePosition: new Uint8Array([123, 134, 81, 0, 49, 68, 98, 98]),
+  initHouseLimits: new Uint8Array([170, 212, 23, 98, 213, 220, 127, 249]),
+  updateHouseLimits: new Uint8Array([238, 112, 193, 244, 25, 131, 67, 81]),
+  initOracle: new Uint8Array([78, 100, 33, 183, 96, 207, 60, 91]),
+  setOracle: new Uint8Array([186, 128, 81, 104, 74, 79, 18, 224]),
 } as const;
 
 export const ACCOUNT = {
@@ -33,6 +38,8 @@ export const ACCOUNT = {
   Session: new Uint8Array([243, 81, 72, 115, 214, 188, 72, 144]),
   Round: new Uint8Array([87, 127, 165, 51, 73, 78, 116, 174]),
   Position: new Uint8Array([170, 188, 143, 228, 122, 64, 247, 208]),
+  HouseLimits: new Uint8Array([120, 141, 151, 233, 161, 195, 23, 121]),
+  OracleConfig: new Uint8Array([133, 196, 152, 50, 27, 21, 145, 254]),
 } as const;
 
 export const EVENT = {
@@ -40,7 +47,13 @@ export const EVENT = {
   StrikeSet: new Uint8Array([206, 31, 210, 238, 79, 123, 152, 18]),
   RoundSettled: new Uint8Array([249, 225, 66, 54, 157, 200, 234, 222]),
   Claimed: new Uint8Array([217, 192, 123, 72, 108, 150, 248, 33]),
+  PositionClosed: new Uint8Array([157, 163, 227, 228, 13, 97, 138, 121]),
 } as const;
+
+/** Program: a claimed position of a Final round may be closed once its exit_end is this far behind. */
+export const POSITION_CLOSE_DELAY_SECS = 3_600n;
+/** Program: the house daily cap counts per UTC day, `unix_timestamp / SECS_PER_DAY`. */
+export const SECS_PER_DAY = 86_400n;
 
 /** Borsh enum tags, in declaration order of the Rust enums. */
 export const Side = { Up: 0, Down: 1 } as const;

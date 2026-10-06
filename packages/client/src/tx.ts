@@ -127,6 +127,12 @@ export const PROGRAM_ERRORS = [
   'NotSweepable',
   'NotClosable',
   'Insolvent',
+  // October 2026 upgrade; append only.
+  'NotClaimed',
+  'HouseRoundCapExceeded',
+  'HouseDailyCapExceeded',
+  'AttestorRequired',
+  'InvalidAttestor',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 

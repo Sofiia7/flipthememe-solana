@@ -3,10 +3,11 @@
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::solana_program::instruction::Instruction;
-use anchor_lang::{system_program, AccountDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{system_program, AccountDeserialize, Event, InstructionData, ToAccountMetas};
 use flip_the_meme::{
-    accounts as acc, instruction as ixs, Config, ConfigParams, CreateRoundArgs, Outcome, Position,
-    PriceSample, RefundReason, Round, RoundStatus, Session, Side, Vault, ID,
+    accounts as acc, instruction as ixs, Config, ConfigParams, CreateRoundArgs, HouseLimits, OracleConfig, Outcome,
+    Position, PositionClosed, PriceSample, RefundReason, Round, RoundStatus, Session, Side, Vault, ID,
+    POSITION_CLOSE_DELAY_SECS, SECS_PER_DAY,
 };
 use litesvm::LiteSVM;
 use solana_clock::Clock;
@@ -44,6 +45,33 @@ fn round_pda(id: u64) -> Pubkey {
 fn position_pda(round: &Pubkey, owner: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[b"position", round.as_ref(), owner.as_ref()], &ID).0
 }
+fn house_limits_pda() -> Pubkey {
+    Pubkey::find_program_address(&[b"house_limits"], &ID).0
+}
+fn oracle_pda() -> Pubkey {
+    Pubkey::find_program_address(&[b"oracle"], &ID).0
+}
+
+/// set_strike / settle accounts; `attestor: None` puts the program id in the optional slot.
+fn price_ix(id: u64, price_authority: &Pubkey, attestor: Option<Pubkey>, data: impl InstructionData) -> Instruction {
+    ix(
+        acc::PriceUpdate { config: config_pda(), round: round_pda(id), price_authority: *price_authority, oracle: oracle_pda(), attestor },
+        data,
+    )
+}
+
+/// Standard base64 with padding, to find an event in the "Program data:" log lines.
+fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
 
 fn ix(accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction {
     Instruction {
@@ -54,7 +82,18 @@ fn ix(accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction 
 }
 
 impl Env {
+    /// Config and the funded house vault, with roomy house limits and an oracle that requires no
+    /// attestor (what the devnet deployment starts with after the upgrade).
     fn new() -> Self {
+        let mut env = Self::bare();
+        let admin = env.admin.insecure_clone();
+        env.init_house_limits(&admin, SOL, 5 * SOL).unwrap();
+        env.init_oracle(&admin, Pubkey::default(), false).unwrap();
+        env
+    }
+
+    /// Config and the house vault only: no HouseLimits, no OracleConfig.
+    fn bare() -> Self {
         let mut svm = LiteSVM::new();
         let so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/flip_the_meme.so");
         let bytes = std::fs::read(&so).expect("build the program first: cargo build-sbf");
@@ -102,10 +141,73 @@ impl Env {
     }
 
     fn send(&mut self, ixs: Vec<Instruction>, payer: &Keypair, signers: &[&Keypair]) -> Result<(), String> {
+        self.send_logs(ixs, payer, signers).map(|_| ())
+    }
+
+    fn send_logs(&mut self, ixs: Vec<Instruction>, payer: &Keypair, signers: &[&Keypair]) -> Result<Vec<String>, String> {
         let tx = Transaction::new_signed_with_payer(&ixs, Some(&payer.pubkey()), signers, self.svm.latest_blockhash());
-        let res = self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?} {:?}", e.err, e.meta.logs));
+        let res = self.svm.send_transaction(tx).map(|m| m.logs).map_err(|e| format!("{:?} {:?}", e.err, e.meta.logs));
         self.svm.expire_blockhash();
         res
+    }
+
+    fn init_house_limits(&mut self, signer: &Keypair, round_cap: u64, daily_cap: u64) -> Result<(), String> {
+        let i = ix(
+            acc::InitHouseLimits { config: config_pda(), house_limits: house_limits_pda(), admin: signer.pubkey(), system_program: system_program::ID },
+            ixs::InitHouseLimits { round_cap, daily_cap },
+        );
+        self.send(vec![i], signer, &[signer])
+    }
+
+    fn update_house_limits(&mut self, signer: &Keypair, round_cap: u64, daily_cap: u64) -> Result<(), String> {
+        let i = ix(
+            acc::UpdateHouseLimits { config: config_pda(), house_limits: house_limits_pda(), admin: signer.pubkey() },
+            ixs::UpdateHouseLimits { round_cap, daily_cap },
+        );
+        self.send(vec![i], signer, &[signer])
+    }
+
+    fn init_oracle(&mut self, signer: &Keypair, attestor: Pubkey, required: bool) -> Result<(), String> {
+        let i = ix(
+            acc::InitOracle { config: config_pda(), oracle: oracle_pda(), admin: signer.pubkey(), system_program: system_program::ID },
+            ixs::InitOracle { attestor, required },
+        );
+        self.send(vec![i], signer, &[signer])
+    }
+
+    fn set_oracle(&mut self, signer: &Keypair, attestor: Pubkey, required: bool) -> Result<(), String> {
+        self.set_oracle_cosigned(signer, attestor, required, None)
+    }
+
+    /// `current`: the attestor in office co-signs, which weakening a required oracle needs.
+    fn set_oracle_cosigned(&mut self, signer: &Keypair, attestor: Pubkey, required: bool, current: Option<&Keypair>) -> Result<(), String> {
+        let i = ix(
+            acc::SetOracle { config: config_pda(), oracle: oracle_pda(), admin: signer.pubkey(), current_attestor: current.map(|k| k.pubkey()) },
+            ixs::SetOracle { attestor, required },
+        );
+        match current {
+            Some(co) => self.send(vec![i], signer, &[signer, co]),
+            None => self.send(vec![i], signer, &[signer]),
+        }
+    }
+
+    /// The admin (price authority and fee payer) sends `i` co-signed by `attestor`.
+    fn send_attested(&mut self, i: Instruction, attestor: &Keypair) -> Result<(), String> {
+        let admin = self.admin.insecure_clone();
+        self.send(vec![i], &admin, &[&admin, attestor])
+    }
+
+    /// Anyone may close a position; a stranger pays the fee so the owner's balance shows the rent alone.
+    fn close_position(&mut self, id: u64, owner: &Pubkey) -> Result<Vec<String>, String> {
+        let round = round_pda(id);
+        let i = ix(acc::ClosePosition { round, position: position_pda(&round, owner), authority: *owner }, ixs::ClosePosition {});
+        let stranger = Keypair::new();
+        self.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
+        self.send_logs(vec![i], &stranger, &[&stranger])
+    }
+
+    fn house_limits(&self) -> HouseLimits {
+        self.read(&house_limits_pda())
     }
 
     fn send_admin(&mut self, i: Instruction) -> Result<(), String> {
@@ -209,6 +311,7 @@ impl Env {
                 config: config_pda(),
                 round,
                 house_vault: vault_pda(&signer.pubkey()),
+                house_limits: house_limits_pda(),
                 position: position_pda(&round, &signer.pubkey()),
                 house_authority: signer.pubkey(),
                 system_program: system_program::ID,
@@ -219,19 +322,13 @@ impl Env {
     }
 
     fn set_strike(&mut self, id: u64, signer: &Keypair, samples: Vec<PriceSample>) -> Result<(), String> {
-        let i = ix(
-            acc::PriceUpdate { config: config_pda(), round: round_pda(id), price_authority: signer.pubkey() },
-            ixs::SetStrike { samples },
-        );
+        let i = price_ix(id, &signer.pubkey(), None, ixs::SetStrike { samples });
         self.send(vec![i], signer, &[signer])
     }
 
     fn settle(&mut self, id: u64, samples: Vec<PriceSample>) -> Result<(), String> {
         let admin = self.admin.insecure_clone();
-        let i = ix(
-            acc::PriceUpdate { config: config_pda(), round: round_pda(id), price_authority: admin.pubkey() },
-            ixs::Settle { samples },
-        );
+        let i = price_ix(id, &admin.pubkey(), None, ixs::Settle { samples });
         self.send(vec![i], &admin, &[&admin])
     }
 
@@ -279,9 +376,9 @@ fn samples(first_slot: u64, prices: &[u64]) -> Vec<PriceSample> {
     prices.iter().enumerate().map(|(i, &price)| PriceSample { slot: first_slot + i as u64, price }).collect()
 }
 
-fn assert_err(res: Result<(), String>, needle: &str) {
+fn assert_err<T>(res: Result<T, String>, needle: &str) {
     match res {
-        Ok(()) => panic!("expected failure containing {needle}"),
+        Ok(_) => panic!("expected failure containing {needle}"),
         Err(e) => assert!(e.contains(needle), "expected {needle}, got {e}"),
     }
 }
@@ -664,4 +761,353 @@ fn config_update_applies_to_new_rounds_only() {
         env.send_admin(ix(acc::AdminConfig { config: config_pda(), admin: env.admin.pubkey() }, ixs::UpdateConfig { params })),
         "FeeTooHigh",
     );
+}
+
+#[test]
+fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_to_the_owner() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    let owner = a.owner.pubkey();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    // Open and Live rounds: nothing closes.
+    assert_err(env.close_position(0, &owner), "NotFinal");
+    let r = env.round(0);
+    env.warp(r.strike_end);
+    env.set_strike(0, &admin, samples(100, &[1_000; 6])).unwrap();
+    assert_err(env.close_position(0, &owner), "NotFinal");
+    env.warp(r.exit_end);
+    env.settle(0, samples(200, &[1_100; 6])).unwrap();
+    // Final but not paid: the stake is still locked in the vault and claim needs the account.
+    assert_err(env.close_position(0, &owner), "NotClaimed");
+    env.claim(0, &owner).unwrap();
+    env.claim(0, &admin.pubkey()).unwrap();
+    env.warp(r.exit_end + POSITION_CLOSE_DELAY_SECS - 1);
+    assert_err(env.close_position(0, &owner), "NotDue");
+
+    env.warp(r.exit_end + POSITION_CLOSE_DELAY_SECS);
+    let position = position_pda(&round_pda(0), &owner);
+    let rent = env.lamports(&position);
+    let (owner_before, key_before) = (env.lamports(&owner), env.lamports(&a.key.pubkey()));
+    let vault_before = env.vault(&owner);
+    let logs = env.close_position(0, &owner).unwrap();
+    // The session key paid the rent; it goes back to the owner's wallet.
+    assert_eq!(env.lamports(&owner), owner_before + rent);
+    assert_eq!(env.lamports(&a.key.pubkey()), key_before);
+    assert_eq!(env.lamports(&position), 0);
+    let event = PositionClosed { round_id: 0, authority: owner, is_house: false, lamports: rent };
+    assert!(logs.contains(&format!("Program data: {}", base64(&event.data()))), "{logs:?}");
+
+    // Gone for good: no second close, no second claim, and no bet can create it again.
+    assert_err(env.close_position(0, &owner), "AccountNotInitialized");
+    assert_err(env.claim(0, &owner), "AccountNotInitialized");
+    assert_err(env.bet(0, &a, Side::Up, 5 * CSOL), "RoundNotOpen");
+    assert_eq!(env.lamports(&position), 0);
+    let v = env.vault(&owner);
+    assert_eq!((v.available, v.locked), (vault_before.available, vault_before.locked));
+
+    // The house position closes the same way, and the house cannot fill the final round again.
+    let house_position = position_pda(&round_pda(0), &admin.pubkey());
+    let house_rent = env.lamports(&house_position);
+    let admin_before = env.lamports(&admin.pubkey());
+    env.close_position(0, &admin.pubkey()).unwrap();
+    assert_eq!(env.lamports(&admin.pubkey()), admin_before + house_rent);
+    assert_err(env.house_fill(0, &admin, CSOL), "NotFillWindow");
+    assert_eq!(env.lamports(&house_position), 0);
+
+    // The round keeps its counts, so the fee sweep still works with every position closed.
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count), (2, 2));
+    let before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 10 * CSOL * 2 / 100);
+}
+
+#[test]
+fn closing_needs_the_owner_wallet_and_the_round_of_the_position() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    env.price_round(0, 1_000, 900);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.claim(0, &b.owner.pubkey()).unwrap();
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    let anyone = Keypair::new();
+    env.svm.airdrop(&anyone.pubkey(), SOL).unwrap();
+    let round = round_pda(0);
+    let a_position = position_pda(&round, &a.owner.pubkey());
+    // The rent cannot be sent to another wallet.
+    let elsewhere = ix(acc::ClosePosition { round, position: a_position, authority: b.owner.pubkey() }, ixs::ClosePosition {});
+    assert_err(env.send(vec![elsewhere], &anyone, &[&anyone]), "Unauthorized");
+    // Nor can another round (here an open one) stand in for the position's own final round.
+    let other_round = ix(acc::ClosePosition { round: round_pda(1), position: a_position, authority: a.owner.pubkey() }, ixs::ClosePosition {});
+    assert_err(env.send(vec![other_round], &anyone, &[&anyone]), "ConstraintSeeds");
+    assert!(env.lamports(&a_position) > 0);
+    env.close_position(0, &a.owner.pubkey()).unwrap();
+    env.close_position(0, &b.owner.pubkey()).unwrap();
+}
+
+#[test]
+fn refunded_positions_are_claimed_like_any_other_and_close_the_same_way() {
+    let mut env = Env::new();
+    let (a, b, c) = (env.player(SOL), env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    // Round 0: a lone bet, NotActivated at the strike. Round 1: matched, but nobody prices it.
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.bet(1, &b, Side::Up, 5 * CSOL).unwrap();
+    env.bet(1, &c, Side::Down, 5 * CSOL).unwrap();
+    env.warp(T0 + 100);
+    env.set_strike(0, &admin, vec![]).unwrap();
+    assert_eq!(env.round(0).outcome, Outcome::NotActivated);
+    let r1 = env.round(1);
+    env.warp(r1.settle_deadline + 1);
+    let anyone = Keypair::new();
+    env.svm.airdrop(&anyone.pubkey(), SOL).unwrap();
+    env.send(vec![ix(acc::RefundExpired { round: round_pda(1) }, ixs::RefundExpired {})], &anyone, &[&anyone]).unwrap();
+    assert_eq!((env.round(1).outcome, env.round(1).refund_reason), (Outcome::Refund, RefundReason::Expired));
+    // A refund is paid by claim like a win, and only claim sets the flag: unpaid, it stays.
+    env.warp(r1.exit_end + POSITION_CLOSE_DELAY_SECS);
+    assert_err(env.close_position(1, &b.owner.pubkey()), "NotClaimed");
+    for (id, p) in [(0, &a), (1, &b), (1, &c)] {
+        env.claim(id, &p.owner.pubkey()).unwrap();
+        let before = env.lamports(&p.owner.pubkey());
+        let rent = env.lamports(&position_pda(&round_pda(id), &p.owner.pubkey()));
+        env.close_position(id, &p.owner.pubkey()).unwrap();
+        assert_eq!(env.lamports(&p.owner.pubkey()), before + rent);
+    }
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL);
+}
+
+#[test]
+fn only_the_admin_sets_house_limits_and_without_them_the_house_cannot_fill() {
+    let mut env = Env::bare();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    assert_err(env.house_fill(0, &admin, 5 * CSOL), "AccountNotInitialized");
+    let mallory = Keypair::new();
+    env.svm.airdrop(&mallory.pubkey(), SOL).unwrap();
+    assert_err(env.init_house_limits(&mallory, u64::MAX, u64::MAX), "Unauthorized");
+    env.init_house_limits(&admin, 5 * CSOL, 8 * CSOL).unwrap();
+    let limits = env.house_limits();
+    assert_eq!(
+        (limits.round_cap, limits.daily_cap, limits.day, limits.spent),
+        (5 * CSOL, 8 * CSOL, (T0 + 60).div_euclid(SECS_PER_DAY), 0)
+    );
+    assert_err(env.init_house_limits(&admin, SOL, SOL), "already in use");
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    assert_eq!(env.house_limits().spent, 5 * CSOL);
+    assert_err(env.update_house_limits(&mallory, u64::MAX, u64::MAX), "Unauthorized");
+    // New caps apply at once; what the house spent today still counts.
+    env.update_house_limits(&admin, 2 * CSOL, 6 * CSOL).unwrap();
+    let limits = env.house_limits();
+    assert_eq!((limits.round_cap, limits.daily_cap, limits.spent), (2 * CSOL, 6 * CSOL, 5 * CSOL));
+}
+
+#[test]
+fn the_round_cap_limits_the_house_total_in_a_round_even_across_house_keys() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let admin = env.admin.insecure_clone();
+    env.update_house_limits(&admin, 4 * CSOL, SOL).unwrap();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    assert_err(env.house_fill(0, &admin, 5 * CSOL), "HouseRoundCapExceeded");
+    env.house_fill(0, &admin, 3 * CSOL).unwrap();
+    // A rotated house key has its own position seed and could fill the same round again.
+    let second = Keypair::new();
+    env.svm.airdrop(&second.pubkey(), 3 * SOL).unwrap();
+    env.open_and_deposit(&second, SOL);
+    let mut params = env.params();
+    params.house_authority = second.pubkey();
+    env.send_admin(ix(acc::AdminConfig { config: config_pda(), admin: admin.pubkey() }, ixs::UpdateConfig { params })).unwrap();
+    assert_err(env.house_fill(0, &second, 2 * CSOL), "HouseRoundCapExceeded");
+    env.house_fill(0, &second, CSOL).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.raw_up, r.raw_down, r.house_amount, r.position_count), (5 * CSOL, 4 * CSOL, 4 * CSOL, 3));
+    assert_eq!(env.house_limits().spent, 4 * CSOL);
+}
+
+#[test]
+fn the_daily_cap_counts_per_utc_day() {
+    let mut env = Env::new();
+    let (a, b, c) = (env.player(SOL), env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.update_house_limits(&admin, 5 * CSOL, 7 * CSOL).unwrap();
+    let day = T0.div_euclid(SECS_PER_DAY);
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    env.bet(1, &b, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 120);
+    assert_err(env.house_fill(1, &admin, 5 * CSOL), "HouseDailyCapExceeded");
+    env.house_fill(1, &admin, 2 * CSOL).unwrap();
+    let limits = env.house_limits();
+    assert_eq!((limits.day, limits.spent), (day, 7 * CSOL));
+
+    // The next UTC day starts from zero.
+    let midnight = (day + 1) * SECS_PER_DAY;
+    env.create_round(2, midnight, SOL).unwrap();
+    env.warp(midnight);
+    env.start_session(&c.owner, &c.key, midnight + 3_600, 10 * CSOL, SOL).unwrap();
+    env.bet(2, &c, Side::Up, 5 * CSOL).unwrap();
+    env.warp(midnight + 60);
+    env.house_fill(2, &admin, 5 * CSOL).unwrap();
+    let limits = env.house_limits();
+    assert_eq!((limits.day, limits.spent), (day + 1, 5 * CSOL));
+}
+
+#[test]
+fn only_the_admin_configures_the_oracle_and_prices_need_its_account() {
+    let mut env = Env::bare();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    env.warp(T0 + 100);
+    assert_err(env.set_strike(0, &admin, samples(1, &[1_000; 6])), "AccountNotInitialized");
+    let mallory = Keypair::new();
+    env.svm.airdrop(&mallory.pubkey(), SOL).unwrap();
+    let attestor = Keypair::new();
+    assert_err(env.init_oracle(&mallory, mallory.pubkey(), false), "Unauthorized");
+    // A required attestor must be a key that can sign.
+    assert_err(env.init_oracle(&admin, Pubkey::default(), true), "InvalidAttestor");
+    assert_err(env.init_oracle(&admin, ID, true), "InvalidAttestor");
+    env.init_oracle(&admin, attestor.pubkey(), false).unwrap();
+    let oracle: OracleConfig = env.read(&oracle_pda());
+    assert_eq!((oracle.attestor, oracle.required), (attestor.pubkey(), false));
+    assert_err(env.init_oracle(&admin, attestor.pubkey(), false), "already in use");
+    assert_err(env.set_oracle(&mallory, mallory.pubkey(), false), "Unauthorized");
+    env.set_oracle(&admin, attestor.pubkey(), true).unwrap();
+    assert!(env.read::<OracleConfig>(&oracle_pda()).required);
+    // Switching it off again takes the attestor's co-signature (see the next test).
+    env.set_oracle_cosigned(&admin, attestor.pubkey(), false, Some(&attestor)).unwrap();
+    // Not required: prices go through exactly as before, and a co-signature is simply ignored.
+    env.set_strike(0, &admin, samples(1, &[1_000; 6])).unwrap();
+    env.warp(env.round(0).exit_end);
+    let stranger = Keypair::new();
+    env.send_attested(price_ix(0, &admin.pubkey(), Some(stranger.pubkey()), ixs::Settle { samples: samples(50, &[900; 6]) }), &stranger)
+        .unwrap();
+    assert_eq!(env.round(0).outcome, Outcome::Down);
+}
+
+#[test]
+fn a_stolen_admin_key_alone_cannot_weaken_a_required_oracle() {
+    let mut env = Env::new();
+    let admin = env.admin.insecure_clone();
+    let (first, second, third) = (Keypair::new(), Keypair::new(), Keypair::new());
+    let oracle = |env: &Env| {
+        let o: OracleConfig = env.read(&oracle_pda());
+        (o.attestor, o.required)
+    };
+    // Not required yet: the admin alone picks an attestor and turns the requirement on.
+    env.set_oracle(&admin, second.pubkey(), false).unwrap();
+    env.set_oracle(&admin, first.pubkey(), false).unwrap();
+    env.set_oracle(&admin, first.pubkey(), true).unwrap();
+    // Required: the admin alone can neither switch it off nor replace the attestor.
+    assert_err(env.set_oracle(&admin, first.pubkey(), false), "AttestorRequired");
+    assert_err(env.set_oracle(&admin, second.pubkey(), true), "AttestorRequired");
+    assert_err(env.set_oracle(&admin, second.pubkey(), false), "AttestorRequired");
+    // Only the attestor in office counts as co-signer, and it must really sign.
+    assert_err(env.set_oracle_cosigned(&admin, first.pubkey(), false, Some(&second)), "InvalidAttestor");
+    let mut unsigned = ix(
+        acc::SetOracle { config: config_pda(), oracle: oracle_pda(), admin: admin.pubkey(), current_attestor: Some(first.pubkey()) },
+        ixs::SetOracle { attestor: first.pubkey(), required: false },
+    );
+    unsigned.accounts[3].is_signer = false;
+    assert_err(env.send_admin(unsigned), "AccountNotSigner");
+    // The attestor alone is no admin either.
+    env.svm.airdrop(&first.pubkey(), SOL).unwrap();
+    assert_err(env.set_oracle_cosigned(&first, first.pubkey(), false, Some(&first)), "Unauthorized");
+    // Nothing above changed it; repeating the current setting needs no co-signer.
+    assert_eq!(oracle(&env), (first.pubkey(), true));
+    env.set_oracle(&admin, first.pubkey(), true).unwrap();
+
+    // Admin and the attestor in office together: rotate, then switch off.
+    env.set_oracle_cosigned(&admin, second.pubkey(), true, Some(&first)).unwrap();
+    assert_eq!(oracle(&env), (second.pubkey(), true));
+    assert_err(env.set_oracle_cosigned(&admin, second.pubkey(), false, Some(&first)), "InvalidAttestor");
+    env.set_oracle_cosigned(&admin, second.pubkey(), false, Some(&second)).unwrap();
+    assert_eq!(oracle(&env), (second.pubkey(), false));
+    // Off again: the admin alone may rotate and require once more.
+    env.set_oracle(&admin, third.pubkey(), false).unwrap();
+    env.set_oracle(&admin, third.pubkey(), true).unwrap();
+    assert_eq!(oracle(&env), (third.pubkey(), true));
+}
+
+#[test]
+fn a_required_attestor_must_sign_every_price() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    let attestor = Keypair::new();
+    env.set_oracle(&admin, attestor.pubkey(), true).unwrap();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    let r = env.round(0);
+    env.warp(r.strike_end);
+    let strike = |attestor: Option<Pubkey>| price_ix(0, &admin.pubkey(), attestor, ixs::SetStrike { samples: samples(100, &[1_000; 6]) });
+    assert_err(env.send_admin(strike(None)), "AttestorRequired");
+    let impostor = Keypair::new();
+    assert_err(env.send_attested(strike(Some(impostor.pubkey())), &impostor), "InvalidAttestor");
+    let mut unsigned = strike(Some(attestor.pubkey()));
+    unsigned.accounts[4].is_signer = false;
+    assert_err(env.send_admin(unsigned), "AccountNotSigner");
+    env.send_attested(strike(Some(attestor.pubkey())), &attestor).unwrap();
+    assert_eq!((env.round(0).status, env.round(0).strike_price), (RoundStatus::Live, 1_000));
+
+    env.warp(r.exit_end);
+    let settle = |attestor: Option<Pubkey>| price_ix(0, &admin.pubkey(), attestor, ixs::Settle { samples: samples(200, &[1_100; 6]) });
+    assert_err(env.send_admin(settle(None)), "AttestorRequired");
+    assert_err(env.send_attested(settle(Some(impostor.pubkey())), &impostor), "InvalidAttestor");
+    env.send_attested(settle(Some(attestor.pubkey())), &attestor).unwrap();
+    assert_eq!((env.round(0).status, env.round(0).outcome), (RoundStatus::Final, Outcome::Up));
+}
+
+#[test]
+fn an_attestor_outage_ends_in_the_normal_refund_and_unmatched_rounds_need_no_attestor() {
+    let mut env = Env::new();
+    let (a, b, c) = (env.player(SOL), env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.set_oracle(&admin, Keypair::new().pubkey(), true).unwrap();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.bet(1, &c, Side::Up, 5 * CSOL).unwrap();
+    // Round 1 has no matched bank: it ends NotActivated at the strike, no price, no attestor.
+    let r1 = env.round(1);
+    env.warp(r1.strike_end);
+    env.set_strike(1, &admin, vec![]).unwrap();
+    assert_eq!(env.round(1).outcome, Outcome::NotActivated);
+    // Round 0 is matched and the attestor never signs: after the deadline anyone refunds it.
+    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "AttestorRequired");
+    env.warp(env.round(0).settle_deadline + 1);
+    let anyone = Keypair::new();
+    env.svm.airdrop(&anyone.pubkey(), SOL).unwrap();
+    env.send(vec![ix(acc::RefundExpired { round: round_pda(0) }, ixs::RefundExpired {})], &anyone, &[&anyone]).unwrap();
+    assert_eq!((env.round(0).outcome, env.round(0).refund_reason), (Outcome::Refund, RefundReason::Expired));
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100);
+    }
+    env.claim(1, &c.owner.pubkey()).unwrap();
+    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL);
 }

@@ -98,6 +98,12 @@ export type PositionAccount = {
   bump: number;
 };
 
+/** On-chain house ceiling; `spent` belongs to UTC day `day` (unix seconds / 86400). */
+export type HouseLimitsAccount = { roundCap: bigint; dailyCap: bigint; day: bigint; spent: bigint; bump: number };
+
+/** The independent price attestor: while `required`, set_strike and settle need its signature. */
+export type OracleConfigAccount = { attestor: Address; required: boolean; bump: number };
+
 const configDecoder = getStructDecoder([
   ['admin', pubkey],
   ['priceAuthority', pubkey],
@@ -180,6 +186,20 @@ const positionDecoder = getStructDecoder([
   ['bump', u8],
 ]);
 
+const houseLimitsDecoder = getStructDecoder([
+  ['roundCap', u64],
+  ['dailyCap', u64],
+  ['day', i64],
+  ['spent', u64],
+  ['bump', u8],
+]);
+
+const oracleConfigDecoder = getStructDecoder([
+  ['attestor', pubkey],
+  ['required', bool],
+  ['bump', u8],
+]);
+
 function hasDiscriminator(data: Uint8Array, expected: Uint8Array): boolean {
   if (data.length < 8) return false;
   for (let i = 0; i < 8; i++) if (data[i] !== expected[i]) return false;
@@ -199,6 +219,8 @@ export const decodePosition = (data: Uint8Array) => {
   const p = decodeWith<PositionAccount>('Position', positionDecoder, data);
   return { ...p, face: new Uint8Array(p.face) };
 };
+export const decodeHouseLimits = (data: Uint8Array) => decodeWith<HouseLimitsAccount>('HouseLimits', houseLimitsDecoder, data);
+export const decodeOracleConfig = (data: Uint8Array) => decodeWith<OracleConfigAccount>('OracleConfig', oracleConfigDecoder, data);
 
 /** True when the bytes carry the discriminator of `name`; used to filter program accounts. */
 export function isAccount(name: keyof typeof ACCOUNT, data: Uint8Array): boolean {
@@ -209,5 +231,7 @@ export function isAccount(name: keyof typeof ACCOUNT, data: Uint8Array): boolean
 export const OFFSETS = {
   positionRound: 8,
   positionAuthority: 8 + 32,
+  /** round, authority, side, stake, face, is_house come first. */
+  positionClaimed: 8 + 32 + 32 + 1 + 8 + 8 + 1,
   sessionAuthority: 8,
 } as const;

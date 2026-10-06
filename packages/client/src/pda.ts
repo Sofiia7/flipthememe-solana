@@ -28,3 +28,11 @@ export function roundAddress(id: bigint, programId: Address = PROGRAM_ID): Promi
 export function positionAddress(round: Address, owner: Address, programId: Address = PROGRAM_ID): Promise<Address> {
   return pda(['position', addressBytes.encode(round) as Uint8Array, addressBytes.encode(owner) as Uint8Array], programId);
 }
+
+export function houseLimitsAddress(programId: Address = PROGRAM_ID): Promise<Address> {
+  return pda(['house_limits'], programId);
+}
+
+export function oracleAddress(programId: Address = PROGRAM_ID): Promise<Address> {
+  return pda(['oracle'], programId);
+}

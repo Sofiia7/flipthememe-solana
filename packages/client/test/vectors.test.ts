@@ -3,11 +3,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { address, getAddressDecoder, type Address } from '@solana/kit';
+import { address, getAddressDecoder, isSignerRole, isWritableRole, type Address, type Instruction } from '@solana/kit';
 import * as ix from '../src/instructions.ts';
-import { decodeConfig, decodePosition, decodeRound, decodeSession, decodeVault } from '../src/accounts.ts';
+import { decodeConfig, decodeHouseLimits, decodeOracleConfig, decodePosition, decodeRound, decodeSession, decodeVault } from '../src/accounts.ts';
 import { positionPayout } from '../src/payout.ts';
-import { Outcome, RefundReason, RoundStatus, Side } from '../src/constants.ts';
+import { EVENT, Outcome, RefundReason, RoundStatus, Side } from '../src/constants.ts';
+import { PROGRAM_ERRORS } from '../src/tx.ts';
 
 const vectors = JSON.parse(readFileSync(new URL('./vectors.json', import.meta.url), 'utf8'));
 const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
@@ -68,9 +69,43 @@ test('instruction data matches the program', async () => {
     claim: (await ix.claim({ roundId: 42n, owner: someone })).data as Uint8Array,
     sweepFees: (await ix.sweepFees({ roundId: 42n, treasury: someone })).data as Uint8Array,
     closeEmptyRound: (await ix.closeEmptyRound({ roundId: 42n, admin: someone })).data as Uint8Array,
+    closePosition: (await ix.closePosition({ roundId: 42n, owner: someone })).data as Uint8Array,
+    initHouseLimits: (await ix.initHouseLimits({ admin: someone, roundCap: 50_000_000n, dailyCap: 2_000_000_000n })).data as Uint8Array,
+    updateHouseLimits: (await ix.updateHouseLimits({ admin: someone, roundCap: 25_000_000n, dailyCap: 1_000_000_000n })).data as Uint8Array,
+    initOracle: (await ix.initOracle({ admin: someone, attestor: key(6), required: false })).data as Uint8Array,
+    setOracle: (await ix.setOracle({ admin: someone, attestor: key(6), required: true })).data as Uint8Array,
   };
   assert.deepEqual(Object.keys(built).sort(), Object.keys(vectors.instructions).sort());
   for (const [name, data] of Object.entries(built)) assert.equal(hex(data), vectors.instructions[name], name);
+});
+
+test('account order and roles match the program (instructions added or changed in October 2026)', async () => {
+  // Same keys as vectors.rs: admin 9, house 2, price authority 1, attestor 6, attestor in office 8,
+  // position owner 10, round 42.
+  const built: Record<string, Instruction> = {
+    closePosition: await ix.closePosition({ roundId: 42n, owner: key(10) }),
+    initHouseLimits: await ix.initHouseLimits({ admin: key(9), roundCap: 1n, dailyCap: 2n }),
+    updateHouseLimits: await ix.updateHouseLimits({ admin: key(9), roundCap: 1n, dailyCap: 2n }),
+    initOracle: await ix.initOracle({ admin: key(9), attestor: key(6), required: false }),
+    setOracle: await ix.setOracle({ admin: key(9), attestor: key(6), required: true }),
+    setOracleCosigned: await ix.setOracle({ admin: key(9), attestor: key(6), required: false, currentAttestor: key(8) }),
+    houseFill: await ix.houseFill({ house: key(2), roundId: 42n, amount: 1n }),
+    setStrikeAttested: await ix.setStrike({ priceAuthority: key(1), roundId: 42n, samples: [], attestor: key(6) }),
+    settleUnattested: await ix.settle({ priceAuthority: key(1), roundId: 42n, samples: [] }),
+  };
+  assert.deepEqual(Object.keys(built).sort(), Object.keys(vectors.accountMetas).sort());
+  for (const [name, instruction] of Object.entries(built)) {
+    const metas = (instruction.accounts ?? []).map((a) => ({ pubkey: a.address, signer: isSignerRole(a.role), writable: isWritableRole(a.role) }));
+    assert.deepEqual(metas, vectors.accountMetas[name], name);
+  }
+});
+
+test('event discriminators and error numbers match the program', () => {
+  assert.deepEqual(Object.keys(EVENT).sort(), Object.keys(vectors.events).sort());
+  for (const [name, h] of Object.entries(vectors.events)) assert.equal(hex(EVENT[name as keyof typeof EVENT]), h, name);
+  // Codes are mapped by position (6000 + index): the list may only ever grow at the end.
+  assert.equal(PROGRAM_ERRORS.length, Object.keys(vectors.errors).length);
+  for (const [name, code] of Object.entries(vectors.errors as Record<string, number>)) assert.equal(PROGRAM_ERRORS[code - 6000], name, `${code}`);
 });
 
 test('account decoders read the program layout', () => {
@@ -103,6 +138,16 @@ test('account decoders read the program layout', () => {
   assert.deepEqual([...position.face], [9, 8, 7, 6, 5, 4, 3, 2]);
   assert.deepEqual([position.isHouse, position.claimed, position.payout, position.bump], [true, true, 98_000_000n, 250]);
   assert.throws(() => decodeVault(bytes(vectors.accounts.round)), /not a Vault/);
+
+  assert.deepEqual(decodeHouseLimits(bytes(vectors.accounts.houseLimits)), {
+    roundCap: 50_000_000n,
+    dailyCap: 2_000_000_000n,
+    day: 20_833n,
+    spent: 150_000_000n,
+    bump: 249,
+  });
+  assert.deepEqual(decodeOracleConfig(bytes(vectors.accounts.oracle)), { attestor: key(6), required: true, bump: 248 });
+  assert.throws(() => decodeOracleConfig(bytes(vectors.accounts.houseLimits)), /not a OracleConfig/);
 });
 
 test('payout mirror agrees with payout.rs', () => {

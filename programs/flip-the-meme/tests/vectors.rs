@@ -3,11 +3,13 @@
 //! Run: cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test vectors
 
 use anchor_lang::prelude::Pubkey;
-use anchor_lang::{AccountSerialize, InstructionData};
+use anchor_lang::solana_program::instruction::AccountMeta;
+use anchor_lang::{system_program, AccountSerialize, Discriminator, InstructionData, ToAccountMetas};
 use flip_the_meme::payout::position_payout;
 use flip_the_meme::{
-    instruction as ixs, Config, ConfigParams, CreateRoundArgs, Outcome, Position, PriceSample, RefundReason, Round,
-    RoundStatus, Session, Side, Vault,
+    accounts as acc, instruction as ixs, BetPlaced, Claimed, Config, ConfigParams, CreateRoundArgs, ErrorCode,
+    HouseLimits, OracleConfig, Outcome, Position, PositionClosed, PriceSample, RefundReason, Round, RoundSettled,
+    RoundStatus, Session, Side, StrikeSet, Vault, ID,
 };
 use std::fmt::Write as _;
 
@@ -19,10 +21,22 @@ fn key(n: u8) -> Pubkey {
     Pubkey::new_from_array([n; 32])
 }
 
+fn pda(seeds: &[&[u8]]) -> Pubkey {
+    Pubkey::find_program_address(seeds, &ID).0
+}
+
 fn account<T: AccountSerialize>(value: &T) -> String {
     let mut out = Vec::new();
     value.try_serialize(&mut out).unwrap();
     hex(&out)
+}
+
+fn metas(list: Vec<AccountMeta>) -> String {
+    let items: Vec<String> = list
+        .iter()
+        .map(|m| format!("{{ \"pubkey\": \"{}\", \"signer\": {}, \"writable\": {} }}", m.pubkey, m.is_signer, m.is_writable))
+        .collect();
+    format!("[{}]", items.join(", "))
 }
 
 #[test]
@@ -74,6 +88,86 @@ fn write_vectors() {
         ("claim", ixs::Claim {}.data()),
         ("sweepFees", ixs::SweepFees {}.data()),
         ("closeEmptyRound", ixs::CloseEmptyRound {}.data()),
+        ("closePosition", ixs::ClosePosition {}.data()),
+        ("initHouseLimits", ixs::InitHouseLimits { round_cap: 50_000_000, daily_cap: 2_000_000_000 }.data()),
+        ("updateHouseLimits", ixs::UpdateHouseLimits { round_cap: 25_000_000, daily_cap: 1_000_000_000 }.data()),
+        ("initOracle", ixs::InitOracle { attestor: key(6), required: false }.data()),
+        ("setOracle", ixs::SetOracle { attestor: key(6), required: true }.data()),
+    ];
+
+    // Account order and roles of the instructions added or changed in the October 2026 upgrade,
+    // with distinct keys so a swapped pair shows: admin 9, house 2, price authority 1, attestor 6,
+    // attestor in office 8, position owner 10, round 42.
+    let config_key = pda(&[b"config"]);
+    let round_key = pda(&[b"round", &42u64.to_le_bytes()]);
+    let house_limits_key = pda(&[b"house_limits"]);
+    let oracle_key = pda(&[b"oracle"]);
+    let account_metas: Vec<(&str, Vec<AccountMeta>)> = vec![
+        (
+            "closePosition",
+            acc::ClosePosition { round: round_key, position: pda(&[b"position", round_key.as_ref(), key(10).as_ref()]), authority: key(10) }
+                .to_account_metas(None),
+        ),
+        (
+            "initHouseLimits",
+            acc::InitHouseLimits { config: config_key, house_limits: house_limits_key, admin: key(9), system_program: system_program::ID }
+                .to_account_metas(None),
+        ),
+        (
+            "updateHouseLimits",
+            acc::UpdateHouseLimits { config: config_key, house_limits: house_limits_key, admin: key(9) }.to_account_metas(None),
+        ),
+        (
+            "initOracle",
+            acc::InitOracle { config: config_key, oracle: oracle_key, admin: key(9), system_program: system_program::ID }.to_account_metas(None),
+        ),
+        (
+            "setOracle",
+            acc::SetOracle { config: config_key, oracle: oracle_key, admin: key(9), current_attestor: None }.to_account_metas(None),
+        ),
+        (
+            "setOracleCosigned",
+            acc::SetOracle { config: config_key, oracle: oracle_key, admin: key(9), current_attestor: Some(key(8)) }.to_account_metas(None),
+        ),
+        (
+            "houseFill",
+            acc::HouseFill {
+                config: config_key,
+                round: round_key,
+                house_vault: pda(&[b"vault", key(2).as_ref()]),
+                house_limits: house_limits_key,
+                position: pda(&[b"position", round_key.as_ref(), key(2).as_ref()]),
+                house_authority: key(2),
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        ),
+        (
+            "setStrikeAttested",
+            acc::PriceUpdate { config: config_key, round: round_key, price_authority: key(1), oracle: oracle_key, attestor: Some(key(6)) }
+                .to_account_metas(None),
+        ),
+        (
+            "settleUnattested",
+            acc::PriceUpdate { config: config_key, round: round_key, price_authority: key(1), oracle: oracle_key, attestor: None }
+                .to_account_metas(None),
+        ),
+    ];
+    let events: Vec<(&str, &[u8])> = vec![
+        ("BetPlaced", BetPlaced::DISCRIMINATOR),
+        ("StrikeSet", StrikeSet::DISCRIMINATOR),
+        ("RoundSettled", RoundSettled::DISCRIMINATOR),
+        ("Claimed", Claimed::DISCRIMINATOR),
+        ("PositionClosed", PositionClosed::DISCRIMINATOR),
+    ];
+    // Every error with the number the program returns for it. The app maps numbers by position,
+    // so the client test fails if a code is ever inserted or reordered instead of appended.
+    use ErrorCode::*;
+    let errors = [
+        InvalidAmount, Arithmetic, InsufficientAvailable, SessionInvalid, SessionCapExceeded, InvalidSession, RoundNotOpen,
+        InvalidRoundTime, InvalidRoundId, NotDue, NotFinal, AlreadyClaimed, FeeTooHigh, BankTooLargeForPool, InvalidSamples,
+        Paused, Unauthorized, InvalidAccount, NotFillWindow, NothingToFill, NotSweepable, NotClosable, Insolvent, NotClaimed,
+        HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor,
     ];
 
     let config = Config {
@@ -148,6 +242,8 @@ fn write_vectors() {
         payout: 98_000_000,
         bump: 250,
     };
+    let house_limits = HouseLimits { round_cap: 50_000_000, daily_cap: 2_000_000_000, day: 20_833, spent: 150_000_000, bump: 249 };
+    let oracle = OracleConfig { attestor: key(6), required: true, bump: 248 };
 
     let mut json = String::from("{\n  \"instructions\": {\n");
     for (i, (name, bytes)) in instructions.iter().enumerate() {
@@ -159,7 +255,24 @@ fn write_vectors() {
     writeln!(json, "    \"vault\": \"{}\",", account(&vault)).unwrap();
     writeln!(json, "    \"session\": \"{}\",", account(&session)).unwrap();
     writeln!(json, "    \"round\": \"{}\",", account(&round)).unwrap();
-    writeln!(json, "    \"position\": \"{}\"", account(&position)).unwrap();
+    writeln!(json, "    \"position\": \"{}\",", account(&position)).unwrap();
+    writeln!(json, "    \"houseLimits\": \"{}\",", account(&house_limits)).unwrap();
+    writeln!(json, "    \"oracle\": \"{}\"", account(&oracle)).unwrap();
+    json.push_str("  },\n  \"accountMetas\": {\n");
+    for (i, (name, list)) in account_metas.iter().enumerate() {
+        let comma = if i + 1 < account_metas.len() { "," } else { "" };
+        writeln!(json, "    \"{name}\": {}{comma}", metas(list.clone())).unwrap();
+    }
+    json.push_str("  },\n  \"events\": {\n");
+    for (i, (name, bytes)) in events.iter().enumerate() {
+        let comma = if i + 1 < events.len() { "," } else { "" };
+        writeln!(json, "    \"{name}\": \"{}\"{comma}", hex(bytes)).unwrap();
+    }
+    json.push_str("  },\n  \"errors\": {\n");
+    for (i, error) in errors.iter().enumerate() {
+        let comma = if i + 1 < errors.len() { "," } else { "" };
+        writeln!(json, "    \"{}\": {}{comma}", error.name(), u32::from(*error)).unwrap();
+    }
     json.push_str("  },\n  \"payouts\": [\n");
 
     let mut state: u64 = 0x2545_f491_4f6c_dd1d;
