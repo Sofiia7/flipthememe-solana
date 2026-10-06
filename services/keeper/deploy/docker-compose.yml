@@ -43,11 +43,9 @@ services:
       POOL_PUMP_ONLY: ${POOL_PUMP_ONLY:-true}
     volumes:
       - ./data:/data
-      - ./secrets/keeper.json:/secrets/keeper.json:ro
-      # After split-roles.ts: create the files first (a missing file becomes a directory), then
-      # uncomment and set PRICE_KEYPAIR=/secrets/price.json, HOUSE_KEYPAIR=/secrets/house.json in .env.
-      # - ./secrets/price.json:/secrets/price.json:ro
-      # - ./secrets/house.json:/secrets/house.json:ro
+      # The whole folder: keeper.json, plus price.json and house.json after split-roles.ts
+      # (then PRICE_KEYPAIR=/secrets/price.json and HOUSE_KEYPAIR=/secrets/house.json in .env).
+      - ./secrets:/secrets:ro
     logging:
       driver: json-file
       options:

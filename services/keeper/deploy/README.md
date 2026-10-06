@@ -361,8 +361,8 @@ except the two VPS steps (Git Bash, `vps.sh`, as in section 2).
    Once the attestor is required (step 9), the admin alone cannot switch it off or replace it,
    so a stolen keeper key cannot price rounds alone; it can still pause betting, create rounds
    and change Config. Then upload both files with the next step (add them to the `vps.sh push`
-   file list, like keeper.json in the first deploy), move them to `deploy/secrets/`, uncomment
-   their two lines in `docker-compose.yml` and set `PRICE_KEYPAIR=/secrets/price.json` and
+   file list, like keeper.json in the first deploy), move them to `deploy/secrets/` (mounted as a
+   whole at `/secrets`, read only) and set `PRICE_KEYPAIR=/secrets/price.json` and
    `HOUSE_KEYPAIR=/secrets/house.json` in `deploy/.env`.
 
 8. Deploy the new keeper (build as in section 1, push as in section 2 "Updates"; it starts the
