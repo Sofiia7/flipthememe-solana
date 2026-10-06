@@ -22,7 +22,10 @@ export interface AttestorApi {
 }
 
 export type HttpEnv = {
-  /** Optional shared secret: when set, POST /v1/attest needs "Authorization: Bearer <token>". */
+  /**
+   * Shared secret: when set, POST /v1/attest needs "Authorization: Bearer <token>". Required in
+   * production: with none set every caller is let in.
+   */
   ATTEST_TOKEN?: string;
 };
 

@@ -13,8 +13,10 @@
  * than RETAIN_MS are deleted. Between windows the next alarm is the next window's start or the next
  * refresh, whichever comes first.
  *
- * attest(): check.ts on the transaction, the round fresh from devnet, the samples (samples.ts),
- * then the Ed25519 signature over the message bytes.
+ * attest(): check.ts on the transaction and the round's window (a set_strike only from strike_end
+ * until exit_start), the round fresh from devnet, the samples (samples.ts: a corroborated outage is
+ * signed, otherwise the keeper's samples must be a fair share of the window and agree with the
+ * attestor's own), then the Ed25519 signature over the message bytes.
  */
 import {
   PROGRAM_ID,
@@ -52,7 +54,9 @@ import {
   SAMPLE_MARGIN_MS,
   activeWindows,
   compareSamples,
+  isCorroboratedOutage,
   nextSamplingStart,
+  ownReadsInside,
   pendingWindows,
   windowOf,
   type Observation,
@@ -106,14 +110,20 @@ export type CoreOptions = {
 };
 
 type SampleRow = { at_ms: number; slot: number; price: string };
-/** One attest call for the health report: `sharedSlots` is null when no comparison ran. */
+/**
+ * One attest call for the health report: `sharedSlots` and `diffBps` (the gap between the two means,
+ * in basis points) are null when no comparison got that far. `verdict` is what the attestor
+ * concluded when it signed ('agree', 'not_activated' or 'unpriceable') and null for a refusal.
+ */
 type AttestRecord = {
   at: string | null;
   round: string | null;
   instruction: string | null;
   result: string;
+  verdict: string | null;
   keeperSamples: number | null;
   sharedSlots: number | null;
+  diffBps: number | null;
 };
 type Snapshot = { config: ConfigAccount | null; oracle: OracleConfigAccount | null; rounds: Map<bigint, RoundAccount> };
 type Base64Account = { data: readonly [string, string]; owner: Address } | null;
@@ -158,8 +168,19 @@ export class AttestorCore {
   private pdas: Promise<ProgramPdas> | null = null;
   private readonly startedAt: number;
   private readonly recent: AttestRecord[] = [];
-  /** Since the object started. `compared`: calls that reached the slot-by-slot comparison. */
-  private readonly totals = { attests: 0, signed: 0, compared: 0, keeperSamples: 0, sharedSlots: 0 };
+  /**
+   * Since the object started. `compared`: calls that reached the slot-by-slot comparison.
+   * `maxDiffBps`: the largest gap between the two means over the calls that were signed after a
+   * comparison, which is what to look at before tightening ATTEST_TOLERANCE_BPS.
+   */
+  private readonly totals: { attests: number; signed: number; compared: number; keeperSamples: number; sharedSlots: number; maxDiffBps: number | null } = {
+    attests: 0,
+    signed: 0,
+    compared: 0,
+    keeperSamples: 0,
+    sharedSlots: 0,
+    maxDiffBps: null,
+  };
   private rounds: Map<bigint, RoundAccount> | null = null;
   private nextRoundId: bigint | null = null;
   private oracle: OracleConfigAccount | null = null;
@@ -436,6 +457,7 @@ export class AttestorCore {
   private record(entry: Omit<AttestRecord, 'at'>): void {
     this.totals.attests++;
     if (entry.result === 'signed') this.totals.signed++;
+    if (entry.result === 'signed' && entry.diffBps !== null) this.totals.maxDiffBps = Math.max(this.totals.maxDiffBps ?? 0, entry.diffBps);
     if (entry.sharedSlots !== null) {
       this.totals.compared++;
       this.totals.keeperSamples += entry.keeperSamples ?? 0;
@@ -458,7 +480,9 @@ export class AttestorCore {
     const finish = (result: Result, outcome: string, fields: LogFields = {}, sharedSlots: number | null = null): Result => {
       const keeperSamples = request ? request.samples.length : null;
       const instruction = request ? request.instruction : null;
-      this.record({ round: round ? round.id.toString() : null, instruction, result: outcome, keeperSamples, sharedSlots });
+      const verdict = typeof fields.verdict === 'string' ? fields.verdict : null;
+      const diffBps = typeof fields.diffBps === 'number' ? fields.diffBps : null;
+      this.record({ round: round ? round.id.toString() : null, instruction, result: outcome, verdict, keeperSamples, sharedSlots, diffBps });
       this.log({ event: 'attest', signed: result.status === 200, result: outcome, round: round?.id ?? null, instruction, keeperSamples, sharedSlots, ...fields });
       return result;
     };
@@ -485,7 +509,20 @@ export class AttestorCore {
         return finish(await signed(), 'signed', { verdict: 'not_activated', feePayer: request.feePayer });
       }
       const window = windowOf(round, request.instruction === 'set_strike' ? 'strike' : 'exit');
-      const agreement = compareSamples(request.samples, this.ownSamples(window), window, this.tolerance.bps);
+      const own = this.ownSamples(window);
+      if (isCorroboratedOutage(request.samples.length, own, window)) {
+        // Fewer than 5 keeper samples and fewer than 5 attestor reads inside the window: both sides
+        // saw the same outage. The program ends the round as Unpriceable (a free refund) without
+        // using a price, but while the oracle is required it needs this signature to do so; refusing
+        // would only make the players wait for refund_expired. With 5 or more own reads the keeper
+        // is withholding or faulty and compareSamples refuses as 'unpriced'.
+        return finish(await signed(), 'signed', {
+          verdict: 'unpriceable',
+          ownSamples: ownReadsInside(own, window).length,
+          feePayer: request.feePayer,
+        });
+      }
+      const agreement = compareSamples(request.samples, own, window, this.tolerance.bps);
       const verdict = {
         verdict: 'agree',
         keeperMean: agreement.keeperMean,
@@ -561,6 +598,7 @@ export class AttestorCore {
       },
       // Since the object started (a deploy or an eviction restarts it). `coverage`: the share of
       // compared keeper samples that sat at a slot the attestor read too, checked to the unit.
+      // `maxDiffBps`: the largest gap between the two means of a signed comparison.
       attests: {
         since: iso(this.startedAt),
         ...this.totals,

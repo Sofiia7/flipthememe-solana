@@ -47,8 +47,11 @@ const ms = (secs: bigint): number => Number(secs) * 1000;
  *
  * - Final: claim every position, then sweep the fees; a round without positions is closed.
  * - Not final and the devnet clock is past `settle_deadline`: refund_expired.
- * - Open after `strike_end` (+1 s locally, and the devnet clock past it too): set_strike. The
- *   program itself turns a round without a matched bank into NotActivated.
+ * - Open after `strike_end` (+1 s locally, and the devnet clock past it too) and while the devnet
+ *   clock is before `exit_start`: set_strike. The program itself turns a round without a matched
+ *   bank into NotActivated. From `exit_start` on the program rejects set_strike (a strike set with
+ *   the exit window already open could be chosen with the exit in sight), so the keeper waits
+ *   and the round ends through refund_expired at `settle_deadline`, as above.
  * - Open in the fill window with unequal sides, at least one position and no house stake yet:
  *   house_fill (the amount and whether to skip are the house policy's call).
  * - Live after `exit_end` (+1 s locally, and the devnet clock past it too): settle.
@@ -65,6 +68,8 @@ export function nextStep(round: RoundView, nowMs: number, ctx: StepContext): Ste
   if (chainMs >= ms(round.settleDeadline) + 1000) return { kind: 'expire' };
   if (round.status === RoundStatus.Open) {
     if (nowMs >= ms(round.strikeEnd) + PRICE_AFTER_WINDOW_MS) {
+      // Program: set_strike needs strike_end <= now < exit_start (whole seconds, devnet clock).
+      if (chainMs >= ms(round.exitStart)) return WAIT;
       return chainMs >= ms(round.strikeEnd) ? { kind: 'strike' } : WAIT;
     }
     const inFillWindow =

@@ -274,6 +274,29 @@ describe('round state', () => {
     assert.equal(refusal(() => checkRound('settle', live, exitEndMs - 1)), 'window_open');
     assert.equal(refusal(() => checkRound('settle', { ...round, status: RoundStatus.Final }, exitEndMs)), 'round_state');
   });
+
+  test('set_strike only while strike_end <= now < exit_start, as the program: a strike after the exit window opens is refused', () => {
+    const exitStartMs = Number(round.exitStart) * 1000;
+    assert.ok(exitStartMs > strikeEndMs);
+    assert.doesNotThrow(() => checkRound('set_strike', round, strikeEndMs));
+    assert.doesNotThrow(() => checkRound('set_strike', round, exitStartMs - 1));
+    assert.equal(refusal(() => checkRound('set_strike', round, exitStartMs)), 'strike_too_late');
+    assert.equal(refusal(() => checkRound('set_strike', round, exitStartMs + 1)), 'strike_too_late');
+    assert.equal(refusal(() => checkRound('set_strike', round, exitEndMs + 600_000)), 'strike_too_late');
+    // The state check comes first: a round that is not Open is round_state, early or late.
+    assert.equal(refusal(() => checkRound('set_strike', { ...round, status: RoundStatus.Live }, exitStartMs + 1)), 'round_state');
+    assert.equal(refusal(() => checkRound('set_strike', { ...round, status: RoundStatus.Final }, exitStartMs + 1)), 'round_state');
+    // The window that is still open is window_open, not strike_too_late.
+    assert.equal(refusal(() => checkRound('set_strike', round, strikeEndMs - 1)), 'window_open');
+  });
+
+  test('settle has no upper bound here: the program alone ends it at settle_deadline', () => {
+    const live = { ...round, status: RoundStatus.Live };
+    const deadlineMs = Number(round.settleDeadline) * 1000;
+    assert.doesNotThrow(() => checkRound('settle', live, exitEndMs + 1));
+    assert.doesNotThrow(() => checkRound('settle', live, deadlineMs));
+    assert.doesNotThrow(() => checkRound('settle', live, deadlineMs + 60_000));
+  });
 });
 
 test('base64: strict, padded text only', () => {

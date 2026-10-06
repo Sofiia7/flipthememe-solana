@@ -356,8 +356,8 @@ describe('attest', () => {
 
   test('too few samples: a window the attestor did not watch', async () => {
     const { s, round } = await strikeReady();
-    // Round 11 is on devnet, but its strike window passed while the sampler did not know it.
-    const missed = s.devnet.add(makeRound(11n, OPENS - 600n, HIGGS_POOL));
+    // Round 11 is on devnet with the same windows, but on a pool the sampler never read.
+    const missed = s.devnet.add(makeRound(11n, OPENS, testAddress(2)));
     const result = await s.core.attest((await strikeTx(s, 11n, keeperSamples(missed, 'strike'))).tx);
     assert.equal(result.status, 422);
     assert.equal(body(result).reason, 'too_few_samples');
@@ -400,10 +400,130 @@ describe('attest', () => {
     assert.equal(body(await s.core.attest((await strikeTx(s, 10n, [])).tx)).reason, 'unpriced');
   });
 
-  test('fewer than five samples fix no price: refused as unpriced', async () => {
+  test('fewer than five samples while the attestor read ten: refused as unpriced (the keeper is withholding or faulty)', async () => {
     const { s, round } = await strikeReady();
     const result = await s.core.attest((await strikeTx(s, 10n, keeperSamples(round, 'strike').slice(0, 4))).tx);
     assert.equal(body(result).reason, 'unpriced');
+    assert.equal(s.logs.at(-1)?.ownSamples, 10);
+  });
+
+  test('a keeper that sends only the five highest of its ten reads is refused as samples_withheld', async () => {
+    const { s, round } = await strikeReady();
+    const samples = keeperSamples(round, 'strike');
+    // The price drifts up, so the last five are the highest. The mean of those stays inside 150 bps.
+    const result = await s.core.attest((await strikeTx(s, 10n, samples.slice(5))).tx);
+    assert.equal(result.status, 422);
+    assert.equal(body(result).reason, 'samples_withheld');
+    assert.equal(s.logs.at(-1)?.result, 'samples_withheld');
+    assert.equal(s.logs.at(-1)?.ownSamples, 10);
+    assert.equal(s.logs.at(-1)?.required, 7);
+    // Eight of ten (two reads lost) are fine.
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, samples.slice(2))).tx)).status, 200);
+  });
+
+  describe('set_strike only before the exit window opens (the program rejects a later one)', () => {
+    test('co-signed up to exit_start, refused as strike_too_late from then on', async () => {
+      const { s, round } = await strikeReady();
+      const { tx } = await strikeTx(s, 10n, keeperSamples(round, 'strike'));
+      const exitStartMs = Number(round.exitStart) * 1000;
+      s.clock.ms = exitStartMs - 1;
+      assert.equal((await s.core.attest(tx)).status, 200);
+      s.clock.ms = exitStartMs;
+      const late = await s.core.attest(tx);
+      assert.equal(late.status, 422);
+      assert.equal(body(late).reason, 'strike_too_late');
+      assert.equal(s.logs.at(-1)?.result, 'strike_too_late');
+      s.clock.ms = exitStartMs + 5_000;
+      assert.equal(body(await s.core.attest(tx)).reason, 'strike_too_late');
+    });
+
+    test('a round without a matched bank is held to the same window (the program checks it first)', async () => {
+      const { s } = await strikeReady();
+      const lonely = s.devnet.add(makeRound(12n, OPENS, HIGGS_POOL, { rawUp: SOL / 100n, rawDown: 0n, positionCount: 1 }));
+      const { tx } = await strikeTx(s, 12n, []);
+      const exitStartMs = Number(lonely.exitStart) * 1000;
+      s.clock.ms = exitStartMs - 1;
+      assert.equal((await s.core.attest(tx)).status, 200);
+      assert.equal(s.logs.at(-1)?.verdict, 'not_activated');
+      s.clock.ms = exitStartMs;
+      assert.equal(body(await s.core.attest(tx)).reason, 'strike_too_late');
+    });
+  });
+
+  describe('a corroborated outage: fewer than five samples on both sides', () => {
+    /** Mainnet goes dark `afterMs` into the window: the attestor keeps only the reads before that. */
+    async function outageAfter(afterMs: number, status: RoundStatus = RoundStatus.Open) {
+      const s = await setup(T0 + 70_000);
+      const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL, status === RoundStatus.Live ? { status, strikePrice: 1n } : {}));
+      const kind = status === RoundStatus.Live ? 'exit' : 'strike';
+      const window = windowOf(round, kind);
+      s.beforeTick = (ms) => {
+        s.mainnet.down = ms >= window.startMs + afterMs;
+      };
+      await s.core.ping();
+      await runUntil(s, window.endMs + 1000);
+      const inside = rows(s).filter((r) => r.at_ms >= window.startMs && r.at_ms < window.endMs).length;
+      return { s, round, kind, inside };
+    }
+
+    test('set_strike: the attestor read 4, the keeper sends 4 or none: co-signed, the program refunds it as Unpriceable', async () => {
+      const { s, round, inside } = await outageAfter(4_000);
+      assert.equal(inside, 4);
+      for (const samples of [[], keeperSamples(round, 'strike').slice(0, 4)]) {
+        const { tx, messageBytes } = await strikeTx(s, 10n, samples);
+        const result = await s.core.attest(tx);
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.ok(ed25519.verify(new Uint8Array(getBase58Encoder().encode(body(result).signature!)), messageBytes, ATTESTOR_PUBLIC));
+        const log = s.logs.at(-1)!;
+        assert.equal(log.signed, true);
+        assert.equal(log.verdict, 'unpriceable');
+        assert.equal(log.keeperSamples, samples.length);
+        assert.equal(log.ownSamples, 4);
+        assert.equal(log.sharedSlots, null); // no comparison ran
+      }
+      // The health report keeps the verdict, and counts them as signed without a comparison.
+      const h = (await s.core.health()).body as any;
+      assert.deepEqual(
+        h.attests.recent.map((r: any) => [r.result, r.verdict, r.sharedSlots]),
+        [
+          ['signed', 'unpriceable', null],
+          ['signed', 'unpriceable', null],
+        ],
+      );
+      assert.equal(h.attests.compared, 0);
+    });
+
+    test('five or more keeper samples are compared, never waved through: the attestor cannot check a window it did not see', async () => {
+      const { s, round } = await outageAfter(4_000);
+      const result = await s.core.attest((await strikeTx(s, 10n, keeperSamples(round, 'strike'))).tx);
+      assert.equal(result.status, 422);
+      assert.equal(body(result).reason, 'slot_out_of_range');
+    });
+
+    test('the attestor read exactly 5: a keeper with fewer is refused as unpriced, not signed', async () => {
+      const { s, round, inside } = await outageAfter(5_000);
+      assert.equal(inside, 5);
+      for (const samples of [[], keeperSamples(round, 'strike').slice(0, 4)]) {
+        const result = await s.core.attest((await strikeTx(s, 10n, samples)).tx);
+        assert.equal(result.status, 422);
+        assert.equal(body(result).reason, 'unpriced');
+        assert.equal(s.logs.at(-1)?.ownSamples, 5);
+      }
+    });
+
+    test('settle: no reads at all of the exit window, the keeper sends none: co-signed; ten samples are refused', async () => {
+      const { s, round, inside } = await outageAfter(0, RoundStatus.Live);
+      assert.equal(inside, 0);
+      const none = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: [], attestor: ATTESTOR });
+      const result = await s.core.attest(wire([none], s.keeper.address).tx);
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      assert.equal(s.logs.at(-1)?.verdict, 'unpriceable');
+      assert.equal(s.logs.at(-1)?.ownSamples, 0);
+      const ten = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: keeperSamples(round, 'exit'), attestor: ATTESTOR });
+      const refused = await s.core.attest(wire([ten], s.keeper.address).tx);
+      assert.equal(refused.status, 422);
+      assert.equal(body(refused).reason, 'too_few_samples');
+    });
   });
 
   test('static checks run before any devnet read: attestor as fee payer', async () => {
@@ -469,10 +589,14 @@ test('health: key, sampler, rounds with their reads, recent attests with shared 
   );
   assert.deepEqual(h.sampler.devnet, ['devnet.test']);
   // Coverage: shared slots over the keeper samples of the attests that were compared.
-  const { recent, since, coverage, ...totals } = h.attests;
+  const { recent, since, coverage, maxDiffBps, ...totals } = h.attests;
   assert.equal(since !== null, true);
   assert.deepEqual(totals, { attests: 3, signed: 1, compared: 2, keeperSamples: 20, sharedSlots: 2 * shared });
   assert.equal(coverage, Math.round((shared / 10) * 100) / 100);
+  // The gap between the two means of the signed call, for tuning ATTEST_TOLERANCE_BPS.
+  assert.equal(typeof maxDiffBps, 'number');
+  assert.ok(maxDiffBps >= 0 && maxDiffBps <= 150, `maxDiffBps ${maxDiffBps}`);
+  assert.deepEqual(recent.map((r: any) => [r.verdict, r.diffBps]), [['agree', maxDiffBps], [null, null], [null, null]]);
   assert.deepEqual(
     recent.map((r: any) => [r.round, r.instruction, r.result, r.keeperSamples, r.sharedSlots]),
     [
@@ -482,6 +606,27 @@ test('health: key, sampler, rounds with their reads, recent attests with shared 
     ],
   );
   assert.ok(!JSON.stringify(h).includes(ATTESTOR_SECRET));
+});
+
+test('health keeps the diffBps of every comparison; maxDiffBps is the largest of the signed ones', async () => {
+  const s = await setup(T0 + 70_000);
+  const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
+  await s.core.ping();
+  await runUntil(s, Number(round.strikeEnd) * 1000 + 1000);
+  const before = (await s.core.health()).body as any;
+  assert.equal(before.attests.maxDiffBps, null);
+  // 2% high, no shared slot: refused with its gap; then the same reads at their true prices: signed.
+  const high = keeperSamples(round, 'strike', { avoid: readSlots(s), scale: (p) => (p * 102n) / 100n });
+  assert.equal(body(await s.core.attest((await strikeTx(s, 10n, high)).tx)).reason, 'price_mismatch');
+  const fair = keeperSamples(round, 'strike', { avoid: readSlots(s) });
+  assert.equal((await s.core.attest((await strikeTx(s, 10n, fair)).tx)).status, 200);
+  const { recent, maxDiffBps } = ((await s.core.health()).body as any).attests;
+  const [refused, signed] = recent as { result: string; diffBps: number | null }[];
+  assert.equal(refused?.result, 'price_mismatch');
+  assert.ok(refused!.diffBps! > 150, `refused at ${refused?.diffBps} bps`);
+  assert.equal(signed?.result, 'signed');
+  assert.ok(signed!.diffBps! <= 150);
+  assert.equal(maxDiffBps, signed!.diffBps); // the refused call's gap does not count: it is not what honest keepers show
 });
 
 test('refresh interval: a devnet read at most every 15 s between windows', async () => {

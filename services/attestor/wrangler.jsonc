@@ -7,7 +7,8 @@
   //   ATTESTOR_SECRET  required: base58 of the attestor's 64-byte Solana secret key, or of its 32-byte seed
   //   MAINNET_RPC      optional: keyed mainnet RPC URL, tried before publicnode
   //   DEVNET_RPC       optional: keyed devnet RPC URL, tried before OnFinality
-  //   ATTEST_TOKEN     optional: when set, POST /v1/attest needs "Authorization: Bearer <token>"
+  //   ATTEST_TOKEN     required in production: POST /v1/attest needs "Authorization: Bearer <token>"
+  //                    (with none set the Worker accepts every caller; the keeper sends the same token)
   "name": "ftm-attestor",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-05",
@@ -16,6 +17,7 @@
   "workers_dev": true,
   "vars": {
     // Largest gap between the keeper's mean price and the attestor's, in basis points of the attestor's.
+    // Not calibrated yet: tighten it after a day of attests.maxDiffBps in GET /v1/attestor (see README.md).
     "ATTEST_TOLERANCE_BPS": "150"
   },
   "durable_objects": {

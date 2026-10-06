@@ -9,7 +9,7 @@
  * keeper's even when an edge read fails.
  */
 import { RoundStatus, type PriceSample, type RoundAccount } from '@flipthememe/client';
-import { PROGRAM_MIN_SAMPLES, Refusal } from './check.ts';
+import { PROGRAM_MAX_SAMPLES, PROGRAM_MIN_SAMPLES, Refusal } from './check.ts';
 
 export type WindowKind = 'strike' | 'exit';
 export type RoundWindow = { roundId: bigint; kind: WindowKind; pool: string; startMs: number; endMs: number };
@@ -24,6 +24,27 @@ export const SLOT_MARGIN = 10n;
 /** The attestor's own reads inside the window it needs before it compares at all. */
 export const MIN_OWN_SAMPLES = 3;
 export const DEFAULT_TOLERANCE_BPS = 150;
+/**
+ * The share of the attestor's own reads inside a window that the keeper must send (audit H2: the
+ * keeper picks which of its readings go into the instruction, and the mean check alone leaves it
+ * room to keep the five highest or lowest of ten). Both sides read the pool once a second, so each
+ * holds about ten reads of a ten-second window and misses a few on its own (a failed request, a late
+ * alarm): an honest keeper sends 8 to 10 when the attestor holds 10, and 70 percent lets three of
+ * ten be missing. Only the counts are compared, never the slots: the two services share about 40
+ * percent of their slots, so "the keeper's slots are a subset of mine" would refuse honest keepers.
+ * Not calibrated yet: tighten it once `attests` in GET /v1/attestor shows a day of real counts.
+ */
+export const KEEPER_MIN_SHARE_PERCENT = 70;
+
+/**
+ * How many samples the keeper must send when the attestor read `ownInside` times inside the window:
+ * max(5, floor(70 percent of them)), never more than the 16 the program takes (an honest keeper
+ * sends at most 16, whatever the attestor read).
+ */
+export function requiredKeeperSamples(ownInside: number): number {
+  const share = Math.floor((KEEPER_MIN_SHARE_PERCENT * ownInside) / 100);
+  return Math.min(PROGRAM_MAX_SAMPLES, Math.max(PROGRAM_MIN_SAMPLES, share));
+}
 
 export function windowOf(round: WindowRound, kind: WindowKind): RoundWindow {
   const [start, end] = kind === 'strike' ? [round.strikeStart, round.strikeEnd] : [round.exitStart, round.exitEnd];
@@ -75,6 +96,22 @@ function firstPerSlot(reads: readonly Observation[]): Observation[] {
   return out;
 }
 
+/** The attestor's reads that count for a window: one per slot (the first), no zero price, inside [start, end). */
+export function ownReadsInside(own: readonly Observation[], window: { startMs: number; endMs: number }): Observation[] {
+  return firstPerSlot(own.filter((o) => o.price > 0n)).filter((o) => o.atMs >= window.startMs && o.atMs < window.endMs);
+}
+
+/**
+ * True when the keeper sent fewer than 5 samples (the program turns that into a free Unpriceable
+ * refund, but while the oracle is required only with the attestor's signature) and the attestor
+ * itself holds fewer than 5 reads inside the window: both sides saw the same outage, so the
+ * attestor signs and the round refunds at once instead of waiting for refund_expired. When the
+ * attestor holds 5 or more, the keeper is withholding or faulty and compareSamples refuses.
+ */
+export function isCorroboratedOutage(keeperSamples: number, own: readonly Observation[], window: { startMs: number; endMs: number }): boolean {
+  return keeperSamples < PROGRAM_MIN_SAMPLES && ownReadsInside(own, window).length < PROGRAM_MIN_SAMPLES;
+}
+
 export type Agreement = {
   keeperMean: bigint;
   ownMean: bigint;
@@ -93,10 +130,14 @@ export type Agreement = {
  * all of them, the count and the mean from the reads inside [start, end) (first read per slot,
  * like the keeper).
  *
- * Two lines of defence. Where the keeper and the attestor read the pool at the same context slot
- * (the same confirmed bank, so the same vault balances) the prices must be equal to the unit. Then
- * the means must agree within `toleranceBps`, which bounds what the keeper could do at the slots
- * only it read.
+ * Three lines of defence. Where the keeper and the attestor read the pool at the same context slot
+ * (the same confirmed bank, so the same vault balances) the prices must be equal to the unit. The
+ * keeper must have sent a fair share of the window (`requiredKeeperSamples`), so it cannot choose
+ * the readings that suit it. Then the means must agree within `toleranceBps`, which bounds what
+ * the keeper could do at the slots only it read.
+ *
+ * Fewer than 5 keeper samples are refused here as `unpriced`; a corroborated outage (the attestor
+ * holds fewer than 5 reads too) is signed by the caller before it gets here (isCorroboratedOutage).
  */
 export function compareSamples(
   keeper: readonly PriceSample[],
@@ -104,17 +145,26 @@ export function compareSamples(
   window: { startMs: number; endMs: number },
   toleranceBps: number,
 ): Agreement {
-  if (keeper.length < PROGRAM_MIN_SAMPLES) {
-    throw new Refusal(
-      'unpriced',
-      `${keeper.length} keeper samples fix no price (the program needs ${PROGRAM_MIN_SAMPLES}); a round without a price ends through refund_expired, which needs no attestor`,
-    );
-  }
   const valid = own.filter((o) => o.price > 0n);
   const reads = firstPerSlot(valid);
   const inside = reads.filter((o) => o.atMs >= window.startMs && o.atMs < window.endMs);
+  if (keeper.length < PROGRAM_MIN_SAMPLES) {
+    throw new Refusal(
+      'unpriced',
+      `${keeper.length} keeper samples fix no price (the program needs ${PROGRAM_MIN_SAMPLES}) although the attestor itself read ${inside.length} in this window; a round without a price ends through refund_expired, which needs no attestor`,
+      { ownSamples: inside.length },
+    );
+  }
   if (inside.length < MIN_OWN_SAMPLES) {
     throw new Refusal('too_few_samples', `the attestor holds ${inside.length} reads of this window; it needs ${MIN_OWN_SAMPLES}`);
+  }
+  const required = requiredKeeperSamples(inside.length);
+  if (keeper.length < required) {
+    throw new Refusal(
+      'samples_withheld',
+      `${keeper.length} samples sent, but the attestor read ${inside.length} in this window, so at least ${required} are expected: the keeper may not leave out part of the window`,
+      { ownSamples: inside.length, required },
+    );
   }
   let low = reads[0]!.slot;
   let high = low;

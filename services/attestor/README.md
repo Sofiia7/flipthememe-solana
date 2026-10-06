@@ -1,7 +1,8 @@
 # FlipTheMeme price attestor
 
-A second, independent signer for `set_strike` and `settle`: one Cloudflare Worker with one
-SQLite-backed Durable Object, on infrastructure apart from the keeper. It finds the rounds on devnet
+A second, independent signer for `set_strike` (the strike price, shown as START PRICE in the app)
+and `settle`: one Cloudflare Worker with one SQLite-backed Durable Object, on infrastructure apart
+from the keeper. It finds the rounds on devnet
 and samples each round's PumpSwap pool on mainnet by itself, and co-signs a strike or exit price
 only when the keeper's samples agree with its own.
 
@@ -46,13 +47,16 @@ Every refusal is HTTP 422 with `{"error": "<what is wrong>", "reason": "<code>"}
 | Account 1, read from devnet for this request, is a Round of the program at its PDA | `round_not_found` |
 | `set_strike` needs an Open round, `settle` a Live one | `round_state` |
 | The attestor's clock is past `strike_end` / `exit_end` | `window_open` |
-| At least 5 keeper samples (fewer fix no price: the program would refund the round) | `unpriced` |
+| `set_strike` only: the attestor's clock is before the round's `exit_start` (the program rejects a later strike, also for a round without a matched bank) | `strike_too_late` |
+| At least 5 keeper samples, unless the attestor itself holds fewer than 5 reads inside the window (a corroborated outage, which is signed: see below) | `unpriced` |
 | The attestor holds at least 3 of its own reads inside the window | `too_few_samples` |
+| The keeper sent at least `max(5, floor(0.7 * n))` samples, `n` being the attestor's reads inside the window, and never more than the program's 16 are asked | `samples_withheld` |
 | Every keeper slot lies within the slots the attestor read for the window (margins included), widened by 10 slots (`SLOT_MARGIN`) | `slot_out_of_range` |
 | A keeper sample at a slot the attestor read too has exactly the attestor's price there | `slot_price_mismatch` |
 | The keeper's mean, `floor(sum / n)` as the program computes it, is within `ATTEST_TOLERANCE_BPS` of the attestor's mean of its reads inside the window | `price_mismatch` |
 
-The order is the table's: the checks that need no network run first. The accounts are the
+The order is the table's: the checks that need no network run first, then the round's window, then
+the samples (counts, slots, prices, means). The accounts are the
 program's PriceUpdate, as confirmed by the program agent: 0 config
 `A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ`, 1 round PDA, 2 price_authority, 3 oracle
 `EMXqXiGXcuzvf9ZD1P6B4HjDVF7earLVNJqah7YLwDZ1`, 4 attestor (`ROUND_ACCOUNT_INDEX` and its siblings
@@ -68,10 +72,41 @@ PumpSwap pool trading about 14 times a second, 294 reads from publicnode and mai
 With both sides reading once a second, about 4 in 10 keeper samples land on a slot the attestor
 read; `sharedSlots` in the log and `attests.coverage` in the health show the real share.
 
-One exception: `set_strike` with an empty sample list for a round without a matched bank (checked on
-devnet) is co-signed without a comparison. The program ends such a round as NotActivated and returns
-every stake without reading the samples or the attestor, so the keeper may just as well send it
-without the attestor (the program id in the slot).
+**The strike window.** On chain `set_strike` is valid only while `strike_end <= now < exit_start`: with
+the exit window open a strike could be chosen with the exit in sight, so the program rejects it and
+the round ends through `refund_expired` at `settle_deadline`. The attestor mirrors this with its own
+clock: `window_open` before `strike_end`, `strike_too_late` from `exit_start` on, also for a round
+without a matched bank (the program checks the window before it ends such a round as NotActivated).
+`settle` keeps its rule: a Live round past `exit_end`.
+
+**A fair share of the window.** The keeper chooses which of its readings go into `set_strike` and
+`settle`; on chain only the order, the sign and the limit of 16 are checked, so a keeper that kept
+the five highest (or lowest) of its ten readings would move the mean by up to the tolerance, in its
+favour, without breaking another rule. Both services read the pool once a second, so each holds about
+ten reads of a ten-second window and misses a few of its own (a failed request, a late alarm). The
+keeper must send at least `max(5, floor(0.7 * n))` samples, `n` being the attestor's reads inside the
+window (one per slot), and at most 16 are ever asked (`KEEPER_MIN_SHARE_PERCENT` and
+`requiredKeeperSamples` in `src/samples.ts`). With ten own reads that is 7: an honest keeper that
+lost two or three passes, one that keeps only five is refused as `samples_withheld`. Only the counts
+are compared, never the slots: the two services share about 4 in 10 of their slots, so asking the
+keeper's slots to be a subset of the attestor's would refuse honest keepers.
+
+**A corroborated outage is signed.** When the keeper sends fewer than 5 samples the program ends the
+round on the spot as a free `Unpriceable` refund, but while the OracleConfig says `required` it needs
+this signature to do so (`set_strike` and `settle` check the attestor before they count the samples).
+So when the attestor too holds fewer than 5 reads inside the window (one per slot, margins left out)
+it signs without a comparison: both sides saw the same outage, and the round refunds right after its
+window instead of waiting for `refund_expired`, which opens 10 minutes after `exit_end`. When the
+attestor holds 5 or more reads the keeper is withholding or faulty and the call is refused as
+`unpriced`. Five or more keeper samples are always compared, even when the attestor read few: with
+3 or 4 reads it still checks them, with fewer it cannot (`too_few_samples`). A signed outage is
+marked `"verdict": "unpriceable"` in the log line and in `attests.recent`.
+
+**The other signature without a comparison.** `set_strike` with an empty sample list for a round
+without a matched bank (checked on devnet) is co-signed whatever the attestor read. The program ends
+such a round as NotActivated and returns every stake without reading the samples or the attestor,
+so the keeper may just as well send it without the attestor (the program id in the slot). Verdict
+`not_activated`; the strike window above still applies to it.
 
 Other answers: 400 `bad_request` (not `{"tx": "<base64>"}`), 401 `unauthorized` (only with
 `ATTEST_TOKEN`), 405, 413 `body_too_large` (over 4 KB), 503 `not_configured`,
@@ -87,8 +122,8 @@ GET  /v1/attestor   {"attestor": "<base58 public key>", "toleranceBps": 150,
                                  "nextRoundId", "windowsObserved", "samplesStored",
                                  "rounds": [{"id", "status", "pool", "strike": {"start", "end", "samples", "slots"}, "exit": {...}}],
                                  "errors": {"devnet" | "mainnet": {"at", "error"}}, "devnet": [...], "mainnet": [...]},
-                     "attests": {"since", "attests", "signed", "compared", "keeperSamples", "sharedSlots", "coverage",
-                                 "recent": [{"at", "round", "instruction", "result", "keeperSamples", "sharedSlots"}]},
+                     "attests": {"since", "attests", "signed", "compared", "keeperSamples", "sharedSlots", "maxDiffBps", "coverage",
+                                 "recent": [{"at", "round", "instruction", "result", "verdict", "keeperSamples", "sharedSlots", "diffBps"}]},
                      "oracle": {"attestor", "required", "matchesKey"} or null until OracleConfig exists}
 ```
 
@@ -96,19 +131,22 @@ The signature is Ed25519 over the transaction's message bytes (WebCrypto; the te
 `@noble/curves`). `windowsObserved` counts the strike and exit windows with stored reads in the last
 hour. `attests` counts the calls since the object started (a deploy or an eviction restarts it),
 keeps the last 20, and `coverage` is `sharedSlots / keeperSamples` over the calls that reached the
-slot-by-slot comparison (`compared`). Every call also leaves one `"event": "attest"` log line with
-its `result`, `keeperSamples` and `sharedSlots` (null when no comparison ran). The health answers
-503 when the key or the tolerance is not usable.
+slot-by-slot comparison (`compared`). `diffBps` is the gap between the keeper's mean and the
+attestor's in basis points (null when no comparison got that far) and `maxDiffBps` the largest one
+of the signed calls; `verdict` is `agree`, `not_activated` or `unpriceable` for a signature and null
+for a refusal. Every call also leaves one `"event": "attest"` log line with its `result`,
+`keeperSamples`, `sharedSlots` (null when no comparison ran) and, when it got that far, `diffBps`.
+The health answers 503 when the key or the tolerance is not usable.
 
 ## Secrets and vars
 
 | Name | Kind | |
 | --- | --- | --- |
 | `ATTESTOR_SECRET` | secret, required | base58 of the attestor's 64-byte Solana secret key (a keypair JSON's 64 numbers as bytes), or of its 32-byte seed. Never logged; errors about it never quote it. |
-| `ATTEST_TOLERANCE_BPS` | var, default 150 | largest gap between the two means, in basis points of the attestor's mean (0 to 10000) |
+| `ATTEST_TOLERANCE_BPS` | var, default 150 | largest gap between the two means, in basis points of the attestor's mean (0 to 10000). Not calibrated yet: after a day of real rounds read `attests.maxDiffBps` and the `diffBps` of `attests.recent` in `GET /v1/attestor` (or of the `attest` log lines) and tighten it to just above what honest keepers show; the audit suggests 50. The tighter it is, the less a keeper can move the mean at the slots the attestor did not read. |
 | `MAINNET_RPC` | secret, optional | keyed mainnet RPC URL, tried before publicnode |
 | `DEVNET_RPC` | secret, optional | keyed devnet RPC URL, tried before OnFinality; recommended (see below) |
-| `ATTEST_TOKEN` | secret, optional | when set, `POST /v1/attest` needs `Authorization: Bearer <token>`. Leave it unset until the keeper sends that header: its client (`services/keeper/src/attest.ts`) does not yet, so every call would get 401 and, while the oracle is required, every priced round would end in `refund_expired`. |
+| `ATTEST_TOKEN` | secret, **required in production** | `POST /v1/attest` needs `Authorization: Bearer <token>`, and a call without it gets 401. The keeper's client (`services/keeper/src/attest.ts`) already sends the header when the keeper runs with the same `ATTEST_TOKEN`. With no token configured the Worker lets every caller in (`authorized()` in `src/http.ts`), so anyone could burn the Free plan's request budget and, while the oracle is required, push every priced round into `refund_expired`. Set it with `wrangler secret put ATTEST_TOKEN` and in the keeper's environment. |
 
 Public RPCs as seen from a Worker (checked 2026-10-06 with the `CF-Worker` header Cloudflare adds to
 every subrequest, and from local `wrangler dev`): `api.devnet.solana.com` and
@@ -131,7 +169,7 @@ One round a minute (the keeper's cadence), as measured by the `budget` test and 
 `GET /v1/attestor` costs one Durable Object request each, so poll it once a minute at most. Anyone
 may call `POST /v1/attest`: nobody gets a signature for what the checks refuse (and a signature is
 useless without the keeper's), but every call costs a request and a devnet read. `ATTEST_TOKEN`
-closes that once the keeper sends the header.
+closes that (the keeper sends the header), which is why it must be set in production.
 
 ## How the keeper uses it
 
@@ -145,7 +183,9 @@ Worker's URL; the attestor address it uses is the one in the on-chain OracleConf
 2. For every priced `set_strike` and `settle`, after its window has ended (the keeper already waits
    1 s): build the instruction with the attestor as a bare address, sign as fee payer and price
    authority, ask for the co-signature, add it, send. A `set_strike` for a round without a matched
-   bank needs no attestor, and the keeper sends it without one.
+   bank needs no attestor, and the keeper sends it without one. The keeper sends a `set_strike`
+   only from `strike_end` until the round's `exit_start`; later the program rejects it and the
+   round waits for `refund_expired`.
 
 ```ts
 const ix = await setStrike({ priceAuthority: keeper, roundId, samples, attestor: ATTESTOR }); // or settle(...)
@@ -161,10 +201,13 @@ const signed = { ...transaction, signatures: { ...transaction.signatures, [ATTES
 ```
 
 The attestor signs only the message bytes, so the keeper may sign before or after. A 422 names the
-rule that failed. `window_open` and `round_state` can clear (the window ends, the strike lands); the
-attestor's reads of a past window never change, so `too_few_samples`, `slot_out_of_range`,
-`price_mismatch` and `unpriced` stay refused and that round ends through `refund_expired`. A 503 or
-a timeout is worth a retry.
+rule that failed. `window_open` and `round_state` can clear (the window ends, the strike lands).
+`strike_too_late` is final for the round (the exit window has opened: the keeper stops, and the
+round ends through `refund_expired`). The attestor's reads of a past window never change, so
+`unpriced`, `too_few_samples`, `samples_withheld`, `slot_out_of_range`, `slot_price_mismatch` and
+`price_mismatch` stay refused and that round ends through `refund_expired` too. A keeper that
+sends fewer than 5 samples after an outage it shares with the attestor gets a signature, and the
+program refunds the round as Unpriceable. A 503 or a timeout is worth a retry.
 
 ## Run, test, deploy
 

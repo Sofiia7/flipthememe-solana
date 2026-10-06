@@ -63,8 +63,10 @@ export const REASONS = [
   'round_not_found',
   'round_state',
   'window_open',
+  'strike_too_late',
   'unpriced',
   'too_few_samples',
+  'samples_withheld',
   'slot_out_of_range',
   'slot_price_mismatch',
   'price_mismatch',
@@ -236,8 +238,18 @@ export function parseAttestRequest(wire: Uint8Array, attestor: Address, pdas: Pr
 const STATUS_NAMES = ['open', 'live', 'final'] as const;
 export const statusName = (status: number): string => STATUS_NAMES[status] ?? `status ${status}`;
 
-/** set_strike needs an Open round past strike_end, settle a Live round past exit_end (attestor clock). */
-export function checkRound(instruction: PriceInstruction, round: Pick<RoundAccount, 'id' | 'status' | 'strikeEnd' | 'exitEnd'>, nowMs: number): void {
+/**
+ * set_strike needs an Open round with `strike_end <= now < exit_start`, settle a Live round past
+ * exit_end (attestor clock). The upper bound of set_strike mirrors the program: once the exit
+ * window has opened a strike could be chosen with the exit already in sight, so the program rejects
+ * it and the round ends through refund_expired. The attestor never co-signs one, even for a round
+ * that was never activated (the program checks the window before that).
+ */
+export function checkRound(
+  instruction: PriceInstruction,
+  round: Pick<RoundAccount, 'id' | 'status' | 'strikeEnd' | 'exitStart' | 'exitEnd'>,
+  nowMs: number,
+): void {
   const wanted = instruction === 'set_strike' ? RoundStatus.Open : RoundStatus.Live;
   if (round.status !== wanted) {
     throw new Refusal('round_state', `round ${round.id} is ${statusName(round.status)}; ${instruction} needs it ${statusName(wanted)}`);
@@ -246,5 +258,14 @@ export function checkRound(instruction: PriceInstruction, round: Pick<RoundAccou
   if (nowMs < endMs) {
     const window = instruction === 'set_strike' ? 'strike' : 'exit';
     throw new Refusal('window_open', `round ${round.id}: the ${window} window ends at ${new Date(endMs).toISOString()}`);
+  }
+  if (instruction === 'set_strike') {
+    const lateMs = Number(round.exitStart) * 1000;
+    if (nowMs >= lateMs) {
+      throw new Refusal(
+        'strike_too_late',
+        `round ${round.id}: the exit window opened at ${new Date(lateMs).toISOString()}; a strike set after that is rejected, and the round ends through refund_expired`,
+      );
+    }
   }
 }

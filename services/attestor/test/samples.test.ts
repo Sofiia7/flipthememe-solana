@@ -4,14 +4,17 @@ import { describe, test } from 'node:test';
 import { RoundStatus, type PriceSample } from '@flipthememe/client';
 import { Refusal, type Reason } from '../src/check.ts';
 import {
+  KEEPER_MIN_SHARE_PERCENT,
   MIN_OWN_SAMPLES,
   SAMPLE_MARGIN_MS,
   SLOT_MARGIN,
   activeWindows,
   compareSamples,
+  isCorroboratedOutage,
   meanPrice,
   nextSamplingStart,
   pendingWindows,
+  requiredKeeperSamples,
   windowOf,
   type Observation,
 } from '../src/samples.ts';
@@ -116,7 +119,7 @@ describe('compareSamples', () => {
     const all = Array.from({ length: 10 }, (_, i) => ({ slot: 1004n + BigInt(i) * 2n, price: PRICE + BigInt(i + 2) }));
     assert.equal(compareSamples(all, own, WINDOW, 150).sharedSlots, 10);
     // The margin reads count for shared slots too (slot 1000 was read 1.5 s before the window).
-    assert.equal(compareSamples([{ slot: 1000n, price: PRICE }, ...keeperSamples(4)], own, WINDOW, 150).sharedSlots, 1);
+    assert.equal(compareSamples([{ slot: 1000n, price: PRICE }, ...keeperSamples(6)], own, WINDOW, 150).sharedSlots, 1);
   });
 
   test('a shared slot with a price off by one unit is refused, though the means agree; the details are for the log only', () => {
@@ -133,7 +136,7 @@ describe('compareSamples', () => {
 
   test('two reads of the attestor at one slot that disagree: a keeper sample there is refused whichever it matches', () => {
     const own = [...ownReads(), { atMs: at(95) + 1, slot: 1010n, price: PRICE + 7n }].sort((a, b) => a.atMs - b.atMs);
-    const samples = [{ slot: 1010n, price: PRICE }, ...keeperSamples(4, () => PRICE, 1013n)];
+    const samples = [{ slot: 1010n, price: PRICE }, ...keeperSamples(6, () => PRICE, 1013n)];
     assert.equal(refused(() => compareSamples(samples, own, WINDOW, 150)).reason, 'slot_price_mismatch');
   });
 
@@ -176,10 +179,11 @@ describe('compareSamples', () => {
     const own = ownReads(); // slots 1000..1024, margin reads included
     const low = 1000n - SLOT_MARGIN;
     const high = 1024n + SLOT_MARGIN;
-    assert.ok(compareSamples(keeperSamples(5, () => PRICE, low), own, WINDOW, 150));
-    assert.ok(compareSamples(keeperSamples(5, () => PRICE, high - 8n), own, WINDOW, 150));
-    assert.equal(refusal(() => compareSamples(keeperSamples(5, () => PRICE, low - 1n), own, WINDOW, 150)), 'slot_out_of_range');
-    assert.equal(refusal(() => compareSamples(keeperSamples(5, () => PRICE, high - 7n), own, WINDOW, 150)), 'slot_out_of_range');
+    // Seven samples: the least a keeper may send for ten own reads (see the withheld tests below).
+    assert.ok(compareSamples(keeperSamples(7, () => PRICE, low), own, WINDOW, 150));
+    assert.ok(compareSamples(keeperSamples(7, () => PRICE, high - 12n), own, WINDOW, 150));
+    assert.equal(refusal(() => compareSamples(keeperSamples(7, () => PRICE, low - 1n), own, WINDOW, 150)), 'slot_out_of_range');
+    assert.equal(refusal(() => compareSamples(keeperSamples(7, () => PRICE, high - 11n), own, WINDOW, 150)), 'slot_out_of_range');
     // A replay of an older window: right prices, wrong slots.
     assert.equal(refusal(() => compareSamples(keeperSamples(10, () => PRICE, 500n), own, WINDOW, 150)), 'slot_out_of_range');
   });
@@ -202,9 +206,120 @@ describe('compareSamples', () => {
     assert.equal(result.ownMean, PRICE);
   });
 
-  test('fewer than 5 keeper samples price nothing: refused as unpriced, whatever the reads', () => {
+  test('fewer than 5 keeper samples while the attestor read 5 or more: refused as unpriced', () => {
     assert.equal(refusal(() => compareSamples(keeperSamples(4), ownReads(), WINDOW, 150)), 'unpriced');
     assert.equal(refusal(() => compareSamples([], ownReads(), WINDOW, 150)), 'unpriced');
-    assert.ok(compareSamples(keeperSamples(5), ownReads(), WINDOW, 150));
+    assert.ok(compareSamples(keeperSamples(7), ownReads(), WINDOW, 150));
+  });
+});
+
+// The reads inside the window of ownReads(), without the three in the margins.
+const insideOf = (reads: Observation[]) => reads.filter((o) => o.atMs >= WINDOW.startMs && o.atMs < WINDOW.endMs);
+
+describe('samples withheld: a keeper may not pick which of its reads to send', () => {
+  const rising = (i: number) => PRICE + BigInt(i) * 300n;
+
+  test(`the count to send: max(5, ${KEEPER_MIN_SHARE_PERCENT}% of the attestor's reads inside the window), at most the program's 16`, () => {
+    assert.equal(KEEPER_MIN_SHARE_PERCENT, 70);
+    assert.deepEqual([0, 3, 5, 8].map(requiredKeeperSamples), [5, 5, 5, 5]);
+    assert.deepEqual([9, 10, 11, 12, 14, 20, 22].map(requiredKeeperSamples), [6, 7, 7, 8, 9, 14, 15]);
+    assert.deepEqual([23, 40, 1000].map(requiredKeeperSamples), [16, 16, 16]);
+  });
+
+  test('an honest keeper that lost two of its ten reads (a failed request, a late one) passes', () => {
+    const own = ownReads(rising);
+    const keeper = keeperSamples(8, (i) => rising(i + 2));
+    const result = compareSamples(keeper, own, WINDOW, 150);
+    assert.equal(result.ownSamples, 10);
+    assert.equal(result.sharedSlots, 0); // none of its slots is one the attestor read: counts only, never slots
+  });
+
+  test('keeping only the 5 highest of 10 reads is refused, though the mean is inside the tolerance', () => {
+    const own = ownReads(rising);
+    const ownMean = meanPrice(insideOf(own).map((o) => o.price));
+    // The keeper's real reads are at the odd slots between the attestor's, with prices on the same line.
+    const real = keeperSamples(10, (i) => rising(i + 2));
+    const picked = real.slice(5);
+    const pickedMean = meanPrice(picked.map((x) => x.price));
+    assert.ok(pickedMean > ownMean);
+    assert.ok(((pickedMean - ownMean) * 10_000n) / ownMean < 150n, 'the tolerance alone would let this through');
+    const error = refused(() => compareSamples(picked, own, WINDOW, 150));
+    assert.equal(error.reason, 'samples_withheld');
+    // The counts are for the log; the message names them too.
+    assert.deepEqual(error.detail, { ownSamples: 10, required: 7 });
+    assert.match(error.message, /5 samples/);
+    // All ten pass.
+    assert.ok(compareSamples(real, own, WINDOW, 150));
+  });
+
+  test('the same cut from the other side: the 5 lowest of 10 is refused too', () => {
+    const own = ownReads(rising);
+    const real = keeperSamples(10, (i) => rising(i + 2));
+    assert.equal(refusal(() => compareSamples(real.slice(0, 5), own, WINDOW, 150)), 'samples_withheld');
+  });
+
+  test('the line for ten own reads: 7 samples pass, 6 are refused', () => {
+    const own = ownReads(rising);
+    const real = keeperSamples(10, (i) => rising(i + 2));
+    assert.ok(compareSamples(real.slice(3), own, WINDOW, 150));
+    assert.equal(refusal(() => compareSamples(real.slice(4), own, WINDOW, 150)), 'samples_withheld');
+  });
+
+  test('with 5 to 8 own reads inside the window the program minimum of 5 is all that is asked', () => {
+    const own = ownReads(rising);
+    for (const reads of [5, 6, 7, 8]) {
+      const few = [...own.filter((o) => !insideOf(own).includes(o)), ...insideOf(own).slice(0, reads)];
+      assert.ok(compareSamples(keeperSamples(5, () => PRICE + 900n), few, WINDOW, 150), `${reads} reads`);
+    }
+  });
+
+  test('slots are not compared: a keeper that read other slots than the attestor is fine, and so is one that shares many', () => {
+    const own = ownReads(rising);
+    const sameSlots = insideOf(own).slice(0, 8).map((o) => ({ slot: o.slot, price: o.price }));
+    assert.equal(compareSamples(sameSlots, own, WINDOW, 150).sharedSlots, 8);
+    assert.equal(compareSamples(keeperSamples(8, (i) => rising(i + 2)), own, WINDOW, 150).sharedSlots, 0);
+  });
+
+  test('more reads than the program takes: the keeper is asked for 16, never more', () => {
+    // 40 reads inside the window, a quarter second apart.
+    const many: Observation[] = Array.from({ length: 40 }, (_, i) => ({ atMs: WINDOW.startMs + i * 250, slot: 1000n + BigInt(i), price: PRICE }));
+    const keeper = (n: number): PriceSample[] => Array.from({ length: n }, (_, i) => ({ slot: 1000n + BigInt(i), price: PRICE }));
+    assert.equal(compareSamples(keeper(16), many, WINDOW, 150).ownSamples, 40);
+    assert.equal(refusal(() => compareSamples(keeper(15), many, WINDOW, 150)), 'samples_withheld');
+  });
+});
+
+describe('a corroborated outage: fewer than 5 samples on both sides', () => {
+  const margins = (reads: Observation[]) => reads.filter((o) => !insideOf(reads).includes(o));
+
+  test('the keeper sent fewer than 5 and the attestor holds fewer than 5 reads inside the window: corroborated', () => {
+    const own = ownReads();
+    const withInside = (n: number) => [...margins(own), ...insideOf(own).slice(0, n)];
+    for (const [keeper, reads] of [[0, 0], [0, 4], [4, 4], [3, 2], [4, 0]] as const) {
+      assert.equal(isCorroboratedOutage(keeper, withInside(reads), WINDOW), true, `keeper ${keeper}, attestor ${reads}`);
+    }
+    assert.equal(isCorroboratedOutage(0, [], WINDOW), true);
+  });
+
+  test('the attestor holds 5 or more reads: the keeper is withholding or faulty, not corroborated', () => {
+    const own = ownReads();
+    for (const keeper of [0, 1, 4]) {
+      assert.equal(isCorroboratedOutage(keeper, [...margins(own), ...insideOf(own).slice(0, 5)], WINDOW), false);
+      assert.equal(isCorroboratedOutage(keeper, own, WINDOW), false);
+    }
+  });
+
+  test('5 or more keeper samples are never an outage: they are compared', () => {
+    assert.equal(isCorroboratedOutage(5, [], WINDOW), false);
+    assert.equal(isCorroboratedOutage(10, margins(ownReads()), WINDOW), false);
+  });
+
+  test('the attestor count is what the comparison counts: inside the window, one per slot, no zero price', () => {
+    const own = ownReads();
+    const four = insideOf(own).slice(0, 4);
+    // Margin reads and a repeated slot do not make five; a zero price does not either.
+    assert.equal(isCorroboratedOutage(2, [...margins(own), ...four, { ...four[0]!, atMs: four[0]!.atMs + 1 }], WINDOW), true);
+    assert.equal(isCorroboratedOutage(2, [...four, { atMs: at(95), slot: 999_999n, price: 0n }], WINDOW), true);
+    assert.equal(isCorroboratedOutage(2, [...four, { atMs: at(95), slot: 999_999n, price: PRICE }], WINDOW), false);
   });
 });

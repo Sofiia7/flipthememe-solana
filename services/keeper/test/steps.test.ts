@@ -4,6 +4,7 @@ import { RoundStatus, roundTimes } from '@flipthememe/client';
 import { createDue, nextBoundarySecs, nextStep, type RoundView, type StepContext } from '../src/steps.ts';
 
 // A minute boundary: opens_at T0, cutoff +60, strike +90..+100, exit +150..+160, deadline +760.
+// set_strike is valid only from strike_end (+100) until exit_start (+150) on the chain clock.
 const T0 = 1_800_000_000n;
 const at = (secs: number): number => (Number(T0) + secs) * 1000;
 const sync: StepContext = { chainOffsetMs: 0 };
@@ -68,9 +69,49 @@ describe('nextStep: strike', () => {
     assert.equal(kind(round(), at(102), lag(2_000)), 'strike');
   });
 
-  test('restart long after the strike window (keeper was down): strike with what there is', () => {
-    assert.equal(kind(round(lonely), at(300)), 'strike');
-    assert.equal(kind(round(), at(759)), 'strike');
+  test('a restart that lands after the strike window but before the exit window opens still strikes', () => {
+    assert.equal(kind(round(lonely), at(120)), 'strike');
+    assert.equal(kind(round(), at(149.999)), 'strike');
+  });
+
+  test('strike due: every moment from strike_end + 1 s up to exit_start, and not a moment before strike_end', () => {
+    for (let secs = 0; secs < 101; secs += 0.5) assert.notEqual(kind(round(lonely), at(secs)), 'strike', `at +${secs} s`);
+    for (let secs = 101; secs < 150; secs += 0.5) assert.equal(kind(round(lonely), at(secs)), 'strike', `at +${secs} s`);
+    // A chain clock that runs ahead of the local one does not bring the strike forward: the local +1 s still rules.
+    assert.equal(kind(round(), at(100.5), { chainOffsetMs: 5_000 }), 'wait');
+    assert.equal(kind(round(), at(101), { chainOffsetMs: 5_000 }), 'strike');
+  });
+
+  test('strike too late: from exit_start on the program rejects set_strike, so the keeper stops trying and waits for the expiry', () => {
+    assert.equal(kind(round(lonely), at(149.999)), 'strike');
+    assert.equal(kind(round(lonely), at(150)), 'wait');
+    assert.equal(kind(round(lonely), at(151)), 'wait');
+    assert.equal(kind(round(), at(300)), 'wait');
+    assert.equal(kind(round(lonely), at(759)), 'wait');
+    assert.equal(kind(round(lonely), at(760.999)), 'wait');
+    // The existing expire path takes over at settle_deadline + 1 s, as before.
+    assert.equal(kind(round(lonely), at(761)), 'expire');
+    assert.equal(kind(round(), at(5_000)), 'expire');
+  });
+
+  test('exit_start is read on the devnet clock: a lagging chain still takes the strike until it reaches exit_start too', () => {
+    assert.equal(kind(round(lonely), at(150), lag(2_000)), 'strike');
+    assert.equal(kind(round(lonely), at(151.999), lag(2_000)), 'strike');
+    assert.equal(kind(round(lonely), at(152), lag(2_000)), 'wait');
+    // A chain clock ahead of the local one stops the strike earlier.
+    assert.equal(kind(round(lonely), at(148), { chainOffsetMs: 2_000 }), 'wait');
+    assert.equal(kind(round(lonely), at(147.999), { chainOffsetMs: 2_000 }), 'strike');
+  });
+
+  test('the same for a round that has no matched bank: the program rejects its set_strike after exit_start too', () => {
+    assert.equal(kind(round(), at(149)), 'strike');
+    assert.equal(kind(round(), at(150)), 'wait');
+  });
+
+  test('a Live round is not affected: settle still comes after exit_end, whatever the strike window did', () => {
+    const live = round({ status: RoundStatus.Live, rawUp: 50_000_000n, rawDown: 50_000_000n, positionCount: 2 });
+    assert.equal(kind(live, at(150)), 'wait');
+    assert.equal(kind(live, at(161)), 'settle');
   });
 });
 
@@ -92,7 +133,8 @@ describe('nextStep: settle', () => {
 
 describe('nextStep: past settle_deadline', () => {
   test('open or live rounds past the deadline are refunded', () => {
-    assert.equal(kind(round(lonely), at(760.999)), 'strike');
+    // An open round whose strike window is long gone waits (set_strike is rejected after exit_start), then expires.
+    assert.equal(kind(round(lonely), at(760.999)), 'wait');
     assert.equal(kind(round(lonely), at(761)), 'expire');
     assert.equal(kind(round({ status: RoundStatus.Live, positionCount: 2 }), at(761)), 'expire');
     assert.equal(kind(round(), at(5_000)), 'expire');
