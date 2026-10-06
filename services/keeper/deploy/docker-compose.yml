@@ -22,6 +22,14 @@ services:
       MAINNET_RPCS: ${MAINNET_RPCS:-https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com}
       HOUSE_ROUND_CAP_LAMPORTS: ${HOUSE_ROUND_CAP_LAMPORTS:-50000000}
       HOUSE_DAILY_BUDGET_LAMPORTS: ${HOUSE_DAILY_BUDGET_LAMPORTS:-2000000000}
+      # Upgrade of October 2026 (README.md, "Program upgrade"); empty = the keeper key does it all,
+      # no attestor, positions closed a day after their round.
+      ATTEST_URL: ${ATTEST_URL:-}
+      # The attestor Worker's shared secret (sent as a bearer token; never logged).
+      ATTEST_TOKEN: ${ATTEST_TOKEN:-}
+      PRICE_KEYPAIR: ${PRICE_KEYPAIR:-}
+      HOUSE_KEYPAIR: ${HOUSE_KEYPAIR:-}
+      CLOSE_AFTER_SECS: ${CLOSE_AFTER_SECS:-}
       POOL_OVERRIDE: ${POOL_OVERRIDE:-}
       # Token choice; empty = the keeper's defaults (deploy/README.md, Configuration).
       POOL_MIN_AGE_MIN: ${POOL_MIN_AGE_MIN:-}
@@ -36,6 +44,10 @@ services:
     volumes:
       - ./data:/data
       - ./secrets/keeper.json:/secrets/keeper.json:ro
+      # After split-roles.ts: create the files first (a missing file becomes a directory), then
+      # uncomment and set PRICE_KEYPAIR=/secrets/price.json, HOUSE_KEYPAIR=/secrets/house.json in .env.
+      # - ./secrets/price.json:/secrets/price.json:ro
+      # - ./secrets/house.json:/secrets/house.json:ro
     logging:
       driver: json-file
       options:

@@ -1,6 +1,26 @@
 import { readFile } from 'node:fs/promises';
 import { createKeyPairSignerFromBytes, type KeyPairSigner } from '@solana/kit';
 
+/** The keeper key pays every fee; the price and house roles may have keys of their own. */
+export type RoleSigners = { keeper: KeyPairSigner; price: KeyPairSigner; house: KeyPairSigner };
+
+/**
+ * KEEPER_KEYPAIR, plus PRICE_KEYPAIR and HOUSE_KEYPAIR when set; an unset role falls back to the
+ * keeper key. A role file holding the keeper's own key reuses the keeper signer, because kit
+ * refuses two signer objects for one address in a transaction.
+ */
+export async function loadRoleSigners(paths: { keypairPath: string; priceKeypairPath: string | null; houseKeypairPath: string | null }): Promise<RoleSigners> {
+  const keeper = await loadKeypairSigner(paths.keypairPath);
+  const role = async (path: string | null): Promise<KeyPairSigner> => {
+    if (path === null) return keeper;
+    const signer = await loadKeypairSigner(path);
+    return signer.address === keeper.address ? keeper : signer;
+  };
+  const price = await role(paths.priceKeypairPath);
+  const house = await role(paths.houseKeypairPath);
+  return { keeper, price, house: house.address === price.address ? price : house };
+}
+
 /**
  * Loads a solana-keygen JSON file (an array of 64 numbers: secret key then public key).
  * Errors never quote the file contents, so a malformed key cannot leak into logs.

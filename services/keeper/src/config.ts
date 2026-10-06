@@ -2,12 +2,26 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAddress, type Address } from '@solana/kit';
+import { CLOSE_AFTER_SECS, effectiveCloseAfter } from './closer.ts';
 import { DEFAULT_GATE, MINUTE_MS, type PoolGate } from './poolgate.ts';
 
 export type KeeperConfig = {
   devnetRpc: string;
   mainnetRpcs: string[];
+  /** The keeper key: fee payer and admin (create_round), and every role that has no key of its own. */
   keypairPath: string;
+  /** PRICE_KEYPAIR: signs set_strike and settle; null = the keeper key. */
+  priceKeypairPath: string | null;
+  /** HOUSE_KEYPAIR: signs house_fill and owns the house vault; null = the keeper key. */
+  houseKeypairPath: string | null;
+  /** ATTEST_URL: base URL of the price attestor service; null = no attestation unless the chain requires it. */
+  attestUrl: string | null;
+  /** ATTEST_TOKEN: shared secret sent as a bearer token to the attestor. Never logged. */
+  attestToken: string | null;
+  /** TREASURY: an address only (the program pays it at sweep_fees; nothing here signs for it). */
+  treasury: Address | null;
+  /** CLOSE_AFTER_SECS: paid positions are closed this long after their round's exit_end (closer.ts). */
+  closeAfterSecs: bigint;
   stateFile: string;
   /** status.json, next to the state file. */
   statusFile: string;
@@ -108,10 +122,27 @@ export function loadConfig(env: Env = process.env, cwd: string = process.cwd()):
   const stateFile = resolve(cwd, text(env, 'STATE_FILE') ?? DEFAULT_STATE_FILE);
   const override = text(env, 'POOL_OVERRIDE');
   if (override !== undefined && !isAddress(override)) throw new Error('POOL_OVERRIDE must be a base58 address');
+  const treasury = text(env, 'TREASURY');
+  if (treasury !== undefined && !isAddress(treasury)) throw new Error('TREASURY must be a base58 address');
+  const attestUrl = text(env, 'ATTEST_URL');
+  const attestToken = text(env, 'ATTEST_TOKEN');
+  // It goes into an HTTP header; the message never quotes the value.
+  if (attestToken !== undefined && !/^[\x21-\x7e]+$/.test(attestToken)) throw new Error('ATTEST_TOKEN must be printable ASCII without spaces');
+  const keyPath = (name: string): string | null => {
+    const value = text(env, name);
+    return value === undefined ? null : resolve(cwd, value);
+  };
   return {
     devnetRpc,
     mainnetRpcs,
     keypairPath: resolve(cwd, text(env, 'KEEPER_KEYPAIR') ?? defaultKeypairPath()),
+    priceKeypairPath: keyPath('PRICE_KEYPAIR'),
+    houseKeypairPath: keyPath('HOUSE_KEYPAIR'),
+    attestUrl: attestUrl === undefined ? null : httpUrl('ATTEST_URL', attestUrl).replace(/\/+$/, ''),
+    attestToken: attestToken ?? null,
+    treasury: treasury === undefined ? null : (treasury as Address),
+    // A demo may shorten it, but never below the program's one-hour minimum.
+    closeAfterSecs: effectiveCloseAfter(BigInt(parseNumber('CLOSE_AFTER_SECS', text(env, 'CLOSE_AFTER_SECS'), Number(CLOSE_AFTER_SECS), { integer: true }))),
     stateFile,
     statusFile: join(dirname(stateFile), 'status.json'),
     houseRoundCap: parseLamports('HOUSE_ROUND_CAP_LAMPORTS', env.HOUSE_ROUND_CAP_LAMPORTS, DEFAULT_HOUSE_ROUND_CAP),

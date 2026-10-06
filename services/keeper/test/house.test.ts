@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { Side } from '@flipthememe/client';
 import {
+  chainRoom,
   emptyLedger,
   houseFillAmount,
   recordFill,
@@ -22,6 +23,9 @@ const base: FillInput = {
   maxBank: SOL,
   roundCap: milli(50),
   remainingBudget: 2n * SOL,
+  // On-chain HouseLimits room; roomy here, see the on-chain tests below.
+  chainRoundRoom: SOL,
+  chainDailyRoom: 10n * SOL,
   vaultAvailable: 2n * SOL,
 };
 const plan = (over: Partial<FillInput>) => houseFillAmount({ ...base, ...over });
@@ -111,5 +115,39 @@ describe('daily budget ledger (UTC day)', () => {
       amount: milli(50),
       side: Side.Down,
     });
+  });
+});
+
+describe('on-chain HouseLimits (program house_fill)', () => {
+  // 2026-10-06 12:00 UTC is UTC day 20732.
+  const noon = BigInt(Date.parse('2026-10-06T12:00:00Z') / 1000);
+  const day = noon / 86_400n;
+  const limits = { roundCap: milli(50), dailyCap: 2n * SOL, day, spent: SOL + milli(990), bump: 255 };
+
+  test('room in the round and today, as the program counts it', () => {
+    assert.equal(day, 20_732n);
+    assert.deepEqual(chainRoom(limits, 0n, noon), { round: milli(50), daily: milli(10), day, spentToday: SOL + milli(990) });
+    // A rotated house key already put 30 mSOL into this round: the cap is on the round total.
+    assert.equal(chainRoom(limits, milli(30), noon).round, milli(20));
+    assert.equal(chainRoom(limits, milli(80), noon).round, 0n);
+    assert.equal(chainRoom({ ...limits, spent: 3n * SOL }, 0n, noon).daily, 0n);
+  });
+
+  test('a new UTC day starts from zero, even before any fill writes it', () => {
+    const tomorrow = (day + 1n) * 86_400n;
+    assert.deepEqual(chainRoom(limits, 0n, tomorrow - 1n).daily, milli(10));
+    assert.deepEqual(chainRoom(limits, 0n, tomorrow), { round: milli(50), daily: 2n * SOL, day: day + 1n, spentToday: 0n });
+  });
+
+  test('the fill never asks for more than the chain allows', () => {
+    assert.deepEqual(plan({ rawUp: milli(50), chainRoundRoom: milli(30) }), { kind: 'fill', amount: milli(30), side: Side.Down });
+    assert.deepEqual(plan({ rawUp: milli(50), chainDailyRoom: milli(25) }), { kind: 'fill', amount: milli(25), side: Side.Down });
+  });
+
+  test('spent on-chain caps skip with their own reasons, ahead of the keeper soft limits', () => {
+    assert.deepEqual(plan({ rawUp: milli(50), chainRoundRoom: 0n }), { kind: 'skip', reason: 'chain-round-cap' });
+    assert.deepEqual(plan({ rawUp: milli(50), chainDailyRoom: 0n, remainingBudget: 0n }), { kind: 'skip', reason: 'chain-daily-cap' });
+    // A little room left that cannot activate the round: the house stays out.
+    assert.deepEqual(plan({ rawUp: milli(50), chainDailyRoom: milli(5) }), { kind: 'skip', reason: 'not-activating' });
   });
 });

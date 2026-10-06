@@ -6,15 +6,21 @@
 import {
   ACCOUNT,
   IX,
+  OFFSETS,
   PROGRAM_ID,
   RoundStatus,
   Outcome,
   RefundReason,
   configAddress,
+  houseLimitsAddress,
+  oracleAddress,
+  positionAddress,
   roundAddress,
   roundTimes,
   vaultAddress,
   type ConfigAccount,
+  type HouseLimitsAccount,
+  type OracleConfigAccount,
   type PositionAccount,
   type RoundAccount,
   type VaultAccount,
@@ -113,6 +119,18 @@ const positionEncoder = getStructEncoder([
   ['payout', u64],
   ['bump', u8],
 ]);
+const houseLimitsEncoder = getStructEncoder([
+  ['roundCap', u64],
+  ['dailyCap', u64],
+  ['day', i64],
+  ['spent', u64],
+  ['bump', u8],
+]);
+const oracleEncoder = getStructEncoder([
+  ['attestor', pubkey],
+  ['required', bool],
+  ['bump', u8],
+]);
 
 function account(discriminator: Uint8Array, body: ArrayLike<number>): Uint8Array {
   const out = new Uint8Array(8 + body.length);
@@ -125,6 +143,8 @@ export const encodeConfig = (c: ConfigAccount) => account(ACCOUNT.Config, config
 export const encodeVault = (v: VaultAccount) => account(ACCOUNT.Vault, vaultEncoder.encode(v));
 export const encodeRound = (r: RoundAccount) => account(ACCOUNT.Round, roundEncoder.encode(r));
 export const encodePosition = (p: PositionAccount) => account(ACCOUNT.Position, positionEncoder.encode(p));
+export const encodeHouseLimits = (l: HouseLimitsAccount) => account(ACCOUNT.HouseLimits, houseLimitsEncoder.encode(l));
+export const encodeOracle = (o: OracleConfigAccount) => account(ACCOUNT.OracleConfig, oracleEncoder.encode(o));
 
 export const SOL = 1_000_000_000n;
 
@@ -180,66 +200,90 @@ export function makeRound(id: bigint, opensAt: bigint, pool: Address, mint: Addr
 }
 
 export type SentInstruction = { name: string; program: Address; accounts: Address[]; data: Uint8Array };
+/** Signatures of a sent transaction by signer; an all-zero signature means the slot was left empty. */
+export type SentSignatures = { messageBytes: Uint8Array; signatures: Record<string, Uint8Array> };
 
 const b64 = getBase64Encoder(); // base64 text -> bytes
 const toB64 = getBase64Decoder(); // bytes -> base64 text
 const addressAt = getAddressDecoder();
 const IX_NAMES = Object.entries(IX) as [string, Uint8Array][];
+/** Rent the fake reports for every program account (positions included). */
+export const FAKE_ACCOUNT_LAMPORTS = 2_000_000n;
 
 export class FakeChain {
   readonly keeper: Address;
+  /** Owner of `vault`; the keeper unless a test splits the house role off. */
+  house: Address;
   config: ConfigAccount | null = null;
   vault: VaultAccount | null = null;
+  houseLimits: HouseLimitsAccount | null = null;
+  oracle: OracleConfigAccount | null = null;
   keeperLamports = 5n * SOL;
+  /** Other wallets (a separate house key) and their balances. */
+  readonly wallets = new Map<Address, bigint>();
   readonly rounds = new Map<bigint, RoundAccount>();
   /** Positions per round id. */
   readonly positions = new Map<bigint, PositionAccount[]>();
   /** Instructions of every transaction sent, in order. */
   readonly sent: SentInstruction[][] = [];
+  /** Signatures of every transaction sent, in the same order as `sent`. */
+  readonly signed: SentSignatures[] = [];
+  /** Set to make sendTransaction fail (like a simulation error) for the transactions it returns an Error for. */
+  failWhen: ((instructions: SentInstruction[]) => Error | null) | null = null;
 
   constructor(keeper: Address) {
     this.keeper = keeper;
+    this.house = keeper;
   }
 
-  private async byAddress(): Promise<Map<string, Uint8Array | 'system'>> {
-    const map = new Map<string, Uint8Array | 'system'>();
-    if (this.config) map.set(await configAddress(), encodeConfig(this.config));
-    if (this.vault) map.set(await vaultAddress(this.keeper), encodeVault(this.vault));
-    map.set(this.keeper, 'system');
-    for (const [id, round] of this.rounds) map.set(await roundAddress(id), encodeRound(round));
+  private async byAddress(): Promise<Map<string, { data: Uint8Array; lamports: bigint; system: boolean }>> {
+    const map = new Map<string, { data: Uint8Array; lamports: bigint; system: boolean }>();
+    const program = (data: Uint8Array) => ({ data, lamports: FAKE_ACCOUNT_LAMPORTS, system: false });
+    const wallet = (lamports: bigint) => ({ data: new Uint8Array(), lamports, system: true });
+    if (this.config) map.set(await configAddress(), program(encodeConfig(this.config)));
+    if (this.vault) map.set(await vaultAddress(this.house), program(encodeVault(this.vault)));
+    if (this.houseLimits) map.set(await houseLimitsAddress(), program(encodeHouseLimits(this.houseLimits)));
+    if (this.oracle) map.set(await oracleAddress(), program(encodeOracle(this.oracle)));
+    for (const [address, lamports] of this.wallets) map.set(address, wallet(lamports));
+    map.set(this.keeper, wallet(this.keeperLamports));
+    for (const [id, round] of this.rounds) map.set(await roundAddress(id), program(encodeRound(round)));
     return map;
   }
 
-  private info(data: Uint8Array | 'system') {
-    const bytes = data === 'system' ? new Uint8Array() : data;
+  private info(entry: { data: Uint8Array; lamports: bigint; system: boolean }) {
     return {
-      data: [toB64.decode(bytes), 'base64'] as const,
+      data: [toB64.decode(entry.data), 'base64'] as const,
       executable: false,
-      lamports: data === 'system' ? this.keeperLamports : 2_000_000n,
-      owner: data === 'system' ? ('11111111111111111111111111111111' as Address) : PROGRAM_ID,
+      lamports: entry.lamports,
+      owner: entry.system ? ('11111111111111111111111111111111' as Address) : PROGRAM_ID,
       rentEpoch: 0n,
-      space: BigInt(bytes.length),
+      space: BigInt(entry.data.length),
     };
   }
 
+  /** Decodes a sent transaction; a failure set by `failWhen` throws before it is recorded as sent. */
   private record(wire: string): void {
     const tx = getTransactionDecoder().decode(b64.encode(wire));
     const message = getCompiledTransactionMessageDecoder().decode(tx.messageBytes);
     // The keeper signs legacy-layout v0 messages; kit's union also has a v1 shape without `instructions`.
     if (!('instructions' in message)) throw new Error(`unexpected transaction message version ${String(message.version)}`);
     const keys = message.staticAccounts;
-    this.sent.push(
-      message.instructions.map((ix) => {
-        const data = new Uint8Array(ix.data ?? new Uint8Array());
-        const name = IX_NAMES.find(([, d]) => d.every((b, i) => data[i] === b))?.[0] ?? 'unknown';
-        const key = (i: number): Address => {
-          const k = keys[i];
-          if (!k) throw new Error(`no account key ${i}`);
-          return k;
-        };
-        return { name, program: key(ix.programAddressIndex), accounts: (ix.accountIndices ?? []).map(key), data };
-      }),
-    );
+    const instructions = message.instructions.map((ix) => {
+      const data = new Uint8Array(ix.data ?? new Uint8Array());
+      const name = IX_NAMES.find(([, d]) => d.every((b, i) => data[i] === b))?.[0] ?? 'unknown';
+      const key = (i: number): Address => {
+        const k = keys[i];
+        if (!k) throw new Error(`no account key ${i}`);
+        return k;
+      };
+      return { name, program: key(ix.programAddressIndex), accounts: (ix.accountIndices ?? []).map(key), data };
+    });
+    const failure = this.failWhen?.(instructions) ?? null;
+    if (failure) throw failure;
+    const signatures: Record<string, Uint8Array> = {};
+    for (const [signer, signature] of Object.entries(tx.signatures)) signatures[signer] = new Uint8Array(signature ?? new Uint8Array(64));
+    this.signed.push({ messageBytes: new Uint8Array(tx.messageBytes), signatures });
+    this.sent.push(instructions);
   }
 
   rpc(): SolanaRpc {
@@ -248,17 +292,26 @@ export class FakeChain {
       getMultipleAccounts: (keys: Address[]) =>
         send(async () => {
           const map = await this.byAddress();
-          return { context: { slot: 1n }, value: keys.map((k) => (map.has(k) ? this.info(map.get(k) as Uint8Array | 'system') : null)) };
+          return { context: { slot: 1n }, value: keys.map((k) => { const entry = map.get(k); return entry ? this.info(entry) : null; }) };
         }),
+      // Positions by round (memcmp at 8), or every claimed position (memcmp at OFFSETS.positionClaimed).
       getProgramAccounts: (_program: Address, opts: { filters?: { memcmp?: { offset: bigint; bytes: string } }[] }) =>
         send(async () => {
-          const byRound = opts.filters?.find((f) => f.memcmp && f.memcmp.offset === 8n)?.memcmp?.bytes;
-          if (!byRound) return [];
+          const memcmps = (opts.filters ?? []).flatMap((f) => (f.memcmp ? [f.memcmp] : []));
+          const byRound = memcmps.find((m) => m.offset === 8n)?.bytes;
+          const claimedOnly = memcmps.some((m) => m.offset === BigInt(OFFSETS.positionClaimed));
+          if (!byRound && !claimedOnly) return [];
+          const rows = [];
           for (const [id, list] of this.positions) {
-            if ((await roundAddress(id)) !== byRound) continue;
-            return list.map((p) => ({ pubkey: p.authority, account: this.info(encodePosition(p)) }));
+            const round = await roundAddress(id);
+            if (byRound && round !== byRound) continue;
+            for (const p of list) {
+              if (claimedOnly && !p.claimed) continue;
+              const data = encodePosition(p);
+              rows.push({ pubkey: await positionAddress(p.round, p.authority), account: this.info({ data, lamports: FAKE_ACCOUNT_LAMPORTS, system: false }) });
+            }
           }
-          return [];
+          return rows;
         }),
       getLatestBlockhash: () =>
         send(() => ({ context: { slot: 1n }, value: { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1_000n } })),

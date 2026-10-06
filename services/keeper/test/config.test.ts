@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describeError, TransactionTooLarge, isRateLimited, isTooLarge } from '../src/chain.ts';
 import { DEFAULT_MAINNET_RPCS, loadConfig, loadPoolGate } from '../src/config.ts';
 import { DEFAULT_GATE } from '../src/poolgate.ts';
-import { loadKeypairSigner } from '../src/keypair.ts';
+import { loadKeypairSigner, loadRoleSigners } from '../src/keypair.ts';
 import { backoffMs } from '../src/rpc.ts';
 import { parseState } from '../src/state.ts';
 import { TransactionFailed } from '@flipthememe/client';
@@ -76,6 +76,36 @@ describe('loadConfig', () => {
     assert.throws(() => loadConfig({ POOL_HOLD_MIN: 'ten' }, cwd), /POOL_HOLD_MIN/);
   });
 
+  test('role keys, attestor URL, treasury and the close delay (October 2026 upgrade)', () => {
+    const plain = loadConfig({}, cwd);
+    assert.deepEqual([plain.priceKeypairPath, plain.houseKeypairPath, plain.attestUrl, plain.attestToken, plain.treasury], [null, null, null, null, null]);
+    assert.equal(plain.closeAfterSecs, 86_400n);
+    const set = loadConfig(
+      {
+        PRICE_KEYPAIR: '/secrets/price.json',
+        HOUSE_KEYPAIR: ' /secrets/house.json ',
+        ATTEST_URL: 'https://attest.example/',
+        ATTEST_TOKEN: ' token_with.chars-0123~ ',
+        TREASURY: '11111111111111111111111111111114',
+        CLOSE_AFTER_SECS: '7200',
+      },
+      cwd,
+    );
+    assert.equal(set.priceKeypairPath, resolve(cwd, '/secrets/price.json'));
+    assert.equal(set.houseKeypairPath, resolve(cwd, '/secrets/house.json'));
+    assert.equal(set.attestUrl, 'https://attest.example');
+    assert.equal(set.attestToken, 'token_with.chars-0123~');
+    // A token that cannot be an HTTP header value is refused, and the message never quotes it.
+    assert.throws(() => loadConfig({ ATTEST_TOKEN: 'two words' }, cwd), (e: Error) => /ATTEST_TOKEN must be printable ASCII/.test(e.message) && !e.message.includes('two words'));
+    assert.equal(set.treasury, '11111111111111111111111111111114');
+    assert.equal(set.closeAfterSecs, 7_200n);
+    // A demo can shorten the close delay, never below the program's one-hour minimum.
+    assert.equal(loadConfig({ CLOSE_AFTER_SECS: '60' }, cwd).closeAfterSecs, 3_600n);
+    assert.throws(() => loadConfig({ CLOSE_AFTER_SECS: '1.5' }, cwd), /CLOSE_AFTER_SECS must be a whole number/);
+    assert.throws(() => loadConfig({ ATTEST_URL: 'ftp://attest.example' }, cwd), /ATTEST_URL/);
+    assert.throws(() => loadConfig({ TREASURY: 'not-an-address' }, cwd), /TREASURY/);
+  });
+
   test('rejects malformed values', () => {
     assert.throws(() => loadConfig({ HOUSE_ROUND_CAP_LAMPORTS: '0.05' }, cwd), /whole number of lamports/);
     assert.throws(() => loadConfig({ HOUSE_DAILY_BUDGET_LAMPORTS: '-1' }, cwd), /whole number of lamports/);
@@ -140,6 +170,32 @@ describe('keeper keypair file', () => {
       writeFileSync(mismatched, JSON.stringify([...secret, ...new Uint8Array(32).fill(7)]));
       await assert.rejects(loadKeypairSigner(mismatched), /invalid ed25519 key pair/);
       await assert.rejects(loadKeypairSigner(join(dir, 'missing.json')), /cannot read keeper keypair file .* \(ENOENT\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('PRICE_KEYPAIR and HOUSE_KEYPAIR fall back to the keeper key; a role file with the keeper key reuses its signer', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ftm-roles-'));
+    const keyFile = async (name: string): Promise<string> => {
+      const pair = (await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
+      const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey));
+      const pub = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+      const path = join(dir, name);
+      writeFileSync(path, JSON.stringify([...pkcs8.slice(pkcs8.length - 32), ...pub]));
+      return path;
+    };
+    try {
+      const keeper = await keyFile('keeper.json');
+      const price = await keyFile('price.json');
+      const single = await loadRoleSigners({ keypairPath: keeper, priceKeypairPath: null, houseKeypairPath: null });
+      assert.equal(single.price, single.keeper);
+      assert.equal(single.house, single.keeper);
+      const split = await loadRoleSigners({ keypairPath: keeper, priceKeypairPath: price, houseKeypairPath: keeper });
+      assert.notEqual(split.price.address, split.keeper.address);
+      // Same address, same signer object: kit refuses two signer objects for one address in a transaction.
+      assert.equal(split.house, split.keeper);
+      await assert.rejects(loadRoleSigners({ keypairPath: keeper, priceKeypairPath: join(dir, 'missing.json'), houseKeypairPath: null }), /ENOENT/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

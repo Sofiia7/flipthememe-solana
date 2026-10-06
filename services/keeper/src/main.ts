@@ -3,16 +3,19 @@
  * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth check),
  * - mainnet price sampling every 1 s,
  * - round scheduler every 1 s (create, house fill, strike, settle, claim, sweep, close, expire),
+ *   with the attestor co-signing prices when ATTEST_URL is set, and on quiet ticks the closing
+ *   of paid positions (rent back to their owners),
  * - devnet clock estimate every 60 s, scan for old unfinished rounds every 10 min,
  * - status.json next to STATE_FILE rewritten every tick.
  */
 import { DEVNET_PARAMS } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
+import { AttestorClient } from './attest.ts';
 import { ChainClock, describeError } from './chain.ts';
 import { loadConfig } from './config.ts';
 import { PoolDiscovery } from './discovery.ts';
 import { remainingBudget, rollover } from './house.ts';
-import { loadKeypairSigner } from './keypair.ts';
+import { loadRoleSigners } from './keypair.ts';
 import { hostOf, log, throttled } from './log.ts';
 import { ObservationStore } from './observations.ts';
 import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
@@ -55,7 +58,9 @@ function every(name: string, intervalMs: number, phaseMs: number, fn: () => Prom
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const signer = await loadKeypairSigner(cfg.keypairPath);
+  const roles = await loadRoleSigners(cfg);
+  const signer = roles.keeper;
+  const attestor = cfg.attestUrl ? new AttestorClient({ url: cfg.attestUrl, token: cfg.attestToken }) : null;
   const startMs = Date.now();
   const state = new StateStore(cfg.stateFile, startMs);
   const devnet = makeRpc(cfg.devnetRpc, 15_000);
@@ -68,6 +73,12 @@ async function main(): Promise<void> {
   log({
     event: 'start',
     keeper: signer.address,
+    priceAuthority: roles.price.address,
+    house: roles.house.address,
+    attestUrl: cfg.attestUrl ? hostOf(cfg.attestUrl) : null,
+    // Whether the shared secret is set; its value never reaches the log.
+    attestToken: cfg.attestToken !== null,
+    closeAfterSecs: cfg.closeAfterSecs,
     devnetRpc: hostOf(cfg.devnetRpc),
     mainnetRpcs: cfg.mainnetRpcs.map(hostOf),
     stateFile: cfg.stateFile,
@@ -115,7 +126,19 @@ async function main(): Promise<void> {
     log({ event: 'chain_clock_failed', error: describeError(error), assumedOffsetMs: clock.offsetMs });
   }
 
-  scheduler = new Scheduler({ rpc: devnet, signer, cfg, state, selector, store, clock, logger: log });
+  scheduler = new Scheduler({
+    rpc: devnet,
+    signer,
+    priceSigner: roles.price,
+    houseSigner: roles.house,
+    attestor,
+    cfg,
+    state,
+    selector,
+    store,
+    clock,
+    logger: log,
+  });
   const sched = scheduler;
 
   const statusWriteFailed = throttled(log, 60_000);

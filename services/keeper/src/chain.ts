@@ -7,15 +7,21 @@ import {
   PROGRAM_ID,
   configAddress,
   decodeConfig,
+  decodeHouseLimits,
+  decodeOracleConfig,
   decodePosition,
   decodeRound,
   decodeVault,
+  houseLimitsAddress,
+  oracleAddress,
   programErrorName,
   roundAddress,
   sendAndConfirm,
   signLocally,
   vaultAddress,
   type ConfigAccount,
+  type HouseLimitsAccount,
+  type OracleConfigAccount,
   type PositionAccount,
   type RoundAccount,
   type VaultAccount,
@@ -41,6 +47,10 @@ export const ROUND_FEES_SWEPT_OFFSET = 212;
 export const ROUND_ID_OFFSET = 8;
 /** 8-byte discriminator + Position::INIT_SPACE. */
 export const POSITION_ACCOUNT_SIZE = 100;
+/** 8-byte discriminator + HouseLimits::INIT_SPACE, OracleConfig::INIT_SPACE and Vault::INIT_SPACE. */
+export const HOUSE_LIMITS_ACCOUNT_SIZE = 41;
+export const ORACLE_ACCOUNT_SIZE = 42;
+export const VAULT_ACCOUNT_SIZE = 57;
 
 const base64 = getBase64Encoder();
 const base58 = getBase58Decoder();
@@ -64,20 +74,31 @@ export async function cachedRoundAddress(id: bigint): Promise<Address> {
 
 export type Snapshot = {
   config: ConfigAccount | null;
+  /** The Vault of the house key (the keeper key unless HOUSE_KEYPAIR is set). */
   houseVault: VaultAccount | null;
   keeperLamports: bigint;
+  /** Wallet of the house key: it pays the rent of house positions. */
+  houseLamports: bigint;
+  /** Null until init-house-limits / init-oracle ran after the October 2026 upgrade. */
+  houseLimits: HouseLimitsAccount | null;
+  oracle: OracleConfigAccount | null;
   /** Requested ids; null when the account does not exist (never created, or closed). */
   rounds: Map<bigint, RoundAccount | null>;
 };
 
-/** Config, the keeper's Vault, the keeper's balance and the given rounds in one getMultipleAccounts. */
-export async function readSnapshot(rpc: SolanaRpc, keeper: Address, ids: readonly bigint[]): Promise<Snapshot> {
+/**
+ * Config, the house Vault, HouseLimits, OracleConfig, the keeper and house balances and the given
+ * rounds in one getMultipleAccounts. `house` is the house key (default: the keeper key).
+ */
+export async function readSnapshot(rpc: SolanaRpc, keeper: Address, ids: readonly bigint[], house: Address = keeper): Promise<Snapshot> {
   const roundKeys = await Promise.all(ids.map((id) => cachedRoundAddress(id)));
-  const keys = [await configAddress(), await vaultAddress(keeper), keeper, ...roundKeys];
+  const keys = [await configAddress(), await vaultAddress(house), keeper, house, await houseLimitsAddress(), await oracleAddress(), ...roundKeys];
   const { value } = await rpc.getMultipleAccounts(keys, { encoding: 'base64', commitment: 'confirmed' }).send();
-  const [configAcc, vaultAcc, keeperAcc, ...roundAccs] = value;
+  const [configAcc, vaultAcc, keeperAcc, houseAcc, limitsAcc, oracleAcc, ...roundAccs] = value;
   const configBytes = bytesOf(configAcc ?? null);
   const vaultBytes = bytesOf(vaultAcc ?? null);
+  const limitsBytes = bytesOf(limitsAcc ?? null);
+  const oracleBytes = bytesOf(oracleAcc ?? null);
   const rounds = new Map<bigint, RoundAccount | null>();
   ids.forEach((id, i) => {
     const bytes = bytesOf(roundAccs[i] ?? null);
@@ -87,8 +108,53 @@ export async function readSnapshot(rpc: SolanaRpc, keeper: Address, ids: readonl
     config: configBytes ? decodeConfig(configBytes) : null,
     houseVault: vaultBytes ? decodeVault(vaultBytes) : null,
     keeperLamports: keeperAcc?.lamports ?? 0n,
+    houseLamports: houseAcc?.lamports ?? 0n,
+    houseLimits: limitsBytes ? decodeHouseLimits(limitsBytes) : null,
+    oracle: oracleBytes ? decodeOracleConfig(oracleBytes) : null,
     rounds,
   };
+}
+
+/** One account decoded with `decode`, or null when it does not exist (scripts). */
+export async function readAccount<T>(rpc: SolanaRpc, address: Address, decode: (bytes: Uint8Array) => T): Promise<T | null> {
+  const { value } = await rpc.getAccountInfo(address, { encoding: 'base64', commitment: 'confirmed' }).send();
+  return value ? decode(base64.encode(value.data[0]) as Uint8Array) : null;
+}
+
+export type ClaimedPosition = { address: Address; position: PositionAccount; lamports: bigint };
+
+/** Every claimed position of the program (dataSize + memcmp on `claimed`), with its balance. */
+export async function fetchClaimedPositions(rpc: SolanaRpc): Promise<ClaimedPosition[]> {
+  const accounts = await rpc
+    .getProgramAccounts(PROGRAM_ID, {
+      encoding: 'base64',
+      commitment: 'confirmed',
+      filters: [
+        { dataSize: BigInt(POSITION_ACCOUNT_SIZE) },
+        { memcmp: { offset: BigInt(OFFSETS.positionClaimed), bytes: base58.decode(new Uint8Array([1])) as Base58EncodedBytes, encoding: 'base58' } },
+      ],
+    })
+    .send();
+  const out: ClaimedPosition[] = [];
+  for (const { pubkey, account } of accounts) {
+    const position = decodePosition(base64.encode(account.data[0]) as Uint8Array);
+    if (position.claimed) out.push({ address: pubkey, position, lamports: account.lamports });
+  }
+  return out;
+}
+
+/** Rounds by account address, 100 per getMultipleAccounts; null where there is none. */
+export async function readRoundsAt(rpc: SolanaRpc, addresses: readonly Address[]): Promise<Map<Address, RoundAccount | null>> {
+  const out = new Map<Address, RoundAccount | null>();
+  for (let i = 0; i < addresses.length; i += 100) {
+    const chunk = addresses.slice(i, i + 100);
+    const { value } = await rpc.getMultipleAccounts(chunk, { encoding: 'base64', commitment: 'confirmed' }).send();
+    chunk.forEach((address, k) => {
+      const bytes = bytesOf(value[k] ?? null);
+      out.set(address, bytes ? decodeRound(bytes) : null);
+    });
+  }
+  return out;
 }
 
 /** Every position of a round (dataSize + memcmp on `round` right after the discriminator). */

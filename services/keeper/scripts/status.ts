@@ -1,16 +1,16 @@
 /**
- * Prints the devnet Config, the last rounds and the keeper/house balances.
+ * Prints the devnet Config, HouseLimits, OracleConfig, the last rounds and the keeper/house balances.
  *
  *   node services/keeper/scripts/status.ts [rounds=10]
  *
- * Env: DEVNET_RPC, KEEPER_KEYPAIR (only its address is used), STATE_FILE (status.json is read
- * from the same folder when the keeper writes one).
+ * Env: DEVNET_RPC, KEEPER_KEYPAIR and HOUSE_KEYPAIR (only their addresses are used), STATE_FILE
+ * (status.json is read from the same folder when the keeper writes one).
  */
 import { readFileSync } from 'node:fs';
 import { Outcome, PROGRAM_ID, RefundReason, RoundStatus, configAddress, vaultAddress, type RoundAccount } from '@flipthememe/client';
 import { readSnapshot } from '../src/chain.ts';
 import { loadConfig } from '../src/config.ts';
-import { loadKeypairSigner } from '../src/keypair.ts';
+import { loadRoleSigners } from '../src/keypair.ts';
 import { hostOf } from '../src/log.ts';
 import { makeRpc } from '../src/rpc.ts';
 
@@ -44,15 +44,24 @@ function describe(r: RoundAccount): string {
 async function main(): Promise<void> {
   const count = Math.max(1, Math.min(60, Number(process.argv[2] ?? 10) || 10));
   const cfg = loadConfig();
-  const signer = await loadKeypairSigner(cfg.keypairPath);
+  const roles = await loadRoleSigners(cfg);
+  const signer = roles.keeper;
+  const house = roles.house.address;
   const rpc = makeRpc(cfg.devnetRpc, 20_000);
-  const head = await readSnapshot(rpc, signer.address, []);
+  const head = await readSnapshot(rpc, signer.address, [], house);
   console.log(`devnet ${hostOf(cfg.devnetRpc)}  program ${PROGRAM_ID}`);
   console.log(`keeper ${signer.address}  balance ${sol(head.keeperLamports)} SOL`);
+  if (house !== signer.address) console.log(`house key ${house}  balance ${sol(head.houseLamports)} SOL`);
   const vault = head.houseVault;
+  console.log(`house vault ${await vaultAddress(house)}  ${vault ? `available ${sol(vault.available)} locked ${sol(vault.locked)} SOL` : 'not opened'}`);
+  const limits = head.houseLimits;
   console.log(
-    `house vault ${await vaultAddress(signer.address)}  ${vault ? `available ${sol(vault.available)} locked ${sol(vault.locked)} SOL` : 'not opened'}`,
+    limits
+      ? `house limits  round cap ${sol(limits.roundCap)}  daily cap ${sol(limits.dailyCap)}  spent ${sol(limits.spent)} on UTC day ${limits.day}`
+      : 'house limits  missing (run scripts/init-house-limits.ts; the program refuses house fills without them)',
   );
+  const oracle = head.oracle;
+  console.log(oracle ? `oracle  attestor ${oracle.attestor}  required ${oracle.required}` : 'oracle  missing (run scripts/init-oracle.ts; set_strike and settle need the account)');
   const config = head.config;
   if (!config) {
     console.log(`config ${await configAddress()} does not exist yet`);

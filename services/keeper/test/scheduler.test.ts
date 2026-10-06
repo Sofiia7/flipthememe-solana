@@ -8,24 +8,30 @@ import { after, describe, test } from 'node:test';
 import {
   DEPTH_K,
   Outcome,
+  PROGRAM_ID,
   RoundStatus,
   Side,
   SYSTEM_PROGRAM_ID,
   configAddress,
+  houseLimitsAddress,
+  oracleAddress,
   positionAddress,
   roundAddress,
   vaultAddress,
   type PositionAccount,
   type PriceObservation,
 } from '@flipthememe/client';
-import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from '@solana/kit';
+import { address, generateKeyPairSigner, getPublicKeyFromAddress, verifySignature, type Address, type KeyPairSigner, type SignatureBytes } from '@solana/kit';
+import { AttestorClient, NO_ATTESTOR } from '../src/attest.ts';
 import { ChainClock } from '../src/chain.ts';
+import { PositionCloser } from '../src/closer.ts';
 import { loadConfig } from '../src/config.ts';
 import type { LogFields } from '../src/log.ts';
 import { ObservationStore } from '../src/observations.ts';
 import { Scheduler } from '../src/scheduler.ts';
 import type { PoolSelector, Selection } from '../src/selector.ts';
 import { StateStore } from '../src/state.ts';
+import { fakeAttestor } from './fake-attestor.ts';
 import { FakeChain, SOL, makeConfig, makeRound, readAddress, readI64, readU32, readU64, type SentInstruction } from './fake-chain.ts';
 
 const POOL = address('11111111111111111111111111111112');
@@ -39,20 +45,48 @@ after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 type Harness = { chain: FakeChain; scheduler: Scheduler; signer: KeyPairSigner; store: ObservationStore; state: StateStore; logs: LogFields[] };
 
-async function harness(opts: { pool?: boolean } = {}): Promise<Harness> {
+type HarnessOptions = {
+  pool?: boolean;
+  /** Separate PRICE_KEYPAIR / HOUSE_KEYPAIR signers; Config names them as the roles. */
+  priceSigner?: KeyPairSigner;
+  houseSigner?: KeyPairSigner;
+  attestor?: AttestorClient;
+  /** Builds the position closer (default: the scheduler's own, first scan a minute after start). */
+  closer?: (chain: FakeChain, signer: KeyPairSigner, logs: LogFields[]) => PositionCloser;
+};
+
+async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'ftm-scheduler-'));
   dirs.push(dir);
   const signer = await generateKeyPairSigner();
   const chain = new FakeChain(signer.address);
-  chain.config = makeConfig(signer.address, { nextRoundId: 10n });
-  chain.vault = { authority: signer.address, available: 2n * SOL, locked: 0n, bump: 255 };
+  const house = opts.houseSigner?.address ?? signer.address;
+  chain.house = house;
+  chain.config = makeConfig(signer.address, { nextRoundId: 10n, houseAuthority: house, priceAuthority: opts.priceSigner?.address ?? signer.address });
+  chain.vault = { authority: house, available: 2n * SOL, locked: 0n, bump: 255 };
+  // What the upgrade runbook sets up: on-chain caps as the keeper defaults, no attestor required.
+  chain.houseLimits = { roundCap: 50_000_000n, dailyCap: 2n * SOL, day: BigInt(Math.floor(Date.now() / 86_400_000)), spent: 0n, bump: 253 };
+  chain.oracle = { attestor: NO_ATTESTOR, required: false, bump: 252 };
   const cfg = loadConfig({ STATE_FILE: join(dir, 'state.json') }, dir);
   const state = new StateStore(cfg.stateFile, Date.now());
   const store = new ObservationStore();
   const logs: LogFields[] = [];
   const selection: Selection = { pool: POOL, baseMint: MINT, name: 'TEST / SOL', selectedAtMs: Date.now(), rung: 0, fallback: false, quoteReserve: 400n * SOL, reserveAtMs: Date.now() };
   const selector = { current: opts.pool === false ? null : selection } as unknown as PoolSelector;
-  const scheduler = new Scheduler({ rpc: chain.rpc(), signer, cfg, state, selector, store, clock: new ChainClock(0), logger: (f) => logs.push(f) });
+  const scheduler = new Scheduler({
+    rpc: chain.rpc(),
+    signer,
+    priceSigner: opts.priceSigner,
+    houseSigner: opts.houseSigner,
+    attestor: opts.attestor,
+    closer: opts.closer?.(chain, signer, logs),
+    cfg,
+    state,
+    selector,
+    store,
+    clock: new ChainClock(0),
+    logger: (f) => logs.push(f),
+  });
   return { chain, scheduler, signer, store, state, logs };
 }
 
@@ -166,6 +200,7 @@ describe('scheduler', () => {
       await configAddress(),
       round,
       await vaultAddress(h.signer.address),
+      await houseLimitsAddress(),
       await positionAddress(round, h.signer.address),
       h.signer.address,
       SYSTEM_PROGRAM_ID,
@@ -187,7 +222,8 @@ describe('scheduler', () => {
     assert.equal(playedTx?.[0]?.name, 'setStrike');
     assert.equal(readU32(playedTx?.[0]?.data ?? new Uint8Array(12), 8), 12);
     assert.equal(readU64(playedTx?.[0]?.data ?? new Uint8Array(20), 12), 100n); // first sample: lowest slot
-    assert.deepEqual(playedTx?.[0]?.accounts, [await configAddress(), await roundAddress(8n), h.signer.address]);
+    // No attestor: the program id fills the optional attestor slot after OracleConfig.
+    assert.deepEqual(playedTx?.[0]?.accounts, [await configAddress(), await roundAddress(8n), h.signer.address, await oracleAddress(), PROGRAM_ID]);
     assert.equal(emptyTx?.[0]?.name, 'setStrike');
     assert.equal(readU32(emptyTx?.[0]?.data ?? new Uint8Array(12), 8), 0);
   });
@@ -269,5 +305,211 @@ describe('scheduler', () => {
     assert.equal(expire?.name, 'refundExpired');
     assert.deepEqual(expire?.accounts, [await roundAddress(4n)]);
     assert.equal(h.chain.sent.length, 3);
+  });
+});
+
+describe('scheduler: October 2026 upgrade', () => {
+  const lone = (now: number) => makeRound(9n, BigInt(now - 65), POOL, MINT, { rawUp: 50_000_000n, positionCount: 1 });
+  const played = (now: number) => makeRound(8n, BigInt(now - 102), POOL, MINT, { rawUp: 50_000_000n, rawDown: 50_000_000n, positionCount: 2 });
+  const withSamples = (h: Harness, round: ReturnType<typeof played>) => {
+    for (let k = 0; k < 6; k++) h.store.add(POOL, obs(Number(round.strikeStart) * 1000 + k * 900, 100 + k));
+  };
+  const limitsOf = (h: Harness) => {
+    if (!h.chain.houseLimits) throw new Error('no house limits');
+    return h.chain.houseLimits;
+  };
+  function makeClient(fetch: ConstructorParameters<typeof AttestorClient>[0]['fetch']): AttestorClient {
+    return new AttestorClient({ url: 'https://attest.example', fetch, pauseMs: 1 });
+  }
+
+  test('house fill: never more than the on-chain round cap; a spent on-chain daily cap skips with a clear log', async () => {
+    const now = MINUTE + 30;
+    const capped = await harness();
+    capped.chain.houseLimits = { ...limitsOf(capped), roundCap: 30_000_000n };
+    capped.chain.rounds.set(9n, lone(now));
+    await tick(capped, now);
+    assert.equal(readU64(only(capped).data, 8), 30_000_000n);
+
+    const spent = await harness();
+    spent.chain.houseLimits = { ...limitsOf(spent), spent: 2n * SOL };
+    spent.chain.rounds.set(9n, lone(now));
+    await tick(spent, now);
+    assert.equal(spent.chain.sent.length, 0);
+    assert.deepEqual(spent.logs.find((l) => l.event === 'fill_skipped_onchain_cap'), {
+      round: 9n,
+      step: 'fill',
+      skipped: 'chain-daily-cap',
+      rawUp: 50_000_000n,
+      rawDown: 0n,
+      event: 'fill_skipped_onchain_cap',
+      roundCap: 50_000_000n,
+      houseAmount: 0n,
+      dailyCap: 2n * SOL,
+      spentToday: 2n * SOL,
+    });
+
+    // Spent on an earlier UTC day: the program starts the new day from zero, so does the keeper.
+    const yesterday = await harness();
+    yesterday.chain.houseLimits = { ...limitsOf(yesterday), day: limitsOf(yesterday).day - 1n, spent: 2n * SOL };
+    yesterday.chain.rounds.set(9n, lone(now));
+    await tick(yesterday, now);
+    assert.equal(readU64(only(yesterday).data, 8), 50_000_000n);
+  });
+
+  test('house fill: no HouseLimits account, no fill', async () => {
+    const h = await harness();
+    h.chain.houseLimits = null;
+    h.chain.rounds.set(9n, lone(MINUTE + 30));
+    await tick(h, MINUTE + 30);
+    assert.equal(h.chain.sent.length, 0);
+    assert.ok(h.logs.some((l) => l.event === 'house_limits_missing'));
+  });
+
+  test('separate price and house keys: each signs its own step, the keeper key pays every fee', async () => {
+    const price = await generateKeyPairSigner();
+    const house = await generateKeyPairSigner();
+    const h = await harness({ priceSigner: price, houseSigner: house });
+    h.chain.wallets.set(house.address, SOL);
+    const now = MINUTE + 30;
+    h.chain.rounds.set(9n, lone(now));
+    h.chain.rounds.set(8n, played(now));
+    withSamples(h, played(now));
+    await tick(h, now);
+    const fillAt = h.chain.sent.findIndex((tx) => tx[0]?.name === 'houseFill');
+    const strikeAt = h.chain.sent.findIndex((tx) => tx[0]?.name === 'setStrike');
+    const round9 = await roundAddress(9n);
+    assert.deepEqual(h.chain.sent[fillAt]?.[0]?.accounts, [
+      await configAddress(),
+      round9,
+      await vaultAddress(house.address),
+      await houseLimitsAddress(),
+      await positionAddress(round9, house.address),
+      house.address,
+      SYSTEM_PROGRAM_ID,
+    ]);
+    assert.equal(h.chain.sent[strikeAt]?.[0]?.accounts[2], price.address);
+    assert.deepEqual(Object.keys(h.chain.signed[fillAt]?.signatures ?? {}), [h.signer.address, house.address]);
+    assert.deepEqual(Object.keys(h.chain.signed[strikeAt]?.signatures ?? {}), [h.signer.address, price.address]);
+  });
+
+  test('attested strike: the attestor co-signs; accounts are config, round, price authority, oracle, attestor', async () => {
+    const att = await fakeAttestor();
+    const h = await harness({ attestor: makeClient(att.fetch) });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    const now = MINUTE + 30;
+    h.chain.rounds.set(8n, played(now));
+    withSamples(h, played(now));
+    await tick(h, now);
+    const ix = only(h);
+    assert.equal(ix.name, 'setStrike');
+    assert.deepEqual(ix.accounts, [await configAddress(), await roundAddress(8n), h.signer.address, await oracleAddress(), att.address]);
+    const tx = h.chain.signed[0];
+    assert.ok(tx);
+    const signature = tx.signatures[att.address];
+    assert.ok(signature && (await verifySignature(await getPublicKeyFromAddress(att.address), signature as SignatureBytes, tx.messageBytes)));
+    assert.ok(h.logs.some((l) => l.event === 'attest_ok' && l.round === 8n && l.step === 'strike'));
+    assert.equal(h.logs.find((l) => l.step === 'strike' && typeof l.sig === 'string')?.attested, true);
+  });
+
+  test('a required attestor that refuses: nothing is sent, and the step is retried later', async () => {
+    const att = await fakeAttestor();
+    att.mode = 'refuse';
+    const h = await harness({ attestor: makeClient(att.fetch) });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    const now = MINUTE + 30;
+    h.chain.rounds.set(6n, makeRound(6n, BigInt(now - 162), POOL, MINT, { status: RoundStatus.Live, rawUp: 50_000_000n, rawDown: 50_000_000n, positionCount: 2 }));
+    await tick(h, now);
+    assert.equal(h.chain.sent.length, 0);
+    assert.deepEqual(h.logs.find((l) => l.event === 'attest_refused'), {
+      event: 'attest_refused',
+      round: 6n,
+      step: 'settle',
+      reason: 'samples disagree',
+      status: 422,
+      attempts: 1,
+      required: true,
+    });
+    assert.equal(h.logs.find((l) => l.step === 'settle' && 'error' in l)?.error, 'attestation refused: samples disagree');
+  });
+
+  test('an attestor that is not required yet: an outage falls back to the price without it', async () => {
+    const att = await fakeAttestor();
+    att.mode = 'down';
+    const h = await harness({ attestor: makeClient(att.fetch) });
+    h.chain.oracle = { attestor: att.address, required: false, bump: 252 };
+    const now = MINUTE + 30;
+    h.chain.rounds.set(8n, played(now));
+    withSamples(h, played(now));
+    await tick(h, now);
+    assert.equal(only(h).accounts[4], PROGRAM_ID); // no attestor in the slot
+    assert.deepEqual(h.logs.find((l) => l.event === 'attest_failed'), {
+      event: 'attest_failed',
+      round: 8n,
+      step: 'strike',
+      reason: 'HTTP 503: unavailable',
+      attempts: 2,
+      required: false,
+    });
+    assert.equal(h.logs.find((l) => l.step === 'strike' && typeof l.sig === 'string')?.attested, false);
+  });
+
+  test('no attestor for an unmatched strike; nothing sent without ATTEST_URL when required, or without OracleConfig', async () => {
+    const att = await fakeAttestor();
+    const now = MINUTE + 30;
+    const h = await harness({ attestor: makeClient(att.fetch) });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    h.chain.rounds.set(7n, makeRound(7n, BigInt(now - 103), POOL, MINT, { rawUp: 50_000_000n, positionCount: 1 }));
+    await tick(h, now);
+    assert.equal(only(h).accounts[4], PROGRAM_ID);
+    assert.equal(att.seen.length, 0);
+
+    const noUrl = await harness();
+    noUrl.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    noUrl.chain.rounds.set(8n, played(now));
+    await tick(noUrl, now);
+    assert.equal(noUrl.chain.sent.length, 0);
+    assert.ok(noUrl.logs.some((l) => l.event === 'attestor_required_no_url'));
+
+    const noOracle = await harness();
+    noOracle.chain.oracle = null;
+    noOracle.chain.rounds.set(8n, played(now));
+    await tick(noOracle, now);
+    assert.equal(noOracle.chain.sent.length, 0);
+    assert.ok(noOracle.logs.some((l) => l.event === 'oracle_missing'));
+  });
+
+  test('paid positions are closed only when nothing else is in flight, in the quiet part of the minute', async () => {
+    const h = await harness({ closer: (chain, signer, logs) => new PositionCloser({ rpc: chain.rpc(), signer, logger: (f) => logs.push(f), startMs: 0 }) });
+    const round5 = await roundAddress(5n);
+    const round4 = await roundAddress(4n);
+    const owners = [(await generateKeyPairSigner()).address, (await generateKeyPairSigner()).address];
+    const position = (round: Address, authority: Address, claimed: boolean): PositionAccount => ({
+      round,
+      authority,
+      side: Side.Up,
+      stake: SOL / 100n,
+      face: new Uint8Array(8),
+      isHouse: false,
+      claimed,
+      payout: 0n,
+      bump: 250,
+    });
+    // Round 5 is done (claimed and swept) and two days old; round 4 still has a claim to make.
+    h.chain.rounds.set(5n, makeRound(5n, BigInt(MINUTE - 2 * 86_400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: 2, claimedCount: 2, feesSwept: true }));
+    h.chain.positions.set(5n, owners.map((owner) => position(round5, owner, true)));
+    h.chain.rounds.set(4n, makeRound(4n, BigInt(MINUTE - 3 * 86_400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: 1, claimedCount: 0 }));
+    h.chain.positions.set(4n, [position(round4, owners[0] as Address, false)]);
+    const scans = () => h.logs.filter((l) => l.event === 'positions_scan').length;
+
+    await tick(h, MINUTE + 10); // the claim of round 4 goes out: no scan beside it
+    assert.deepEqual([h.chain.sent.map((tx) => tx[0]?.name), scans()], [['claim'], 0]);
+    await tick(h, MINUTE + 11); // the claim is cooling down and nothing is in flight: scan
+    assert.deepEqual(h.logs.find((l) => l.event === 'positions_scan'), { event: 'positions_scan', claimed: 2, closable: 2, lamports: 4_000_000n, waiting: 0, skipped: 0 });
+    await tick(h, MINUTE + 15); // within CLOSE_INTERVAL_MS of the scan
+    await tick(h, MINUTE + 40); // strike, settle, claims and the next create own the end of the minute
+    assert.equal(h.chain.sent.length, 1);
+    await tick(h, MINUTE + 21);
+    assert.deepEqual(h.chain.sent.slice(1).map((tx) => tx.map((ix) => ix.name)), [['closePosition', 'closePosition']]);
+    assert.deepEqual(h.chain.sent[1]?.[0]?.accounts, [round5, await positionAddress(round5, owners[0] as Address), owners[0]]);
   });
 });

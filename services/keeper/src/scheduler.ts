@@ -1,8 +1,9 @@
 /**
- * Round scheduler. Every tick reads Config, the keeper's Vault and the last rounds from devnet,
- * then starts, per round, the first step that is due (see steps.ts). Steps run in the
- * background, one at a time per round, so a slow confirmation never stalls the other rounds;
- * a failed step is logged and retried on a later tick.
+ * Round scheduler. Every tick reads Config, the house Vault, HouseLimits, OracleConfig and the last
+ * rounds from devnet, then starts, per round, the first step that is due (see steps.ts). Steps run
+ * in the background, one at a time per round, so a slow confirmation never stalls the other
+ * rounds; a failed step is logged and retried on a later tick. On a quiet tick, paid positions
+ * are closed so their rent goes back (closer.ts).
  */
 import {
   DEPTH_K,
@@ -21,10 +22,12 @@ import {
   settle,
   sweepFees,
   type ConfigAccount,
+  type PriceSample,
   type ProgramErrorName,
   type RoundAccount,
 } from '@flipthememe/client';
-import type { Address, Instruction, KeyPairSigner } from '@solana/kit';
+import type { Address, Instruction, KeyPairSigner, Signature } from '@solana/kit';
+import { NO_ATTESTOR, sendAttested, type AttestorClient } from './attest.ts';
 import {
   cachedRoundAddress,
   describeError,
@@ -37,8 +40,9 @@ import {
   type ChainClock,
   type Snapshot,
 } from './chain.ts';
+import { PositionCloser } from './closer.ts';
 import type { KeeperConfig } from './config.ts';
-import { houseFillAmount, recordFill, remainingBudget, rollover, utcDay } from './house.ts';
+import { chainRoom, houseFillAmount, recordFill, remainingBudget, rollover, utcDay } from './house.ts';
 import { throttled, type LogFields, type Logger } from './log.ts';
 import { windowSamples, type ObservationStore } from './observations.ts';
 import type { SolanaRpc } from './rpc.ts';
@@ -63,17 +67,35 @@ export const MAX_PARALLEL_STEPS = 2;
 export const RATE_LIMIT_PAUSE_MS = 4_000;
 /** Dispatch order when more steps are due than slots: time-critical first. */
 const PRIORITY: Record<StepKind | 'create', number> = { create: 0, fill: 1, strike: 2, settle: 2, expire: 3, claim: 4, sweep: 4, close: 4 };
+/**
+ * Closing paid positions never competes with the rounds: a scan or a batch starts only on a tick
+ * where nothing else is in flight, inside the quiet part of the minute (strike and settle fall due
+ * at second 41, claims follow, the next round is created from second 45), at most one every
+ * CLOSE_INTERVAL_MS. So it holds at most one of the MAX_PARALLEL_STEPS slots, and only then.
+ */
+export const CLOSE_FROM_SECOND = 3;
+export const CLOSE_UNTIL_SECOND = 33;
+export const CLOSE_INTERVAL_MS = 10_000;
 
 type Due = { priority: number; id: bigint; lane: string; stepKey: string; run: () => Promise<void> };
 /** A new round opens only while the current pool has an observation at most this old. */
 const SAMPLER_FRESH_MS = 15_000;
 const LOW_BALANCE_LAMPORTS = 200_000_000n;
+/** The house wallet pays the rent of every house position until close_position returns it. */
+const LOW_HOUSE_WALLET_LAMPORTS = 20_000_000n;
 
 type Failure = { count: number; retryAtMs: number };
 
 export type SchedulerDeps = {
   rpc: SolanaRpc;
+  /** The keeper key: fee payer of every transaction, and the admin that creates rounds. */
   signer: KeyPairSigner;
+  /** PRICE_KEYPAIR and HOUSE_KEYPAIR; each defaults to `signer`. */
+  priceSigner?: KeyPairSigner;
+  houseSigner?: KeyPairSigner;
+  /** Present when ATTEST_URL is set. */
+  attestor?: AttestorClient | null;
+  closer?: PositionCloser;
   cfg: KeeperConfig;
   state: StateStore;
   selector: PoolSelector;
@@ -90,6 +112,10 @@ export class Scheduler {
 
   private readonly rpc: SolanaRpc;
   private readonly signer: KeyPairSigner;
+  private readonly priceSigner: KeyPairSigner;
+  private readonly houseSigner: KeyPairSigner;
+  private readonly attestor: AttestorClient | null;
+  private readonly closer: PositionCloser;
   private readonly cfg: KeeperConfig;
   private readonly state: StateStore;
   private readonly selector: PoolSelector;
@@ -106,10 +132,15 @@ export class Scheduler {
   private readonly fillSkipLogged = new Set<bigint>();
   private claimBatch = CLAIM_BATCH_START;
   private pausedUntilMs = 0;
+  private nextPositionsAtMs = 0;
 
   constructor(deps: SchedulerDeps) {
     this.rpc = deps.rpc;
     this.signer = deps.signer;
+    this.priceSigner = deps.priceSigner ?? deps.signer;
+    this.houseSigner = deps.houseSigner ?? deps.signer;
+    this.attestor = deps.attestor ?? null;
+    this.closer = deps.closer ?? new PositionCloser({ rpc: deps.rpc, signer: deps.signer, logger: deps.logger, closeAfterSecs: deps.cfg.closeAfterSecs });
     this.cfg = deps.cfg;
     this.state = deps.state;
     this.selector = deps.selector;
@@ -148,6 +179,9 @@ export class Scheduler {
     if (snap.keeperLamports < LOW_BALANCE_LAMPORTS) {
       this.warn('balance', { event: 'keeper_balance_low', lamports: snap.keeperLamports });
     }
+    if (this.houseSigner.address !== me && snap.houseLamports < LOW_HOUSE_WALLET_LAMPORTS) {
+      this.warn('house-balance', { event: 'house_wallet_low', house: this.houseSigner.address, lamports: snap.houseLamports });
+    }
     this.reconcileHouse(snap, nowMs);
 
     const due: Due[] = [];
@@ -183,7 +217,23 @@ export class Scheduler {
       if (this.inFlight.size >= MAX_PARALLEL_STEPS) break;
       this.dispatch(d.lane, d.stepKey, d.run);
     }
+    this.closePositions(nowMs);
     this.forgetOld(config.nextRoundId);
+  }
+
+  /** Lowest priority: see CLOSE_FROM_SECOND. Pause or not, rent can always go back. */
+  private closePositions(nowMs: number): void {
+    if (this.inFlight.size > 0 || nowMs < this.nextPositionsAtMs) return;
+    const second = Math.floor(nowMs / 1000) % 60;
+    if (second < CLOSE_FROM_SECOND || second >= CLOSE_UNTIL_SECOND) return;
+    if (this.closer.scanDue(nowMs)) {
+      this.nextPositionsAtMs = nowMs + CLOSE_INTERVAL_MS;
+      const chainNowSecs = this.chainNowSecs(nowMs);
+      this.dispatch('positions', 'positions:scan', () => this.closer.scan(nowMs, chainNowSecs));
+    } else if (this.closer.hasWork()) {
+      this.nextPositionsAtMs = nowMs + CLOSE_INTERVAL_MS;
+      this.dispatch('positions', 'positions:close', () => this.closer.closeNext(nowMs));
+    }
   }
 
   /** Loads unfinished rounds older than the per-tick window (start-up and every few minutes). */
@@ -218,8 +268,14 @@ export class Scheduler {
       lastSuccessfulActionAt: this.lastActionAtMs === null ? null : new Date(this.lastActionAtMs).toISOString(),
       lastAction: this.lastAction,
       keeperLamports: snap?.keeperLamports ?? null,
+      priceAuthority: this.priceSigner.address,
+      house: this.houseSigner.address,
+      houseLamports: snap?.houseLamports ?? null,
       houseVaultAvailable: snap?.houseVault?.available ?? null,
       houseVaultLocked: snap?.houseVault?.locked ?? null,
+      houseLimits: snap?.houseLimits ? this.houseLimitsStatus(snap.houseLimits) : null,
+      oracle: snap?.oracle ? { attestor: snap.oracle.attestor, required: snap.oracle.required, attestUrl: this.attestor !== null } : null,
+      positions: this.closer.status(),
       inFlight: [...this.inFlight.keys()],
       backlog: this.backlog.size,
       claimBatch: this.claimBatch,
@@ -227,20 +283,30 @@ export class Scheduler {
     };
   }
 
+  private houseLimitsStatus(limits: NonNullable<Snapshot['houseLimits']>): LogFields {
+    const room = chainRoom(limits, 0n, this.chainNowSecs(Date.now()));
+    return { roundCap: limits.roundCap, dailyCap: limits.dailyCap, day: room.day, spent: room.spentToday, remaining: room.daily };
+  }
+
+  private chainNowSecs(nowMs: number): bigint {
+    return BigInt(Math.floor((nowMs + this.clock.offsetMs) / 1000));
+  }
+
   private async read(): Promise<Snapshot> {
     const me = this.signer.address;
+    const house = this.houseSigner.address;
     if (this.nextIdHint === null) {
-      const head = await readSnapshot(this.rpc, me, []);
+      const head = await readSnapshot(this.rpc, me, [], house);
       if (!head.config) return head;
       this.nextIdHint = head.config.nextRoundId;
     }
-    let snap = await readSnapshot(this.rpc, me, this.idsToRead(this.nextIdHint));
+    let snap = await readSnapshot(this.rpc, me, this.idsToRead(this.nextIdHint), house);
     const next = snap.config?.nextRoundId;
     if (next !== undefined && next !== this.nextIdHint) {
       // One round created since the last tick is already covered (the window includes the hint).
       const covered = next === this.nextIdHint + 1n;
       this.nextIdHint = next;
-      if (!covered) snap = await readSnapshot(this.rpc, me, this.idsToRead(next));
+      if (!covered) snap = await readSnapshot(this.rpc, me, this.idsToRead(next), house);
     }
     return snap;
   }
@@ -255,13 +321,12 @@ export class Scheduler {
   }
 
   private authorized(kind: StepKind, config: ConfigAccount): boolean {
-    const me = this.signer.address;
-    if (kind === 'fill' && config.houseAuthority !== me) {
-      this.warn('house', { event: 'keeper_not_house_authority', houseAuthority: config.houseAuthority });
+    if (kind === 'fill' && config.houseAuthority !== this.houseSigner.address) {
+      this.warn('house', { event: 'keeper_not_house_authority', houseAuthority: config.houseAuthority, houseKey: this.houseSigner.address });
       return false;
     }
-    if ((kind === 'strike' || kind === 'settle') && config.priceAuthority !== me) {
-      this.warn('price', { event: 'keeper_not_price_authority', priceAuthority: config.priceAuthority });
+    if ((kind === 'strike' || kind === 'settle') && config.priceAuthority !== this.priceSigner.address) {
+      this.warn('price', { event: 'keeper_not_price_authority', priceAuthority: config.priceAuthority, priceKey: this.priceSigner.address });
       return false;
     }
     return true;
@@ -296,9 +361,14 @@ export class Scheduler {
   }
 
   /** Sends one transaction and writes the action line: {t, round, step, sig | error}. */
-  private async act(roundId: bigint, step: string, instructions: Instruction[], extra: LogFields = {}): Promise<void> {
+  private act(roundId: bigint, step: string, instructions: Instruction[], extra: LogFields = {}): Promise<void> {
+    return this.actWith(roundId, step, () => sendInstructions(this.rpc, this.signer, instructions), extra);
+  }
+
+  /** `act` for a custom send; `extra` is read when the line is written, after `send` resolved. */
+  private async actWith(roundId: bigint, step: string, send: () => Promise<Signature>, extra: LogFields = {}): Promise<void> {
     try {
-      const sig = await sendInstructions(this.rpc, this.signer, instructions);
+      const sig = await send();
       this.logger({ round: roundId, step, sig, ...extra });
       this.lastActionAtMs = Date.now();
       this.lastAction = { round: roundId, step, sig };
@@ -318,16 +388,15 @@ export class Scheduler {
       case 'fill':
         return this.fill(round, snap);
       case 'strike': {
-        // A round without a matched bank ends as NotActivated whatever the samples say.
+        // A round without a matched bank ends as NotActivated whatever the samples say; no price
+        // is used, so the program needs no attestor for it either.
         const activated = isActivated(round.rawUp, round.rawDown, round.minBank);
         const samples = activated ? windowSamples(this.store.get(round.pool), round.strikeStart, round.strikeEnd) : [];
-        const ix = await setStrike({ priceAuthority: this.signer, roundId: round.id, samples });
-        return this.act(round.id, 'strike', [ix], { samples: samples.length, activated });
+        return this.price('strike', round, samples, snap, activated, { samples: samples.length, activated });
       }
       case 'settle': {
         const samples = windowSamples(this.store.get(round.pool), round.exitStart, round.exitEnd);
-        const ix = await settle({ priceAuthority: this.signer, roundId: round.id, samples });
-        return this.act(round.id, 'settle', [ix], { samples: samples.length });
+        return this.price('settle', round, samples, snap, true, { samples: samples.length });
       }
       case 'expire':
         return this.act(round.id, 'expire', [await refundExpired({ roundId: round.id })]);
@@ -338,6 +407,61 @@ export class Scheduler {
       case 'close':
         return this.act(round.id, 'close', [await closeEmptyRound({ roundId: round.id, admin: config.admin })]);
     }
+  }
+
+  /**
+   * set_strike or settle, signed by the price key. With ATTEST_URL set and an attestor in
+   * OracleConfig, the attestor co-signs first (attest.ts). While the chain requires it, a price
+   * goes out only with its signature: a refusal or an outage fails the step, which is retried
+   * with backoff until settle_deadline, after which the round takes its normal refund
+   * (refund_expired needs no attestor). While not required, the keeper sends without it.
+   */
+  private async price(step: 'strike' | 'settle', round: RoundAccount, samples: PriceSample[], snap: Snapshot, priced: boolean, extra: LogFields): Promise<void> {
+    const oracle = snap.oracle;
+    if (!oracle) {
+      this.warn('oracle', { event: 'oracle_missing', hint: 'run scripts/init-oracle.ts after the program upgrade' });
+      return;
+    }
+    const build = step === 'strike' ? setStrike : settle;
+    const unattested = () => build({ priceAuthority: this.priceSigner, roundId: round.id, samples });
+    const attestor = this.attestor;
+    const required = oracle.required && priced;
+    if (!priced || attestor === null || oracle.attestor === NO_ATTESTOR) {
+      if (required) {
+        this.warn('attest-url', { event: 'attestor_required_no_url', round: round.id, step, attestor: oracle.attestor, hint: 'set ATTEST_URL' });
+        return;
+      }
+      return this.act(round.id, step, [await unattested()], extra);
+    }
+    const ix = await build({ priceAuthority: this.priceSigner, roundId: round.id, samples, attestor: oracle.attestor });
+    const deadlineMs = Number(round.settleDeadline) * 1000 - this.clock.offsetMs;
+    const fields: LogFields = { ...extra, attested: false };
+    return this.actWith(
+      round.id,
+      step,
+      async () => {
+        const sent = await sendAttested(this.rpc, this.signer, [ix], oracle.attestor, attestor, deadlineMs);
+        if (sent.kind === 'sent') {
+          fields.attested = true;
+          this.logger({ event: 'attest_ok', round: round.id, step, attestor: oracle.attestor, attempts: sent.attest.attempts, ms: sent.attest.ms });
+          return sent.signature;
+        }
+        const a = sent.attest;
+        this.logger({
+          event: a.kind === 'refused' ? 'attest_refused' : 'attest_failed',
+          round: round.id,
+          step,
+          reason: a.reason,
+          ...(a.kind === 'refused' ? { status: a.status } : {}),
+          attempts: a.attempts,
+          required,
+        });
+        if (required) throw new Error(`attestation ${a.kind}: ${a.reason}`);
+        // Not required yet (the attestor runs alongside): the price goes out as before.
+        return sendInstructions(this.rpc, this.signer, [await unattested()]);
+      },
+      fields,
+    );
   }
 
   private async create(config: ConfigAccount, opensAt: bigint, nowMs: number): Promise<void> {
@@ -373,6 +497,13 @@ export class Scheduler {
 
   private async fill(round: RoundAccount, snap: Snapshot): Promise<void> {
     const now = Date.now();
+    const limits = snap.houseLimits;
+    if (!limits) {
+      // house_fill needs the HouseLimits account: without it the program refuses every fill.
+      this.warn('house-limits', { event: 'house_limits_missing', hint: 'run scripts/init-house-limits.ts after the program upgrade' });
+      return;
+    }
+    const room = chainRoom(limits, round.houseAmount, this.chainNowSecs(now));
     const plan = houseFillAmount({
       rawUp: round.rawUp,
       rawDown: round.rawDown,
@@ -380,16 +511,28 @@ export class Scheduler {
       maxBank: round.maxBank,
       roundCap: this.cfg.houseRoundCap,
       remainingBudget: remainingBudget(this.state.state.house, this.cfg.houseDailyBudget, now),
+      chainRoundRoom: room.round,
+      chainDailyRoom: room.daily,
       vaultAvailable: snap.houseVault?.available ?? 0n,
     });
     if (plan.kind === 'skip') {
       if (!this.fillSkipLogged.has(round.id)) {
         this.fillSkipLogged.add(round.id);
-        this.logger({ round: round.id, step: 'fill', skipped: plan.reason, rawUp: round.rawUp, rawDown: round.rawDown });
+        const onChain = plan.reason === 'chain-round-cap' || plan.reason === 'chain-daily-cap';
+        this.logger({
+          round: round.id,
+          step: 'fill',
+          skipped: plan.reason,
+          rawUp: round.rawUp,
+          rawDown: round.rawDown,
+          ...(onChain
+            ? { event: 'fill_skipped_onchain_cap', roundCap: limits.roundCap, houseAmount: round.houseAmount, dailyCap: limits.dailyCap, spentToday: room.spentToday }
+            : {}),
+        });
       }
       return;
     }
-    const ix = await houseFill({ house: this.signer, roundId: round.id, amount: plan.amount });
+    const ix = await houseFill({ house: this.houseSigner, roundId: round.id, amount: plan.amount });
     await this.act(round.id, 'fill', [ix], { amount: plan.amount, side: plan.side === Side.Up ? 'up' : 'down' });
     this.state.state.house = recordFill(this.state.state.house, round.id, plan.amount, Date.now());
     this.state.save();
