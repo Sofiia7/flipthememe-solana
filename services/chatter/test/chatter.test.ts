@@ -53,6 +53,20 @@ test('the upstream request has an 8 second timeout', () => {
   assert.equal(UPSTREAM_TIMEOUT_MS, 8_000);
 });
 
+/**
+ * AbortSignal.timeout timers are unref'd, so a test that waits for nothing but one lets Node 22's
+ * event loop drain and the runner reports "Promise resolution is still pending". A plain timer
+ * keeps the loop alive until the awaited work settles.
+ */
+async function alive<T>(work: Promise<T>): Promise<T> {
+  const keep = setTimeout(() => undefined, 30_000);
+  try {
+    return await work;
+  } finally {
+    clearTimeout(keep);
+  }
+}
+
 test('a hanging upstream is cut off by the timeout and answered like an upstream error', async (t) => {
   // The stub never answers; it only fails when the Worker's own signal fires. The timeout is
   // shortened to 20 ms here, but the Worker must have asked for UPSTREAM_TIMEOUT_MS.
@@ -68,7 +82,7 @@ test('a hanging upstream is cut off by the timeout and answered like an upstream
       if (init.signal.aborted) reject(init.signal.reason);
     }),
   );
-  const res = await callWorker('HANGS');
+  const res = await alive(callWorker('HANGS'));
   assert.equal(asked, UPSTREAM_TIMEOUT_MS);
   assert.equal(res.status, 502);
   assert.deepEqual(await res.json(), { symbol: 'HANGS', items: [], error: 'upstream timeout' });

@@ -85,6 +85,8 @@ describe('AttestorClient', () => {
   });
 
   test('a silent attestor times out, and nothing is tried past the round deadline', async () => {
+    // AbortSignal.timeout timers are unref'd: a plain timer keeps Node 22's event loop alive meanwhile.
+    const keep = setTimeout(() => undefined, 30_000);
     const hang: FetchLike = (_url, init) =>
       new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }))));
     const slow = await new AttestorClient({ url: 'https://a.example', fetch: hang, timeoutMs: 20, attempts: 1 }).attest('AQID', later());
@@ -92,6 +94,7 @@ describe('AttestorClient', () => {
     const never = fakeFetch([() => reply(200, { signature: SIG })]);
     const late = await new AttestorClient({ url: 'https://a.example', fetch: never.fetch }).attest('AQID', Date.now() - 1);
     assert.deepEqual([late.kind, late.attempts, never.calls.length], ['failed', 0, 0]);
+    clearTimeout(keep);
   });
 });
 
