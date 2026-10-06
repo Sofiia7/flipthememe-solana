@@ -19,7 +19,7 @@ const PACKAGE = 'com.flipthememe.app';
 const RELEASE_CERT_SHA256 = '94:A7:26:CF:26:AB:3A:F1:FA:D6:54:4A:73:86:22:29:7B:A0:A9:AD:40:95:76:76:56:58:F7:A3:3F:3F:20:89';
 const ORIGIN = 'https://sol.flipthememe.com';
 /** Every release carries the APK under this fixed name, so the newest one is always this URL. */
-const APK_URL = 'https://github.com/Sofiia7/flipthememe-solana/releases/latest/download/FlipTheMeme.apk';
+const APK_URL = 'https://github.com/Sofiia7/flipthememe-apk/releases/latest/download/FlipTheMeme.apk';
 const OG_IMAGE = 'https://flipthememe.com/og-cover.png';
 /** The one promise, worded the same on every page: the move is one minute, the result takes about two. */
 const PROMISE = 'A 1-minute move on a busy Solana memecoin. Result in about 2 minutes.';
