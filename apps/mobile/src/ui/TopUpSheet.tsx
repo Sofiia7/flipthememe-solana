@@ -1,22 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS } from '../config';
+import { useRents } from '../chain/rent';
 import { chainNowSec } from '../chain/useChainClock';
 import { formatSol } from '../lib/format';
 import { sessionStatusOf, useApp } from '../state/AppProvider';
 import { C, MONO } from '../theme';
 import { isChecking } from '../wallet/pendingTx';
-import { ACCOUNT_SPACE, topUpPlan } from '../wallet/topUpPlan';
+import { topUpPlan } from '../wallet/topUpPlan';
 import { ExtLink } from './common';
 import { NeonButton } from './NeonButton';
 import { PixelText } from './PixelText';
 
-type Rent = { vault: bigint; session: bigint };
-
 /** Totals round up to 0.0001 SOL, so the button never shows less than leaves the wallet. */
 const solUp = (lamports: bigint) => formatSol(((lamports + 99_999n) / 100_000n) * 100_000n);
-/** Rent-exempt minimums barely change; one read per app run is enough. */
-let rentCache: Rent | null = null;
 
 /**
  * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with every
@@ -27,7 +24,7 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
   const { wallet, my, myReady, rpc, arena, offsetSec } = useApp();
   const [amount, setAmount] = useState<bigint>(TOP_UP_AMOUNTS[0]);
   const [started, setStarted] = useState(false);
-  const [rent, setRent] = useState<Rent | null>(rentCache);
+  const rent = useRents(rpc, visible);
 
   const { clearResult } = wallet;
   useEffect(() => {
@@ -36,23 +33,6 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
       clearResult();
     }
   }, [visible, clearResult]);
-
-  useEffect(() => {
-    if (!visible || rentCache) return;
-    let alive = true;
-    Promise.all([
-      rpc.getMinimumBalanceForRentExemption(BigInt(ACCOUNT_SPACE.vault)).send(),
-      rpc.getMinimumBalanceForRentExemption(BigInt(ACCOUNT_SPACE.session)).send(),
-    ])
-      .then(([vault, session]) => {
-        rentCache = { vault: BigInt(vault), session: BigInt(session) };
-        if (alive) setRent(rentCache);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [visible, rpc]);
 
   const result = started ? wallet.result : null;
   useEffect(() => {

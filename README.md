@@ -16,7 +16,7 @@ A fresh memecoin, a shared start, one measured minute of price move. You make th
 
 1. Install the APK. It is built and tested on a Solana Seeker.
 2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** works too. In our tests Phantom opened but did not return signatures over MWA.
-3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault, opens a 7-day session and, when the device key runs low, sends it 0.03 SOL for fees and position rent. No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
+3. Open FlipTheMeme. Watching needs no wallet. Tap **Connect**, then **Top up & play**: one wallet approval deposits test SOL into your in-app vault, opens a 7-day session and, when the device key runs low, sends it 0.005 SOL for network fees (about 800 bets). No devnet SOL? Use **Airdrop** in the Wallet tab or https://faucet.solana.com.
 4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the session key signs, no wallet pop-up.
 5. The result comes roughly 100-160 seconds after your tap, plus confirmations, and the keeper credits your in-app balance (History offers a manual **Claim** if it is slow). **Withdraw** sends your available balance back to your wallet.
 
@@ -81,7 +81,7 @@ There is no game server: the phone polls devnet and mainnet RPC directly (no ind
 
 ## Mobile-first details
 
-- **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (7 days, max 0.1 SOL per bet, budget = top-up) and, when the device key runs low, a 0.03 SOL transfer to it for fees and position rent.
+- **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (7 days, max 0.1 SOL per bet, budget = top-up) and, when the device key runs low, a 0.005 SOL transfer to it for network fees. Position rent comes from the game balance and goes back to it.
 - **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its per-bet limit, budget and expiry, and has no instruction that lets a session key withdraw or raise its own limit. The Wallet tab lists every session of the wallet, on any device, with **Revoke** and **Revoke all**, and **Return to wallet** sends the device key's SOL back.
 - **No double payments:** top up, renew, withdraw, revoke and return store their signature before they are sent. If the answer is lost, the button shows CHECKING until the chain says confirmed, refused or expired, and a bet with an unknown outcome stays pending until its signature settles.
 - **History on the phone:** finished rounds are kept on the phone per wallet, so History and Profile still show them after their position accounts are closed and the rent has gone back.
@@ -99,7 +99,7 @@ There is no game server: the phone polls devnet and mainnet RPC directly (no ind
 Tests:
 
 - `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --lib`: payout math, including "payouts never exceed the bank" over 1,000 random books.
-- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow`: 29 LiteSVM scenarios against the compiled program (surplus and 1.96x, house fill windows, not activated, tie, unpriceable, malformed samples, expiry refund by anyone, single claim and settle, cutoff on the program clock, session budget, expiry and revocation, foreign vault, depth cap, locked stake, pause, admin-only rounds, empty-round close, config snapshots, closing paid positions, house caps per round and per day, the attestor as a required second signer, and an admin key that cannot weaken it alone).
+- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow`: 34 LiteSVM scenarios against the compiled program (surplus and 1.96x, house fill windows, not activated, tie, unpriceable, malformed samples, expiry refund by anyone, single claim and settle, cutoff on the program clock, session budget, expiry and revocation, foreign vault, depth cap, locked stake, pause, admin-only rounds, empty-round close, config snapshots, closing paid positions, position rent taken from and returned to the game balance, house caps per round and per day, the attestor as a required second signer, and an admin key that cannot weaken it alone).
 - `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test vectors` writes the exact instruction and account bytes that `packages/client` is checked against.
 
 ## Repository
@@ -137,7 +137,7 @@ The APK is built by `.github/workflows/android.yml` (`expo prebuild` + Gradle, r
 Devnet only, test SOL only, no external audit. Known limits of this build:
 
 - **Price trust.** The attestor checks every strike and exit against its own reads, but it and the keeper are both run by us, the devnet program still cannot read mainnet, and the mean is plain, not time-weighted. The keeper key remains admin: it can pause betting, create rounds and change Config.
-- **Position rent.** Every bet opens a 100-byte position account (about 0.00116 SOL, paid by the device key). Once the round is final and paid, the keeper closes it a day later and the rent goes back to the wallet (the program allows it after an hour). On a 0.01 SOL stake the rent is about 11.6% of the stake until it comes back.
+- **Position rent.** Every bet opens a 100-byte position account whose rent (about 0.00116 SOL) is held from the game balance. Once the round is final and paid, the keeper closes the account a day later and the rent goes back into the game balance (the program allows it after an hour). On a 0.01 SOL stake that is about 11.6% of the stake, parked for a day.
 - **History is local.** Finished rounds are kept on the phone that saw them. A round played from another phone, or closed while the app stayed shut for more than a day, is missing from History.
 - **Sessions are per install.** The session key lives in one app install, so a reinstall needs a new top-up or session. The wallet that owns the vault can still withdraw.
 - **Reads.** The app polls RPC (no indexer), and the chart starts when the app opens.

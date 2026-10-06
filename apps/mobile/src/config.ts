@@ -53,12 +53,15 @@ export const SESSION_RULES = {
    */
   durationSecs: 7 * 24 * 60 * 60 - 10 * 60,
   maxPerBet: sol(10n),
-  /** The session key pays fees and the position rent (about 0.00116 SOL per bet; the keeper returns the rent to the wallet a day after the round). */
-  gasTopUp: sol(3n),
+  /**
+   * SOL sent to the device key, which pays only the network fee of each bet (5000 lamports): the
+   * position rent comes from the game balance. 0.005 SOL lasts about 800 bets.
+   */
+  gasTopUp: 5_000_000n,
   /** Top the key up only when it holds less than this. */
-  gasMin: sol(1n),
-  /** Below this the key cannot pay for one more position. */
-  gasPerBet: 2_000_000n,
+  gasMin: 2_000_000n,
+  /** Below this the key cannot pay one more fee and keep its own rent-exempt minimum. */
+  gasPerBet: 1_000_000n,
 } as const;
 
 /** Bets are refused this long before the program's cutoff, so a tap never races the close. */

@@ -120,7 +120,10 @@ export function WalletScreen() {
             <Text style={T.label}>GAME BALANCE</Text>
             <KV k="Available" v={myReady ? sol(available) : '...'} tone="up" />
             <KV k="Locked in rounds" v={myReady ? sol(locked) : '...'} tone="gold" />
-            <Text style={T.dim}>Winnings and refunds land here after each round. Only available SOL can be withdrawn.</Text>
+            <Text style={T.dim}>
+              Winnings and refunds land here after each round. Each bet also holds about 0.0012 SOL of account rent from this balance; it
+              comes back a day after the round. Only available SOL can be withdrawn.
+            </Text>
             {canRenew ? (
               <>
                 <Btn
@@ -201,7 +204,7 @@ export function WalletScreen() {
           <View style={T.panel}>
             <Text style={T.label}>DEVICE KEY (THIS PHONE)</Text>
             <KV k="SOL on the key" v={keyLamports !== null ? sol(keyLamports, { maxDecimals: 5 }) : '...'} />
-            <Text style={T.dim}>Pays bet fees and position rent. Not part of the game balance.</Text>
+            <Text style={T.dim}>Pays the network fee of each bet (0.000005 SOL). Not part of the game balance.</Text>
             <Btn
               kind="ghost"
               small

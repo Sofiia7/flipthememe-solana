@@ -19,6 +19,7 @@ import {
 } from '../chain/phase';
 import { chainNowSec, chainToLocalMs } from '../chain/useChainClock';
 import { isFeedStale, type PoolFeed } from '../chain/usePoolPrice';
+import { useRents } from '../chain/rent';
 import { peekTokenInfo, useTokenInfo } from '../chain/useTokenInfo';
 import { faceFromBytes } from '../face/faceModel';
 import { deltaView, formatCountdown, formatSol } from '../lib/format';
@@ -58,9 +59,14 @@ const SESSION_REASON: Record<Exclude<SessionStatus, 'active'>, string> = {
   'used-up': 'Session limit used up.',
 };
 
+/** Position rent at the highest devnet rate, used until the real figure is read. */
+const POSITION_RENT_FALLBACK = 1_600_000n;
+
 export function ArenaScreen() {
   const app = useApp();
   const { arena, my, myReady, wallet, betting, pending, feed, myFeed, offsetSec } = app;
+  // Each bet parks its position rent from the game balance until the keeper closes it (a day later).
+  const positionRent = useRents(app.rpc)?.position ?? POSITION_RENT_FALLBACK;
   const nowMs = useNow(500);
   const nowSec = chainNowSec(offsetSec, nowMs);
   const nowWhole = Math.floor(nowSec);
@@ -213,7 +219,7 @@ export function ArenaScreen() {
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
-  else if (amount > available) {
+  else if (amount + positionRent > available) {
     blocked = `Balance ${formatSol(available)} SOL - pick less or top up.`;
     blockedByFunds = true;
   } else if (amount > remaining) {

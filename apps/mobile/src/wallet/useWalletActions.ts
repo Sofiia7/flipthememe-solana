@@ -264,7 +264,7 @@ export function useWalletActions(input: {
 
   /**
    * One wallet approval: open the vault if needed, deposit, grant the session key a 7-day budget
-   * equal to the deposit, and send the key 0.03 SOL for fees when it runs low.
+   * equal to the deposit, and send the key a little SOL for network fees when it runs low.
    */
   const topUpAndPlay = useCallback(
     (amount: bigint) =>
@@ -314,7 +314,7 @@ export function useWalletActions(input: {
 
   /**
    * Fast bets again without a deposit: a new 7-day session whose budget is the game balance the
-   * player already has (shown on the button), plus 0.03 SOL for the key when it runs low.
+   * player already has (shown on the button), plus a little SOL for the key's network fees when it runs low.
    */
   const renewSession = useCallback(
     (budget: bigint) =>
