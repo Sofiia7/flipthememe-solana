@@ -9,8 +9,8 @@ import {
 } from '@solana/kit';
 import { PROGRAM_ERRORS, TransactionFailed, programErrorName, type ProgramErrorName } from '@flipthememe/client';
 
-/** `sweep` returns the SOL on the device key to the wallet. */
-export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'sweep' | 'claim' | 'airdrop' | 'connect';
+/** `sweep` returns the SOL on the device key to the wallet; `close` takes the rent of finished sessions back. */
+export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'close' | 'sweep' | 'claim' | 'airdrop' | 'connect';
 
 function stringify(value: unknown): string {
   try {
@@ -128,6 +128,7 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   Insolvent: 'The program refused the payout as a safety check - try again later.',
   Unauthorized: 'This wallet is not allowed to do that.',
   NotDue: 'Too early for this step - wait a few seconds.',
+  SessionStillActive: 'That session can still bet. Revoke it first, then close it.',
 };
 
 /** Raw MWA error fields for the console (adb logcat), where wallet problems are diagnosed. Never part of a player's message. */

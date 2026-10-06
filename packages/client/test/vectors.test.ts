@@ -39,6 +39,7 @@ test('instruction data matches the program', async () => {
       await ix.startSession({ owner: someone, sessionSigner: key(7), expiry: 1_800_003_600n, maxPerBet: 100_000_000n, sessionCap: 1_000_000_000n })
     ).data as Uint8Array,
     revokeSession: (await ix.revokeSession({ owner: someone, sessionSigner: key(7) })).data as Uint8Array,
+    closeSession: (await ix.closeSession({ owner: someone, sessionSigner: key(7) })).data as Uint8Array,
     createRound: (
       await ix.createRound({
         admin: someone,
@@ -84,6 +85,7 @@ test('account order and roles match the program (instructions added or changed i
   // position owner 10, session key 7, round 42.
   const built: Record<string, Instruction> = {
     closePosition: await ix.closePosition({ roundId: 42n, owner: key(10) }),
+    closeSession: await ix.closeSession({ owner: key(10), sessionSigner: key(7) }),
     // The program must keep accepting exactly what apps already on phones send.
     placeBet: await ix.placeBet({ owner: key(10), sessionSigner: key(7), roundId: 42n, side: Side.Up, amount: 1n, face: new Uint8Array(8) }),
     initHouseLimits: await ix.initHouseLimits({ admin: key(9), roundCap: 1n, dailyCap: 2n }),

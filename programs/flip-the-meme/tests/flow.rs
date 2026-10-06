@@ -222,6 +222,15 @@ impl Env {
         self.send_logs(vec![i], &stranger, &[&stranger])
     }
 
+    /// The admin closes a round whose positions are all closed and whose fees went to the treasury;
+    /// the round's rent goes back to the admin.
+    fn close_empty_round(&mut self, id: u64) -> Result<(), String> {
+        self.send_admin(ix(
+            acc::CloseEmptyRound { config: config_pda(), round: round_pda(id), admin: self.admin.pubkey() },
+            ixs::CloseEmptyRound {},
+        ))
+    }
+
     fn withdraw(&mut self, owner: &Keypair, amount: u64) -> Result<(), String> {
         let i = ix(
             acc::Withdraw { config: config_pda(), vault: vault_pda(&owner.pubkey()), authority: owner.pubkey() },
@@ -244,7 +253,9 @@ impl Env {
         for &id in rounds {
             let r = self.round(id);
             assert!(r.claimed_count == 0 || r.claimed_count == r.position_count, "round {id} is claimed only in part");
-            if r.claimed_count > 0 && !r.fees_swept {
+            // Fully claimed, whether or not its positions were closed since (closing lowers both counts
+            // together, down to 0 and 0): the remainder waits in Config for the sweep.
+            if r.status == RoundStatus::Final && r.claimed_count == r.position_count && !r.fees_swept {
                 fees += r.raw_up + r.raw_down - r.total_paid;
             }
         }
@@ -326,6 +337,33 @@ impl Env {
             ixs::StartSession { expiry, max_per_bet, session_cap: cap },
         );
         self.send(vec![i], owner, &[owner])
+    }
+
+    fn revoke_session(&mut self, owner: &Keypair, signer: &Pubkey) -> Result<(), String> {
+        let vault = vault_pda(&owner.pubkey());
+        let i = ix(
+            acc::RevokeSession { vault, session: session_pda(&vault, signer), authority: owner.pubkey() },
+            ixs::RevokeSession {},
+        );
+        self.send(vec![i], owner, &[owner])
+    }
+
+    fn close_session_ix(owner: &Pubkey, signer: &Pubkey) -> Instruction {
+        let vault = vault_pda(owner);
+        ix(acc::CloseSession { vault, session: session_pda(&vault, signer), authority: *owner }, ixs::CloseSession {})
+    }
+
+    /// The owner closes the session of device key `signer`. A stranger pays the network fee, so the
+    /// owner's balance moves by the session's rent alone.
+    fn close_session(&mut self, owner: &Keypair, signer: &Pubkey) -> Result<(), String> {
+        let relayer = Keypair::new();
+        self.svm.airdrop(&relayer.pubkey(), SOL).unwrap();
+        self.send(vec![Self::close_session_ix(&owner.pubkey(), signer)], &relayer, &[&relayer, owner])
+    }
+
+    /// What a session account costs; start_session's payer (the owner) puts it up and closing returns it.
+    fn session_rent(&self) -> u64 {
+        self.svm.minimum_balance_for_rent_exemption(8 + Session::INIT_SPACE)
     }
 
     /// Round `id` opening at `open`, with the production cadence: 60 s entry, 30 s pause,
@@ -1048,9 +1086,9 @@ fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_bac
     assert_err(env.house_fill(0, &admin, CSOL), "NotFillWindow");
     assert_closed(&env, &position_pda(&round_pda(0), &admin.pubkey()));
 
-    // The round keeps its counts, so the fee sweep still works with every position closed.
+    // Closing took both counts down together, so the fee sweep still works with every position closed.
     let r = env.round(0);
-    assert_eq!((r.position_count, r.claimed_count), (2, 2));
+    assert_eq!((r.position_count, r.claimed_count), (0, 0));
     let before = env.lamports(&env.treasury.pubkey());
     env.sweep(0).unwrap();
     assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 10 * CSOL * 2 / 100);
@@ -1143,6 +1181,202 @@ fn refunded_positions_are_claimed_like_any_other_and_close_the_same_way() {
     // The lone bet is back in full, rent included.
     assert_eq!(env.vault(&a.owner.pubkey()).available, SOL);
     env.assert_books(&[0, 1]);
+}
+
+#[test]
+fn a_played_round_closes_once_every_position_is_closed_and_its_fees_are_swept() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    let (owner_a, owner_b, house) = (a.owner.pubkey(), b.owner.pubkey(), admin.pubkey());
+    env.create_round(0, T0, SOL).unwrap();
+    let round_rent = env.lamports(&round_pda(0));
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 3 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 2 * CSOL).unwrap();
+    env.price_round(0, 1_000, 1_100);
+    for owner in [owner_a, owner_b, house] {
+        env.claim(0, &owner).unwrap();
+    }
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count), (3, 3));
+    // Final and paid, but its positions are still on chain.
+    assert_err(env.close_empty_round(0), "NotClosable");
+
+    // Each closed position takes one off both counts, so they stay equal and the sweep stays open.
+    env.warp(r.exit_end + POSITION_CLOSE_DELAY_SECS);
+    env.close_position(0, &owner_a).unwrap();
+    assert_eq!((env.round(0).position_count, env.round(0).claimed_count), (2, 2));
+    env.close_position(0, &owner_b).unwrap();
+    assert_eq!((env.round(0).position_count, env.round(0).claimed_count), (1, 1));
+    env.assert_books(&[0]);
+
+    // The fees are swept with two positions already closed, and the last one still blocks the close.
+    let treasury_before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - treasury_before, 10 * CSOL * 2 / 100);
+    assert_err(env.close_empty_round(0), "NotClosable");
+    assert!(env.svm.get_account(&round_pda(0)).is_some());
+    env.assert_books(&[0]);
+
+    // The house position closes the same way; then nobody is left and the round closes for good.
+    env.close_position(0, &house).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count, r.fees_swept), (0, 0, true));
+    let admin_before = env.lamports(&admin.pubkey());
+    env.close_empty_round(0).unwrap();
+    assert_closed(&env, &round_pda(0));
+    assert_eq!(env.lamports(&admin.pubkey()), admin_before + round_rent - 5_000, "the round's rent goes back to the admin");
+    assert_err(env.close_empty_round(0), "AccountNotInitialized");
+    env.assert_books(&[]);
+}
+
+#[test]
+fn a_played_round_whose_fees_are_not_swept_stays_so_the_fee_cannot_be_stranded() {
+    let (mut env, a, b) = matched_round();
+    env.price_round(0, 1_000, 900);
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+    }
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    for p in [&a, &b] {
+        env.close_position(0, &p.owner.pubkey()).unwrap();
+    }
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count, r.fees_swept), (0, 0, false));
+    // The 2% fee still sits in Config: closing the round now would leave it there for good.
+    assert_err(env.close_empty_round(0), "NotClosable");
+    assert!(env.svm.get_account(&round_pda(0)).is_some());
+    env.assert_books(&[0]);
+
+    // The sweep still works with both counts at 0, and only after it the round closes.
+    let treasury_before = env.lamports(&env.treasury.pubkey());
+    env.sweep(0).unwrap();
+    assert_eq!(env.lamports(&env.treasury.pubkey()) - treasury_before, 10 * CSOL * 2 / 100);
+    env.close_empty_round(0).unwrap();
+    assert_closed(&env, &round_pda(0));
+    env.assert_books(&[]);
+}
+
+#[test]
+fn a_round_with_an_unclaimed_position_cannot_be_swept_or_closed_however_many_others_are_closed() {
+    let (mut env, a, b) = matched_round();
+    // Down wins: b (unclaimed, stake still locked) is the winner, a has lost.
+    env.price_round(0, 1_000, 900);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    env.close_position(0, &a.owner.pubkey()).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count), (1, 0));
+    // (assert_books only handles rounds claimed whole or not at all, so Config is compared directly.)
+    let config_before = env.lamports(&config_pda());
+    assert_err(env.sweep(0), "NotSweepable");
+    assert_err(env.close_empty_round(0), "NotClosable");
+    assert_err(env.close_position(0, &b.owner.pubkey()), "NotClaimed");
+    assert_eq!(env.lamports(&config_pda()), config_before);
+
+    // The player who has not claimed yet still gets paid in full, and then everything closes.
+    env.claim(0, &b.owner.pubkey()).unwrap();
+    env.close_position(0, &b.owner.pubkey()).unwrap();
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100);
+    env.sweep(0).unwrap();
+    env.close_empty_round(0).unwrap();
+    assert_closed(&env, &round_pda(0));
+    env.assert_books(&[]);
+}
+
+#[test]
+fn a_round_with_nothing_left_to_sweep_closes_without_a_sweep() {
+    let mut env = Env::new();
+    env.set_refund_fee(0);
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    env.price_round(0, 1_000, 1_000);
+    assert_eq!((env.round(0).outcome, env.round(0).refund_reason), (Outcome::Refund, RefundReason::Tie));
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+    }
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    for p in [&a, &b] {
+        env.close_position(0, &p.owner.pubkey()).unwrap();
+    }
+    // Everything went back to the players, so there is no fee to strand: the sweep is not needed.
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.fees_swept, r.total_paid), (0, false, r.raw_up + r.raw_down));
+    let treasury_before = env.lamports(&env.treasury.pubkey());
+    env.close_empty_round(0).unwrap();
+    assert_closed(&env, &round_pda(0));
+    assert_eq!(env.lamports(&env.treasury.pubkey()), treasury_before);
+    env.assert_books(&[]);
+}
+
+#[test]
+fn every_position_of_a_round_closes_in_one_transaction_as_the_keeper_sends_them() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 3 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 2 * CSOL).unwrap();
+    env.price_round(0, 1_000, 1_100);
+    let owners = [a.owner.pubkey(), b.owner.pubkey(), admin.pubkey()];
+    for owner in owners {
+        env.claim(0, &owner).unwrap();
+    }
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    let round = round_pda(0);
+    let closes: Vec<Instruction> = owners
+        .iter()
+        .map(|owner| {
+            ix(
+                acc::ClosePosition { config: config_pda(), round, position: position_pda(&round, owner), vault: vault_pda(owner) },
+                ixs::ClosePosition {},
+            )
+        })
+        .collect();
+    let stranger = Keypair::new();
+    env.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
+    env.send(closes, &stranger, &[&stranger]).unwrap();
+    let r = env.round(0);
+    assert_eq!((r.position_count, r.claimed_count), (0, 0));
+    for owner in owners {
+        assert_closed(&env, &position_pda(&round, &owner));
+    }
+    env.assert_books(&[0]);
+    env.sweep(0).unwrap();
+    env.close_empty_round(0).unwrap();
+    assert_closed(&env, &round);
+    env.assert_books(&[]);
+}
+
+#[test]
+fn closing_a_position_needs_the_round_account_writable() {
+    let (mut env, a, b) = matched_round();
+    env.price_round(0, 1_000, 900);
+    for p in [&a, &b] {
+        env.claim(0, &p.owner.pubkey()).unwrap();
+    }
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    let round = round_pda(0);
+    let owner = a.owner.pubkey();
+    let mut old_meta = ix(
+        acc::ClosePosition { config: config_pda(), round, position: position_pda(&round, &owner), vault: vault_pda(&owner) },
+        ixs::ClosePosition {},
+    );
+    // What an app built before this change sent: the round account read-only.
+    assert!(old_meta.accounts[1].is_writable, "the current builder marks the round writable");
+    old_meta.accounts[1].is_writable = false;
+    let stranger = Keypair::new();
+    env.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
+    assert_err(env.send(vec![old_meta], &stranger, &[&stranger]), "ConstraintMut");
+    assert!(env.lamports(&position_pda(&round, &owner)) > 0, "nothing was closed");
+    assert_eq!((env.round(0).position_count, env.round(0).claimed_count), (2, 2));
+    env.close_position(0, &owner).unwrap();
 }
 
 #[test]
@@ -1763,6 +1997,210 @@ fn issuing_a_session_again_resets_its_budget_and_revocation() {
     assert_eq!((s2.revoked, s2.spent, s2.expiry), (false, 0, T0 + 7_200));
     env.bet(3, &p2, Side::Up, 5 * CSOL).unwrap();
     assert_eq!(env.read::<Session>(&session2).spent, 5 * CSOL);
+}
+
+#[test]
+fn closing_a_revoked_session_returns_exactly_its_rent_to_the_owner() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let session = session_pda(&vault, &a.key.pubkey());
+    let rent = env.session_rent();
+    assert_eq!(env.lamports(&session), rent, "start_session left exactly the rent-exempt minimum");
+    env.revoke_session(&owner, &a.key.pubkey()).unwrap();
+
+    let (owner_before, config_before) = (env.lamports(&owner.pubkey()), env.lamports(&config_pda()));
+    let (vault_before, books_before): (Vault, Config) = (env.vault(&owner.pubkey()), env.read(&config_pda()));
+    env.close_session(&owner, &a.key.pubkey()).unwrap();
+
+    // The whole rent, to the owner and nobody else; the account is gone.
+    assert_eq!(env.lamports(&owner.pubkey()), owner_before + rent);
+    assert_closed(&env, &session);
+    // The rent never passed through the game books: Config and the vault did not move.
+    assert_eq!(env.lamports(&config_pda()), config_before);
+    let (vault_after, books_after): (Vault, Config) = (env.vault(&owner.pubkey()), env.read(&config_pda()));
+    assert_eq!((vault_after.available, vault_after.locked), (vault_before.available, vault_before.locked));
+    assert_eq!(
+        (books_after.total_available, books_after.total_locked),
+        (books_before.total_available, books_before.total_locked)
+    );
+    env.assert_books(&[]);
+
+    // Closed for good: a second close finds nothing.
+    assert_err(env.close_session(&owner, &a.key.pubkey()), "AccountNotInitialized");
+}
+
+#[test]
+fn an_expired_session_closes_from_its_expiry_second_on() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let short = Keypair::new();
+    env.start_session(&owner, &short, T0 + 30, CSOL, SOL).unwrap();
+    let rent = env.session_rent();
+    let short_session = session_pda(&vault, &short.pubkey());
+
+    // One second before the expiry the session can still bet, so it stays.
+    env.warp(T0 + 29);
+    assert_err(env.close_session(&owner, &short.pubkey()), "SessionStillActive");
+    assert_eq!(env.lamports(&short_session), rent);
+
+    // place_bet refuses from `now >= expiry`, and so does the guard: the same second.
+    env.warp(T0 + 30);
+    let owner_before = env.lamports(&owner.pubkey());
+    env.close_session(&owner, &short.pubkey()).unwrap();
+    assert_eq!(env.lamports(&owner.pubkey()), owner_before + rent);
+    assert_closed(&env, &short_session);
+    // The unexpired session next to it is untouched.
+    assert!(!env.read::<Session>(&session_pda(&vault, &a.key.pubkey())).revoked);
+    env.assert_books(&[]);
+}
+
+#[test]
+fn an_active_session_cannot_be_closed_not_even_when_its_budget_is_used_up() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let rent = env.session_rent();
+
+    // A cap that one bet reaches exactly: used up, but neither revoked nor expired.
+    let used = Keypair::new();
+    env.svm.airdrop(&used.pubkey(), SOL).unwrap();
+    env.start_session(&owner, &used, T0 + 3_600, 10 * CSOL, 2 * CSOL).unwrap();
+    env.create_round(0, T0, SOL).unwrap();
+    let p = Player { owner: owner.insecure_clone(), key: used };
+    env.bet(0, &p, Side::Up, 2 * CSOL).unwrap();
+    let used_session = session_pda(&vault, &p.key.pubkey());
+    let s: Session = env.read(&used_session);
+    assert_eq!(s.spent, s.session_cap);
+
+    let before = env.svm.get_account(&used_session).unwrap();
+    assert_err(env.close_session(&owner, &p.key.pubkey()), "SessionStillActive");
+    assert_err(env.close_session(&owner, &a.key.pubkey()), "SessionStillActive");
+    assert_eq!(env.svm.get_account(&used_session).unwrap(), before, "a refused close changes nothing");
+    assert_eq!(env.lamports(&session_pda(&vault, &a.key.pubkey())), rent);
+
+    // Revoking is what makes it closable; the bet it placed stays on chain, in its own account.
+    env.revoke_session(&owner, &p.key.pubkey()).unwrap();
+    env.close_session(&owner, &p.key.pubkey()).unwrap();
+    assert_closed(&env, &used_session);
+    assert_eq!(env.read::<Position>(&position_pda(&round_pda(0), &owner.pubkey())).stake, 2 * CSOL);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn only_the_owner_can_close_a_session_and_the_device_key_cannot() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let (vault_a, vault_b) = (vault_pda(&a.owner.pubkey()), vault_pda(&b.owner.pubkey()));
+    let session_a = session_pda(&vault_a, &a.key.pubkey());
+    // Revoked, so that closability is not what stops the attempts below.
+    env.revoke_session(&a.owner, &a.key.pubkey()).unwrap();
+    let before = env.svm.get_account(&session_a).unwrap();
+    let rent = env.session_rent();
+    let b_before = env.lamports(&b.owner.pubkey());
+
+    let attempts = [
+        // Another owner with their own vault and A's session.
+        (acc::CloseSession { vault: vault_b, session: session_a, authority: b.owner.pubkey() }, &b.owner),
+        // Another owner naming A's vault.
+        (acc::CloseSession { vault: vault_a, session: session_a, authority: b.owner.pubkey() }, &b.owner),
+        // The device key as the authority, over the owner's vault.
+        (acc::CloseSession { vault: vault_a, session: session_a, authority: a.key.pubkey() }, &a.key),
+        // The device key over a vault of its own address, which does not exist.
+        (acc::CloseSession { vault: vault_pda(&a.key.pubkey()), session: session_a, authority: a.key.pubkey() }, &a.key),
+    ];
+    for (accounts, signer) in attempts {
+        let res = env.send(vec![ix(accounts, ixs::CloseSession {})], signer, &[signer]);
+        assert!(res.is_err(), "a foreign signature must not close the session");
+    }
+    assert_eq!(env.svm.get_account(&session_a).unwrap(), before);
+    assert!(env.lamports(&b.owner.pubkey()) <= b_before, "the attacker gained nothing (the failed attempts only cost fees)");
+    assert_eq!(env.lamports(&session_a), rent);
+
+    // The owner still can.
+    env.close_session(&a.owner, &a.key.pubkey()).unwrap();
+    assert_closed(&env, &session_a);
+}
+
+#[test]
+fn after_closing_the_device_key_starts_again_and_the_closed_session_cannot_bet() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let session = session_pda(&vault, &a.key.pubkey());
+    let rent = env.session_rent();
+    for (id, open) in [(0, T0), (1, T0 + 60)] {
+        env.create_round(id, open, SOL).unwrap();
+    }
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.revoke_session(&owner, &a.key.pubkey()).unwrap();
+    env.close_session(&owner, &a.key.pubkey()).unwrap();
+
+    // With the session gone the device key cannot bet, and nothing moved.
+    env.warp(T0 + 60);
+    let vault_before = env.vault(&owner.pubkey());
+    assert_err(env.bet(1, &a, Side::Up, CSOL), "AccountNotInitialized");
+    assert_eq!(env.vault(&owner.pubkey()).available, vault_before.available);
+
+    // The owner grants the same device key again: init_if_needed makes a fresh account, paid by the owner.
+    let owner_before = env.lamports(&owner.pubkey());
+    env.start_session(&owner, &a.key, T0 + 7_200, 10 * CSOL, SOL).unwrap();
+    assert_eq!(env.lamports(&owner.pubkey()), owner_before - rent - 5_000);
+    let s: Session = env.read(&session);
+    assert_eq!(
+        (s.authority, s.vault, s.signer, s.expiry, s.spent, s.revoked),
+        (owner.pubkey(), vault, a.key.pubkey(), T0 + 7_200, 0, false)
+    );
+    env.bet(1, &a, Side::Up, 5 * CSOL).unwrap();
+    assert_eq!(env.read::<Session>(&session).spent, 5 * CSOL);
+    env.assert_books(&[0, 1]);
+}
+
+#[test]
+fn many_finished_sessions_close_in_one_transaction_and_one_active_one_stops_the_batch() {
+    // The app closes this many per approval (MAX_CLOSES_PER_TX in apps/mobile/src/wallet/sessionClose.ts).
+    const BATCH: usize = 12;
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let owner = a.owner.insecure_clone();
+    let vault = vault_pda(&owner.pubkey());
+    let rent = env.session_rent();
+    let old: Vec<Keypair> = (0..BATCH).map(|_| Keypair::new()).collect();
+    for key in &old {
+        env.start_session(&owner, key, T0 + 100, CSOL, SOL).unwrap();
+    }
+    env.warp(T0 + 100);
+    let closes: Vec<Instruction> = old.iter().map(|k| Env::close_session_ix(&owner.pubkey(), &k.pubkey())).collect();
+
+    // The whole transaction fails together: nothing is closed.
+    let mut with_active = closes.clone();
+    with_active.push(Env::close_session_ix(&owner.pubkey(), &a.key.pubkey()));
+    assert_err(env.send(with_active, &owner, &[&owner]), "SessionStillActive");
+    for key in &old {
+        assert_eq!(env.lamports(&session_pda(&vault, &key.pubkey())), rent);
+    }
+
+    let before = env.lamports(&owner.pubkey());
+    let logs = env.send_logs(closes, &owner, &[&owner]).unwrap();
+    assert_eq!(env.lamports(&owner.pubkey()), before + BATCH as u64 * rent - 5_000);
+    // Each close is cheap (a few thousand units of the 200_000 every instruction may use), so the
+    // size of the transaction, not its compute, is what caps a batch.
+    let used: Vec<u64> = logs
+        .iter()
+        .filter_map(|l| l.strip_prefix(&format!("Program {ID} consumed "))?.split(' ').next()?.parse().ok())
+        .collect();
+    assert_eq!(used.len(), BATCH);
+    assert!(used.iter().all(|&u| u < 20_000), "{used:?}");
+    for key in &old {
+        assert_closed(&env, &session_pda(&vault, &key.pubkey()));
+    }
+    assert_eq!(env.lamports(&session_pda(&vault, &a.key.pubkey())), rent, "the session that can still bet stays");
+    env.assert_books(&[]);
 }
 
 #[test]

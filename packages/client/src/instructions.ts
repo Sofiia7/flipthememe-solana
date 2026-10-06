@@ -233,6 +233,20 @@ export async function revokeSession(i: { owner: SignerLike; sessionSigner: Addre
   return build(p, [ro(vault), rw(await sessionAddress(vault, i.sessionSigner, p)), sign(i.owner, false)], data(IX.revokeSession));
 }
 
+/**
+ * Signed by the owner (never the device key). Closes the Session account of `sessionSigner` and sends
+ * its whole rent (the rent-exempt minimum of its 138 bytes) to the owner. The program
+ * refuses with SessionStillActive unless the session is revoked or its expiry has passed (a session
+ * whose cap is used up is still active). Same accounts as revokeSession, but the owner is writable.
+ * After closing, startSession for the same device key creates the account again.
+ */
+export async function closeSession(i: { owner: SignerLike; sessionSigner: Address } & WithProgram): Promise<Instruction> {
+  const p = i.programId ?? PROGRAM_ID;
+  const owner = addressOf(i.owner);
+  const vault = await vaultAddress(owner, p);
+  return build(p, [ro(vault), rw(await sessionAddress(vault, i.sessionSigner, p)), sign(i.owner, true)], data(IX.closeSession));
+}
+
 export async function createRound(i: { admin: SignerLike; roundId: bigint; args: CreateRoundArgs } & WithProgram): Promise<Instruction> {
   const p = i.programId ?? PROGRAM_ID;
   return build(
@@ -351,14 +365,16 @@ export async function closeEmptyRound(i: { roundId: bigint; admin: Address } & W
 /**
  * Permissionless: closes a claimed position of a Final round once POSITION_CLOSE_DELAY_SECS have
  * passed since its exit_end. Its lamports (the rent) go back into the vault of `owner`, the
- * wallet stored in the position, as available balance.
+ * wallet stored in the position, as available balance. The round account is writable: closing
+ * takes one off its positionCount and claimedCount, and once the last position is closed (and its
+ * fees swept) closeEmptyRound removes the round itself.
  */
 export async function closePosition(i: { roundId: bigint; owner: Address } & WithProgram): Promise<Instruction> {
   const p = i.programId ?? PROGRAM_ID;
   const round = await roundAddress(i.roundId, p);
   return build(
     p,
-    [rw(await configAddress(p)), ro(round), rw(await positionAddress(round, i.owner, p)), rw(await vaultAddress(i.owner, p))],
+    [rw(await configAddress(p)), rw(round), rw(await positionAddress(round, i.owner, p)), rw(await vaultAddress(i.owner, p))],
     data(IX.closePosition),
   );
 }

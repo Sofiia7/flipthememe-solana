@@ -1,13 +1,13 @@
-// Money actions from the Wallet tab and the top up sheet (top up, renew, withdraw, revoke, return
-// key funds) whose transaction was signed and sent but whose outcome is not known yet. The
+// Money actions from the Wallet tab and the top up sheet (top up, renew, withdraw, revoke, close,
+// return key funds) whose transaction was signed and sent but whose outcome is not known yet. The
 // signature and its blockhash expiry are stored before sending, so a closed app, a dropped
 // connection or a timeout is settled from the chain on the next start or tap (chain/txStatus.ts),
 // never by sending again blind. Pure TypeScript: storage is injected, so node tests use a fake.
 import type { KeyValueStorage } from '../lib/boolStore.ts';
 
-export type GuardedAction = 'topup' | 'renew' | 'withdraw' | 'revoke' | 'sweep';
+export type GuardedAction = 'topup' | 'renew' | 'withdraw' | 'revoke' | 'close' | 'sweep';
 
-const ACTIONS: readonly GuardedAction[] = ['topup', 'renew', 'withdraw', 'revoke', 'sweep'];
+const ACTIONS: readonly GuardedAction[] = ['topup', 'renew', 'withdraw', 'revoke', 'close', 'sweep'];
 
 export type PendingTx = {
   action: GuardedAction;
@@ -18,7 +18,7 @@ export type PendingTx = {
   at: number;
   /** What the app says once a later check finds it confirmed. */
   done: string;
-  /** Session signers a revoke covers (empty for the other actions). */
+  /** Device keys whose sessions a revoke or a close covers (empty for the other actions). */
   targets: string[];
 };
 
@@ -69,7 +69,7 @@ export function parsePendingTxs(raw: string | null, owner: string): PendingTx[] 
   }
 }
 
-/** True while `action` has a transaction of unknown outcome (for revoke: one covering `target`, when given). */
+/** True while `action` has a transaction of unknown outcome (for revoke and close: one covering `target`, when given). */
 export function isChecking(list: readonly PendingTx[], action: GuardedAction, target?: string): boolean {
   return list.some((t) => t.action === action && (target === undefined || t.targets.includes(target)));
 }

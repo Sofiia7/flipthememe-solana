@@ -8,6 +8,7 @@
     "withdraw": "b712469c946da122b168de3a00000000",
     "startSession": "17e36f8ed4e603af10e0496b0000000000e1f5050000000000ca9a3b00000000",
     "revokeSession": "565cc678900207c2",
+    "closeSession": "4472b28cde26f8d3",
     "createRound": "e5daeca9e75086702a000000000000000404040404040404040404040404040404040404040404040404040404040404050505050505050505050505050505050505050505050505050505050505050500d2496b000000003cd2496b000000005ad2496b0000000064d2496b0000000096d2496b00000000a0d2496b00000000f8d4496b0000000080df171000000000",
     "placeBet": "de3e43dc3fa67e210180f0fa02000000000102030405060708",
     "houseFill": "9ac9609c3add66eb80c3c90100000000",
@@ -33,7 +34,8 @@
     "oracle": "85c498321b1591fe060606060606060606060606060606060606060606060606060606060606060601f8"
   },
   "accountMetas": {
-    "closePosition": [{ "pubkey": "A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ", "signer": false, "writable": true }, { "pubkey": "9eUbxmm9GHBtkEbic7eGt3tfNce8fmdKiFrRaFsxjcFV", "signer": false, "writable": false }, { "pubkey": "8vnzQAcTwNPwtCX3oNp4zuVer5s15YpQt2bp6pQqLqhL", "signer": false, "writable": true }, { "pubkey": "EdTV7zvmmwYPB28nNVGUvEKynaisL3WJNESYy1Wh66Js", "signer": false, "writable": true }],
+    "closePosition": [{ "pubkey": "A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ", "signer": false, "writable": true }, { "pubkey": "9eUbxmm9GHBtkEbic7eGt3tfNce8fmdKiFrRaFsxjcFV", "signer": false, "writable": true }, { "pubkey": "8vnzQAcTwNPwtCX3oNp4zuVer5s15YpQt2bp6pQqLqhL", "signer": false, "writable": true }, { "pubkey": "EdTV7zvmmwYPB28nNVGUvEKynaisL3WJNESYy1Wh66Js", "signer": false, "writable": true }],
+    "closeSession": [{ "pubkey": "EdTV7zvmmwYPB28nNVGUvEKynaisL3WJNESYy1Wh66Js", "signer": false, "writable": false }, { "pubkey": "2Db8hJHsZw33aC6kj1bX7tvk9uasF78UewD3U3jrJ3Zv", "signer": false, "writable": true }, { "pubkey": "gBxS1f6uyyGPuW5MzGBukidSb71jdsCb5fZaoSzULE5", "signer": true, "writable": true }],
     "placeBet": [{ "pubkey": "A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ", "signer": false, "writable": true }, { "pubkey": "9eUbxmm9GHBtkEbic7eGt3tfNce8fmdKiFrRaFsxjcFV", "signer": false, "writable": true }, { "pubkey": "EdTV7zvmmwYPB28nNVGUvEKynaisL3WJNESYy1Wh66Js", "signer": false, "writable": true }, { "pubkey": "2Db8hJHsZw33aC6kj1bX7tvk9uasF78UewD3U3jrJ3Zv", "signer": false, "writable": true }, { "pubkey": "8vnzQAcTwNPwtCX3oNp4zuVer5s15YpQt2bp6pQqLqhL", "signer": false, "writable": true }, { "pubkey": "US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx", "signer": true, "writable": true }, { "pubkey": "11111111111111111111111111111111", "signer": false, "writable": false }],
     "initHouseLimits": [{ "pubkey": "A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ", "signer": false, "writable": false }, { "pubkey": "BANL9QvrtEgqG1R638FtSPWXemPNpKQiVJUE2Adb2nTK", "signer": false, "writable": true }, { "pubkey": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN", "signer": true, "writable": true }, { "pubkey": "11111111111111111111111111111111", "signer": false, "writable": false }],
     "updateHouseLimits": [{ "pubkey": "A6k9oP8NT249nCM1g6DupAKgVT7dHLyGwbFn5VLbA8RQ", "signer": false, "writable": false }, { "pubkey": "BANL9QvrtEgqG1R638FtSPWXemPNpKQiVJUE2Adb2nTK", "signer": false, "writable": true }, { "pubkey": "cGfHiC6Kgg3FpFZvgwGcswsCRtp4aBP2fzuXRQPizuN", "signer": true, "writable": false }],
@@ -83,7 +85,8 @@
     "StrikeWindowClosed": 6028,
     "RoundTooLong": 6029,
     "SettleDeadlineTooFar": 6030,
-    "MaxBankBelowMin": 6031
+    "MaxBankBelowMin": 6031,
+    "SessionStillActive": 6032
   },
   "payouts": [
     { "rawUp": "247700564", "rawDown": "97042158", "outcome": 3, "side": 0, "stake": "11001529", "feeWinBps": 30, "feeRefundBps": 64, "payout": "10973944" },

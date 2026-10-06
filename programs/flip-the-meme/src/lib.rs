@@ -186,6 +186,19 @@ pub mod flip_the_meme {
         Ok(())
     }
 
+    /// The owner closes a session that can no longer bet (revoked, or `now >= expiry`, the very
+    /// condition under which place_bet refuses it) and takes its rent back: every lamport of the
+    /// account goes straight to the owner, never through the game books. A session that is merely
+    /// used up (cap reached) still counts as active, so it closes only once revoked or expired.
+    /// Closing is final: the device key cannot bet until the owner grants it a session again, which
+    /// start_session's init_if_needed then creates anew.
+    pub fn close_session(ctx: Context<CloseSession>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let session = &ctx.accounts.session;
+        require!(session.revoked || now >= session.expiry, ErrorCode::SessionStillActive);
+        Ok(())
+    }
+
     pub fn create_round(ctx: Context<CreateRound>, round_id: u64, args: CreateRoundArgs) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
@@ -549,11 +562,19 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Rounds nobody played are closed so the keeper's rent comes back.
+    /// A Final round that holds no position any more is closed so the keeper's rent comes back.
+    /// That is a round nobody played, or a played one whose positions were all closed
+    /// (close_position lowers position_count). A played round must have its fees swept first,
+    /// because sweep_fees needs the round: closing it earlier would strand the remainder (fee plus
+    /// rounding dust) in Config for good. A round that paid out its whole bank has no remainder
+    /// (zero-fee refunds, an unmatched round returned in full), so it needs no sweep.
     pub fn close_empty_round(ctx: Context<CloseEmptyRound>) -> Result<()> {
         let round = &ctx.accounts.round;
+        let bank = round.raw_up.checked_add(round.raw_down).ok_or(ErrorCode::Arithmetic)?;
         require!(
-            round.status == RoundStatus::Final && round.position_count == 0,
+            round.status == RoundStatus::Final
+                && round.position_count == 0
+                && (round.fees_swept || round.total_paid == bank),
             ErrorCode::NotClosable
         );
         Ok(())
@@ -564,9 +585,13 @@ pub mod flip_the_meme {
     /// whose rent a device key paid. Claim needs the account, and an unclaimed stake is still
     /// locked in the vault, so only claimed positions close. A Final round never opens again, so
     /// place_bet and house_fill cannot create the account anew and nothing can be claimed twice.
+    /// The round forgets the position: position_count and claimed_count both go down by one. Only a
+    /// claimed position closes, so the two counts stay equal exactly when every remaining position
+    /// is claimed (sweep_fees relies on that), and the last close leaves position_count at 0, which
+    /// is what lets close_empty_round take the played round away.
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
-        let round = &ctx.accounts.round;
+        let round = &mut ctx.accounts.round;
         let position = &ctx.accounts.position;
         require!(round.status == RoundStatus::Final, ErrorCode::NotFinal);
         require!(position.claimed, ErrorCode::NotClaimed);
@@ -574,6 +599,8 @@ pub mod flip_the_meme {
             now.saturating_sub(round.exit_end) >= POSITION_CLOSE_DELAY_SECS,
             ErrorCode::NotDue
         );
+        round.position_count = round.position_count.checked_sub(1).ok_or(ErrorCode::Arithmetic)?;
+        round.claimed_count = round.claimed_count.checked_sub(1).ok_or(ErrorCode::Arithmetic)?;
         // `close = config` moves every lamport of the position, whoever put it there.
         let lamports = position.get_lamports();
         let vault = &mut ctx.accounts.vault;
@@ -1040,6 +1067,18 @@ pub struct RevokeSession<'info> {
     pub authority: Signer<'info>,
 }
 
+/// Same seeds and checks as RevokeSession (the vault is the signer's own, the session is the
+/// vault's and names the signer as its authority); the signer is writable because it receives the rent.
+#[derive(Accounts)]
+pub struct CloseSession<'info> {
+    #[account(seeds = [b"vault", authority.key().as_ref()], bump = vault.bump, has_one = authority @ ErrorCode::Unauthorized)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, close = authority, seeds = [b"session", vault.key().as_ref(), session.signer.as_ref()], bump = session.bump, has_one = authority @ ErrorCode::Unauthorized)]
+    pub session: Account<'info, Session>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
 #[derive(Accounts)]
 #[instruction(round_id: u64)]
 pub struct CreateRound<'info> {
@@ -1149,7 +1188,8 @@ pub struct CloseEmptyRound<'info> {
 pub struct ClosePosition<'info> {
     #[account(mut, seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
-    #[account(seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
+    /// Writable: closing a position takes one off the round's position_count and claimed_count.
+    #[account(mut, seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
     #[account(
         mut,
@@ -1249,7 +1289,7 @@ pub enum ErrorCode {
     NothingToFill,
     #[msg("Fees can be swept only once, after every position is claimed")]
     NotSweepable,
-    #[msg("Only final rounds without positions can be closed")]
+    #[msg("Only final rounds with no position left and their fees swept can be closed")]
     NotClosable,
     #[msg("Config would not cover its obligations")]
     Insolvent,
@@ -1273,4 +1313,7 @@ pub enum ErrorCode {
     SettleDeadlineTooFar,
     #[msg("The round's bank cap is below the minimum bank")]
     MaxBankBelowMin,
+    // Added with close_session: append only.
+    #[msg("The session can still bet: revoke it or wait for its expiry before closing it")]
+    SessionStillActive,
 }

@@ -12,6 +12,7 @@ import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink, KV, Pill } from '../ui/common';
 import { isChecking, type GuardedAction } from '../wallet/pendingTx';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
+import { closeOffer, isClosable } from '../wallet/sessionClose';
 import {
   revocableSigners,
   sessionLimitedBelow,
@@ -44,6 +45,8 @@ export function WalletScreen() {
   const [advanced, setAdvanced] = useState(false);
   /** Signers the revoke in flight covers (its buttons spin). */
   const [revoking, setRevoking] = useState<readonly string[]>([]);
+  /** Signers the close in flight covers. */
+  const [closing, setClosing] = useState<readonly string[]>([]);
 
   const sessions = useSessions(rpc, owner);
   const result = wallet.result;
@@ -76,6 +79,16 @@ export function WalletScreen() {
   const revoke = (signers: readonly string[]) => {
     setRevoking(signers);
     void wallet.revokeSessions(signers);
+  };
+  // Finished sessions (revoked or expired) still hold their rent; the owner can take it back. This
+  // phone's own session is closable only once it is revoked or expired too, never while it can bet.
+  const offer = closeOffer(rows, nowSec);
+  const closeChecking = checking('close');
+  // A top up or renew of unknown outcome may be about to grant this phone a session again.
+  const closeBlocked = busy || closeChecking || checking('topup') || checking('renew');
+  const close = (targets: typeof offer.batch) => {
+    setClosing(targets.map((t) => t.signer));
+    void wallet.closeSessions(targets);
   };
 
   const keyLamports = my.keyLamports;
@@ -196,6 +209,11 @@ export function WalletScreen() {
                     spinning={wallet.busy === 'revoke' && revoking.includes(row.signer)}
                     disabled={busy || revokeChecking}
                     onRevoke={() => revoke([row.signer])}
+                    closable={isClosable(row, nowSec)}
+                    closeChecking={isChecking(wallet.pendingTx, 'close', row.signer)}
+                    closeSpinning={wallet.busy === 'close' && closing.includes(row.signer)}
+                    closeDisabled={closeBlocked}
+                    onClose={() => close([{ signer: row.signer, address: row.address }])}
                   />
                 ))}
                 {rows.length === 0 ? (
@@ -213,6 +231,20 @@ export function WalletScreen() {
                     onPress={() => revoke(allSigners)}
                   />
                 ) : null}
+                {offer.targets.length > 1 ? (
+                  <>
+                    <Btn
+                      kind="ghost"
+                      small
+                      title={closeChecking ? 'CHECKING' : `CLOSE FINISHED (${offer.batch.length})`}
+                      busy={closeChecking || (wallet.busy === 'close' && closing.length > 1)}
+                      disabled={closeBlocked}
+                      onPress={() => close(offer.batch)}
+                    />
+                    {offer.later > 0 ? <Text style={T.dim}>{offer.later} more after this batch.</Text> : null}
+                  </>
+                ) : null}
+                {offer.targets.length > 0 ? <Text style={T.dim}>A finished session can be closed to get its rent deposit back in your wallet.</Text> : null}
                 {rows.length > 0 && !rows.some((r) => r.mine) ? <Text style={T.dim}>No session on this phone yet.</Text> : null}
                 <Text style={T.dim}>A session lets one phone place one-tap bets from your game balance. It can never withdraw.</Text>
               </View>
@@ -260,19 +292,29 @@ export function WalletScreen() {
   );
 }
 
-/** One session: which device, how long, what it can do; REVOKE while it can still bet. */
+/** One session: which device, how long, what it can do; REVOKE while it can still bet, CLOSE once it is finished. */
 function SessionLine({
   row,
   checking,
   spinning,
   disabled,
   onRevoke,
+  closable,
+  closeChecking,
+  closeSpinning,
+  closeDisabled,
+  onClose,
 }: {
   row: SessionRow;
   checking: boolean;
   spinning: boolean;
   disabled: boolean;
   onRevoke: () => void;
+  closable: boolean;
+  closeChecking: boolean;
+  closeSpinning: boolean;
+  closeDisabled: boolean;
+  onClose: () => void;
 }) {
   const pill = STATUS_PILL[row.status];
   const when = row.revocable
@@ -293,6 +335,8 @@ function SessionLine({
         <Text style={styles.meta}>{sessionUsageText(row, sessionLimitedBelow(SESSION_RULES), formatSol)}</Text>
         {row.revocable ? (
           <Btn kind="danger" small title={checking ? 'CHECKING' : 'REVOKE'} busy={checking || spinning} disabled={disabled} onPress={onRevoke} />
+        ) : closable ? (
+          <Btn kind="ghost" small title={closeChecking ? 'CHECKING' : 'CLOSE'} busy={closeChecking || closeSpinning} disabled={closeDisabled} onPress={onClose} />
         ) : null}
       </View>
     </View>

@@ -138,6 +138,8 @@ export const PROGRAM_ERRORS = [
   'RoundTooLong',
   'SettleDeadlineTooFar',
   'MaxBankBelowMin',
+  // close_session; append only.
+  'SessionStillActive',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 

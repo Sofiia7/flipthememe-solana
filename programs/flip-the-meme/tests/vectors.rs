@@ -75,6 +75,7 @@ fn write_vectors() {
             ixs::StartSession { expiry: 1_800_003_600, max_per_bet: 100_000_000, session_cap: 1_000_000_000 }.data(),
         ),
         ("revokeSession", ixs::RevokeSession {}.data()),
+        ("closeSession", ixs::CloseSession {}.data()),
         ("createRound", ixs::CreateRound { round_id: 42, args }.data()),
         ("placeBet", ixs::PlaceBet { side: Side::Down, amount: 50_000_000, face: [1, 2, 3, 4, 5, 6, 7, 8] }.data()),
         ("houseFill", ixs::HouseFill { amount: 30_000_000 }.data()),
@@ -103,6 +104,7 @@ fn write_vectors() {
     let house_limits_key = pda(&[b"house_limits"]);
     let oracle_key = pda(&[b"oracle"]);
     let account_metas: Vec<(&str, Vec<AccountMeta>)> = vec![
+        // The round is writable since close_position keeps its position counts.
         (
             "closePosition",
             acc::ClosePosition {
@@ -110,6 +112,15 @@ fn write_vectors() {
                 round: round_key,
                 position: pda(&[b"position", round_key.as_ref(), key(10).as_ref()]),
                 vault: pda(&[b"vault", key(10).as_ref()]),
+            }
+            .to_account_metas(None),
+        ),
+        (
+            "closeSession",
+            acc::CloseSession {
+                vault: pda(&[b"vault", key(10).as_ref()]),
+                session: pda(&[b"session", pda(&[b"vault", key(10).as_ref()]).as_ref(), key(7).as_ref()]),
+                authority: key(10),
             }
             .to_account_metas(None),
         ),
@@ -187,7 +198,7 @@ fn write_vectors() {
         InvalidRoundTime, InvalidRoundId, NotDue, NotFinal, AlreadyClaimed, FeeTooHigh, BankTooLargeForPool, InvalidSamples,
         Paused, Unauthorized, InvalidAccount, NotFillWindow, NothingToFill, NotSweepable, NotClosable, Insolvent, NotClaimed,
         HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor, StrikeWindowClosed, RoundTooLong,
-        SettleDeadlineTooFar, MaxBankBelowMin,
+        SettleDeadlineTooFar, MaxBankBelowMin, SessionStillActive,
     ];
 
     let config = Config {

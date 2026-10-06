@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getSignatureFromTransaction, lamports, type Address, type Instruction, type Signature, type Transaction } from '@solana/kit';
 import { transact, useMobileWallet, type KitMobileWallet } from '@wallet-ui/react-native-kit';
 import {
+  closeSession,
   compileForWallet,
   revokeSession,
   sendAndConfirm,
@@ -21,6 +22,7 @@ import { sol } from '../lib/format';
 import type { SessionKey } from '../session/sessionKey';
 import { createPendingTxStore, type GuardedAction, type PendingTx } from './pendingTx';
 import { MAX_REVOKES_PER_TX } from './sessionList';
+import { closeBatches, closeDoneText, closeNothingText, confirmClosable, type CloseTarget } from './sessionClose';
 import { keyReturnAmount, shouldReturnKey, withdrawMessage, type KeyReturn } from './keyReturn';
 import { prepareTopUp } from './topUpFlow';
 import { sessionCapFor } from './topUpPlan';
@@ -439,6 +441,35 @@ export function useWalletActions(input: {
     [run, owner, keyAddress, settleEarlier, walletSign, submitGuarded],
   );
 
+  /**
+   * Closes finished sessions (revoked, or expired) in ONE wallet approval and takes their rent back to the
+   * wallet: at most MAX_CLOSES_PER_TX per transaction, the rest waits for the next tap. The accounts are
+   * read again first, because the list on screen can be 15 seconds old and one session that can bet again
+   * (or one already closed) would fail the whole transaction.
+   */
+  const closeSessions = useCallback(
+    (targets: readonly CloseTarget[]) =>
+      run('close', async () => {
+        if (!owner) throw new Error('Connect a wallet first.');
+        const earlier = await settleEarlier(owner, 'close');
+        if (earlier) return earlier;
+        const unique = [...new Map(targets.map((t) => [t.signer, t])).values()];
+        const [batch = []] = closeBatches(unique);
+        if (batch.length === 0) throw new Error('No finished session to close.');
+        const reads = await fetchAccounts(rpc, batch.map((t) => t.address as Address));
+        const plan = confirmClosable(owner, batch, reads, chainNowSec());
+        if (plan.close.length === 0) throw new Error(closeNothingText(plan));
+        const ixs = await Promise.all(plan.close.map((t) => closeSession({ owner, sessionSigner: t.signer as Address })));
+        const signed = await walletSign(owner, ixs);
+        const done = closeDoneText(
+          { count: plan.close.length, rent: plan.rent, later: unique.length - batch.length, skipped: batch.length - plan.close.length },
+          (lamports) => sol(lamports, { maxDecimals: 5 }),
+        );
+        return submitGuarded('close', owner, signed, done, plan.close.map((t) => t.signer));
+      }),
+    [run, owner, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
+  );
+
   /** RETURN TO WALLET (Wallet tab, ADVANCED): the device key's SOL back to the wallet, no wallet popup. */
   const returnKeyFunds = useCallback(
     () =>
@@ -485,6 +516,7 @@ export function useWalletActions(input: {
     renewSession,
     withdrawAll,
     revokeSessions,
+    closeSessions,
     returnKeyFunds,
     airdrop,
     signWithWallet,

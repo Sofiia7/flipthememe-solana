@@ -16,6 +16,7 @@ export const IX = {
   withdraw: new Uint8Array([183, 18, 70, 156, 148, 109, 161, 34]),
   startSession: new Uint8Array([23, 227, 111, 142, 212, 230, 3, 175]),
   revokeSession: new Uint8Array([86, 92, 198, 120, 144, 2, 7, 194]),
+  closeSession: new Uint8Array([68, 114, 178, 140, 222, 38, 248, 211]),
   createRound: new Uint8Array([229, 218, 236, 169, 231, 80, 134, 112]),
   placeBet: new Uint8Array([222, 62, 67, 220, 63, 166, 126, 33]),
   houseFill: new Uint8Array([154, 201, 96, 156, 58, 221, 102, 235]),
