@@ -41,7 +41,7 @@ The 60 seconds is the measured move, from the start of the strike window to the 
 - **Fees.** 2% of the matched bank `2m` when a round ends UP or DOWN. Refunds are free since 5 October 2026: a tie, an unpriceable window (fewer than 5 price samples), a missed settle deadline or a round that never activated returns the full stake. The devnet config was changed to `fee_refund_bps = 0` in [this transaction](https://explorer.solana.com/tx/Cvi4ce8bW9bLnxXHQjRvsxSrQ6tKNx1dcRbxaCKDzo81urHX6bWJrupqpMvTXhpvKUtCKJCM4CBwp5SJRtvMQNv?cluster=devnet). Every round snapshots its fees when it is created, so rounds created before the change keep their 1% refund fee. The program caps fees at 2% on a result and 1% on a refund.
 - **Activation.** A round plays only if both sides are present and the matched bank `2m` is at least 0.02 SOL; otherwise every stake comes back in full.
 - **Depth cap.** When the keeper creates a round it sets a max bank: the smaller of the pool's SOL reserve / 2,500 and 1 SOL. The program refuses any bet that would push the matched bank `2m` above it. This limits what one round can win relative to the pool's depth; it does not prove that moving the price is unprofitable.
-- **House on devnet.** After entry closes, a house account may fill the smaller side, shown as `HOUSE`. The program lets it add only to the smaller side and only up to the gap. Its size limits (by default 0.05 SOL per round and 2 SOL per UTC day) are keeper policy, not on-chain limits.
+- **House on devnet.** After entry closes, a house account may fill the smaller side, shown as `HOUSE`. The program lets it add only to the smaller side and only up to the gap, and since 6 October 2026 caps it on chain (`HouseLimits`): 0.05 SOL per round over all house keys and 2 SOL per UTC day.
 
 ## Research behind the rules (not a Solana backtest)
 
@@ -59,7 +59,9 @@ These files and the scripts behind them are in the earlier MemePred repository (
 - **Pool:** PumpSwap AMM (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL.
 - **Token choice.** The keeper finds tokens through GeckoTerminal (the 5-minute trending list first) and prefers PumpSwap pools 10-120 minutes old, with 50+ trades in the last 5 minutes, whose base mint ends in `pump` (the pump.fun address suffix: a sign of a pump.fun graduate, not proof). It ranks them by activity with a bonus for youth, checks the pool on chain every minute (owner, mints, at least 50 SOL reserve), keeps a token at least 10 minutes, and moves on when a clearly busier one appears or the current one fades. If nothing fresh qualifies, it widens the age to 6 h, then 24 h, then any age, so the arena token is not always a fresh launch. The age shown is the pool's age, not a verified graduation time.
 - **Samples.** Every observation used (mainnet slot and price, at least 5 and up to 16 per window) is passed to `set_strike` / `settle`. The program checks that the slots increase and the prices are positive, then takes the plain integer mean (not a time-weighted average). The samples stay in the transaction, so anyone can compare them with the pool's history.
-- **Trust boundary.** On devnet one keeper key is the price authority, admin, house and treasury. The devnet program cannot read mainnet, so it cannot prove that the samples came from that pool at those slots: the outcome depends on trusting the keeper. The money side is on chain: settlement math, payouts, session limits and the depth cap. Claims are permissionless and always pay into the position owner's vault, and if a round is not settled within 600 s after its exit window, anyone can call `refund_expired`.
+- **Second signer.** The devnet program cannot read mainnet, so it cannot prove by itself that the samples came from that pool at those slots. An independent attestor (`services/attestor`, a Cloudflare Worker with its own key) samples the same pool on its own and co-signs a strike or exit only when the keeper's samples agree with its reads: exactly at every slot both read, and within 1.5% on the mean. `OracleConfig.required` is on (devnet, since 6 October 2026), so the program refuses a price without that signature, and the admin key alone cannot switch the attestor off or replace it: that needs the attestor's own signature.
+- **Keys.** Since 6 October 2026 the roles sit on separate keys: one prices rounds, one funds the house, fees go to a separate treasury, and the keeper key stays admin and fee payer. The program's upgrade authority is a separate key that never leaves the developer's machine, so a stolen keeper key cannot replace the program.
+- **Trust boundary.** Both the keeper and the attestor are run by us, so the second signer protects against a stolen or buggy price key, not against both operators at once. The money side is on chain: settlement math, payouts, session limits, the depth cap and the house caps. Claims are permissionless and always pay into the position owner's vault, and if a round is not settled within 600 s after its exit window, anyone can call `refund_expired`, so a withheld price ends in a refund, never in a wrong result.
 
 ## Architecture
 
@@ -70,14 +72,20 @@ flowchart LR
   A -. "live chart: vault balances" .-> M["PumpSwap pool (mainnet)"]
   K["Keeper (Node, Docker)"] -- "create_round, house_fill,<br/>set_strike, settle, claim, sweep" --> P
   K -. "price samples every 1 s" .-> M
+  K -- "strike / exit transaction" --> T["Attestor (Cloudflare Worker)"]
+  T -- "co-signature" --> K
+  T -. "its own samples" .-> M
 ```
 
-There is no game server: the phone polls devnet and mainnet RPC directly (no indexer), and the keeper only cranks. Two Cloudflare Workers sit on the side: `services/link` serves shared round pages and Android App Links, `services/chatter` serves X posts about the arena token.
+There is no game server: the phone polls devnet and mainnet RPC directly (no indexer), and the keeper only cranks. Three Cloudflare Workers sit on the side: `services/attestor` samples the pool by itself and co-signs prices, `services/link` serves shared round pages and Android App Links, `services/chatter` serves X posts about the arena token.
 
 ## Mobile-first details
 
 - **One approval:** Mobile Wallet Adapter signs a single transaction with `open_vault` (first time), `deposit`, `start_session` (24 h, max 0.1 SOL per bet, budget = top-up) and, when the device key runs low, a 0.03 SOL transfer to it for fees and position rent.
-- **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its per-bet limit, budget and expiry, and has no instruction that lets a session key withdraw or raise its own limit. **Revoke session** in the Wallet tab ends it on chain.
+- **One-tap bets:** an ed25519 session key generated on the device and stored in Android secure storage. The program checks its per-bet limit, budget and expiry, and has no instruction that lets a session key withdraw or raise its own limit. The Wallet tab lists every session of the wallet, on any device, with **Revoke** and **Revoke all**, and **Return to wallet** sends the device key's SOL back.
+- **No double payments:** top up, renew, withdraw, revoke and return store their signature before they are sent. If the answer is lost, the button shows CHECKING until the chain says confirmed, refused or expired, and a bet with an unknown outcome stays pending until its signature settles.
+- **History on the phone:** finished rounds are kept on the phone per wallet, so History and Profile still show them after their position accounts are closed and the rent has gone back.
+- **Chart from the first second:** the pool's last minutes come from GeckoTerminal 1-minute candles, drawn faintly before the live line. They are a picture only and never reach the strike or the result. Polling slows down on other tabs and stops in the background.
 - **Pixel faces:** 8 bytes that ride inside every `place_bet`, so other players see your face without NFTs or extra transactions.
 - **Share:** challenge a friend to take the other side. The card goes out as an image with a link, `https://sol.flipthememe.com/r/<round>` (served by `services/link`); Android App Links open the app on that round, and without the app the page offers the APK. Entry closes within a minute, so a friend who still has to install will usually meet you in a later round.
 - **Live X chatter:** a Cloudflare Worker (`services/chatter`) searches X for the arena token and the app slides the posts into a lane above the token. The MOON and SCAM tags come from the app's own keyword rules, not from the authors, so they can misread a post. It is decoration: nothing in the game or in settlement reads it.
@@ -85,12 +93,12 @@ There is no game server: the phone polls devnet and mainnet RPC directly (no ind
 
 ## Program
 
-`programs/flip-the-meme` (Anchor 1.1.2): `initialize_config`, `update_config`, `set_pause`, `open_vault`, `deposit`, `withdraw`, `start_session`, `revoke_session`, `create_round`, `place_bet`, `house_fill`, `set_strike`, `settle`, `refund_expired`, `claim`, `sweep_fees`, `close_empty_round`. Pause stops new bets only; settlement, refunds, claims and withdrawals keep working. Stake limits, the minimum bank and the fees are copied into each round when it is created, so a config update changes them only for later rounds.
+`programs/flip-the-meme` (Anchor 1.1.2): `initialize_config`, `update_config`, `set_pause`, `open_vault`, `deposit`, `withdraw`, `start_session`, `revoke_session`, `create_round`, `place_bet`, `house_fill`, `set_strike`, `settle`, `refund_expired`, `claim`, `sweep_fees`, `close_empty_round`, `close_position`, `init_house_limits`, `update_house_limits`, `init_oracle`, `set_oracle`. Pause stops new bets only; settlement, refunds, claims and withdrawals keep working. Stake limits, the minimum bank and the fees are copied into each round when it is created, so a config update changes them only for later rounds.
 
 Tests:
 
 - `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --lib`: payout math, including "payouts never exceed the bank" over 1,000 random books.
-- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow`: 19 LiteSVM scenarios against the compiled program (surplus and 1.96x, house fill windows, not activated, tie, unpriceable, malformed samples, expiry refund by anyone, single claim and settle, cutoff on the program clock, session budget, expiry and revocation, foreign vault, depth cap, locked stake, pause, admin-only rounds, empty-round close, config snapshots).
+- `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow`: 29 LiteSVM scenarios against the compiled program (surplus and 1.96x, house fill windows, not activated, tie, unpriceable, malformed samples, expiry refund by anyone, single claim and settle, cutoff on the program clock, session budget, expiry and revocation, foreign vault, depth cap, locked stake, pause, admin-only rounds, empty-round close, config snapshots, closing paid positions, house caps per round and per day, the attestor as a required second signer, and an admin key that cannot weaken it alone).
 - `cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test vectors` writes the exact instruction and account bytes that `packages/client` is checked against.
 
 ## Repository
@@ -99,7 +107,8 @@ Tests:
 programs/flip-the-meme   Anchor program, payout math, LiteSVM tests
 packages/client          TypeScript client on @solana/kit: PDAs, codecs, instructions, payout mirror, PumpSwap price source
 packages/arena-core      legacy: the September pari-mutuel model, not used by the program (kept for history)
-services/keeper          round crank: pool selection, sampler, scheduler, house budget, Docker deploy
+services/keeper          round crank: pool selection, sampler, scheduler, house budget, position closer, Docker deploy
+services/attestor        Cloudflare Worker: independent price co-signer (own samples, co-signs set_strike / settle)
 services/chatter         Cloudflare Worker: live X posts about the arena token, tagged MOON / SCAM by keyword rules
 services/link            Cloudflare Worker on sol.flipthememe.com: round link pages and Android App Links
 apps/mobile              Expo 57 / React Native 0.86 Android app
@@ -126,11 +135,10 @@ The APK is built by `.github/workflows/android.yml` (`expo prebuild` + Gradle, r
 
 Devnet only, test SOL only, no external audit. Known limits of this build:
 
-- **Trusted price.** One keeper key is price authority, admin, house and treasury, so the account that can fill the short side also signs the prices. The program averages the samples it is given and checks that their slots increase, but it cannot prove they came from the mainnet pool. The mean is plain, not time-weighted.
-- **House limits are policy.** The house's per-round cap and daily budget are enforced by the keeper, not on chain; on chain it can only fill the smaller side up to the gap.
-- **Position rent.** Every bet opens a 100-byte position account (about 0.00116 SOL of rent, paid by the session key) that is not closed or reclaimed yet. On a 0.01 SOL stake that is about 11.6%.
-- **Uncertain transactions.** If an RPC response is lost after a transaction is sent, the outcome is not fully reconciled yet: the app can show an error for a bet or top-up that landed. The program refuses a second position in the same round; check your balance before repeating a top-up.
+- **Price trust.** The attestor checks every strike and exit against its own reads, but it and the keeper are both run by us, the devnet program still cannot read mainnet, and the mean is plain, not time-weighted. The keeper key remains admin: it can pause betting, create rounds and change Config.
+- **Position rent.** Every bet opens a 100-byte position account (about 0.00116 SOL, paid by the device key). Once the round is final and paid, the keeper closes it a day later and the rent goes back to the wallet (the program allows it after an hour). On a 0.01 SOL stake the rent is about 11.6% of the stake until it comes back.
+- **History is local.** Finished rounds are kept on the phone that saw them. A round played from another phone, or closed while the app stayed shut for more than a day, is missing from History.
 - **Sessions are per install.** The session key lives in one app install, so a reinstall needs a new top-up or session. The wallet that owns the vault can still withdraw.
-- **Reads.** The app polls RPC (no indexer), and the chart history starts when the app opens.
+- **Reads.** The app polls RPC (no indexer). The older part of the chart comes from GeckoTerminal and can lag by a few minutes.
 - **Round timing.** The devnet timing (60-second move, 30-second pause, 10-second strike window) was chosen for the mobile feel and has not been measured against bots (see the research section). Round length for real money should come from measurements on Solana data.
 - **Chatter.** X posts are decoration, and their MOON/SCAM tags come from keyword rules.
