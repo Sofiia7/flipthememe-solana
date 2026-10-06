@@ -37,6 +37,65 @@ export const ATTEST_TIMEOUT_MS = 5_000;
 export const ATTEST_ATTEMPTS = 2;
 export const ATTEST_PAUSE_MS = 500;
 
+/**
+ * How long the scheduler leaves a step alone after the attestor refused it (every request is one
+ * Worker request on the free plan, so asking sooner than the answer can change is waste).
+ *
+ * Some refusals are transient: right after a window ends the attestor may not hold enough reads
+ * yet (too_few_samples), may not know the round yet (round_not_found) or may still think the
+ * window is open (window_open). Those retry at 5 s, 15 s, 60 s, then every 120 s. Others are a
+ * verdict on samples that no longer change (price_mismatch, slot_out_of_range, slot_price_mismatch,
+ * unpriced, samples_withheld, strike_too_late), a wrong ATTEST_TOKEN (unauthorized) or a transaction
+ * the attestor will never sign (the structural reasons): they go straight to 120 s, and a step is
+ * never asked more often than that. A reason this table does not know counts as transient.
+ */
+export const TRANSIENT_BACKOFF_MS = [5_000, 15_000, 60_000, 120_000] as const;
+export const PERMANENT_BACKOFF_MS = 120_000;
+export const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
+  'price_mismatch',
+  'slot_out_of_range',
+  'slot_price_mismatch',
+  'unpriced',
+  'samples_withheld',
+  'strike_too_late',
+  'unauthorized',
+  'bad_transaction',
+  'unsupported_version',
+  'lookup_tables',
+  'attestor_is_fee_payer',
+  'attestor_not_signer',
+  'attestor_writable',
+  'compute_budget',
+  'foreign_instruction',
+  'instruction_count',
+  'unknown_discriminator',
+  'bad_samples',
+  'wrong_accounts',
+  'attestor_not_in_instruction',
+]);
+
+/** The wait after the `refusals`-th refusal of one step (1 for the first), keyed by the reason string the attestor sent. */
+export function refusalBackoffMs(reason: string, refusals: number): number {
+  if (PERMANENT_REFUSALS.has(reason)) return PERMANENT_BACKOFF_MS;
+  const index = Math.min(Math.max(refusals, 1), TRANSIENT_BACKOFF_MS.length) - 1;
+  return TRANSIENT_BACKOFF_MS[index] ?? PERMANENT_BACKOFF_MS;
+}
+
+/** A required attestation the attestor refused: the step fails and the scheduler backs off by the reason. */
+export class AttestRefused extends Error {
+  readonly reason: string;
+  readonly status: number;
+  readonly attempts: number;
+
+  constructor(reason: string, status: number, attempts: number) {
+    super(`attestation refused: ${reason}`);
+    this.name = 'AttestRefused';
+    this.reason = reason;
+    this.status = status;
+    this.attempts = attempts;
+  }
+}
+
 export type AttestOk = { kind: 'ok'; signature: SignatureBytes; attempts: number; ms: number };
 export type AttestResult =
   | AttestOk

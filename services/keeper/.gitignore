@@ -3,6 +3,12 @@ keeper-state.json
 keeper-state.json.tmp
 status.json
 status.json.tmp
+# the last 15 minutes of price observations, kept across restarts (src/observations.ts)
+observations.json
+observations.json.tmp
+# what scripts/watchdog.ts remembers between runs
+watchdog-state.json
+watchdog-state.json.tmp
 *.log
 # bundle (npm run build)
 dist/

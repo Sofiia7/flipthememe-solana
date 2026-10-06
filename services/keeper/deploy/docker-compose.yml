@@ -3,7 +3,7 @@
 # Optional overrides go into a .env file next to this one (compose reads it automatically).
 #
 # The explicit project name matters: without it compose names the project after this folder,
-# "deploy", which is the name of the memepred compose project on the same VPS.
+# "deploy", a name other compose projects on the same host often use too.
 name: ftm-sol-keeper
 
 services:
@@ -13,6 +13,8 @@ services:
       dockerfile: deploy/Dockerfile
     image: ftm-sol-keeper:latest
     container_name: ftm-sol-keeper
+    # Also what brings the keeper back from a stall: it exits with code 1 when its scheduler loop
+    # has not completed a tick for 120 s (keeper_stalled in the log).
     restart: unless-stopped
     mem_limit: 256m
     # The keeper waits for transactions in flight before it exits on SIGTERM.
@@ -42,6 +44,8 @@ services:
       # pump.fun graduates only (mint ends in "pump"); pools made on PumpSwap directly get drained fast.
       POOL_PUMP_ONLY: ${POOL_PUMP_ONLY:-true}
     volumes:
+      # state.json, status.json and observations.json (the last 15 minutes of price observations,
+      # read back at start so a restart inside a price window keeps its samples).
       - ./data:/data
       # The whole folder: keeper.json, plus price.json and house.json after split-roles.ts
       # (then PRICE_KEYPAIR=/secrets/price.json and HOUSE_KEYPAIR=/secrets/house.json in .env).

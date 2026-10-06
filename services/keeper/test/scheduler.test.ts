@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, describe, test } from 'node:test';
+import { after, describe, test, type TestContext } from 'node:test';
 import {
   DEPTH_K,
   Outcome,
@@ -22,13 +22,13 @@ import {
   type PriceObservation,
 } from '@flipthememe/client';
 import { address, generateKeyPairSigner, getPublicKeyFromAddress, verifySignature, type Address, type KeyPairSigner, type SignatureBytes } from '@solana/kit';
-import { AttestorClient, NO_ATTESTOR } from '../src/attest.ts';
+import { AttestRefused, AttestorClient, NO_ATTESTOR } from '../src/attest.ts';
 import { ChainClock } from '../src/chain.ts';
 import { PositionCloser } from '../src/closer.ts';
 import { loadConfig } from '../src/config.ts';
 import type { LogFields } from '../src/log.ts';
 import { ObservationStore } from '../src/observations.ts';
-import { Scheduler } from '../src/scheduler.ts';
+import { CLAIM_RETRY_MS, ClaimIncomplete, Scheduler, retryDelayMs } from '../src/scheduler.ts';
 import type { PoolSelector, Selection } from '../src/selector.ts';
 import { StateStore } from '../src/state.ts';
 import { fakeAttestor } from './fake-attestor.ts';
@@ -534,5 +534,204 @@ describe('scheduler: October 2026 upgrade', () => {
       await positionAddress(round5, owners[0] as Address),
       await vaultAddress(owners[0] as Address),
     ]);
+  });
+});
+
+/** The tests below move the clock by hand: only Date is mocked, promises and the fake chain stay real. */
+function clockAt(t: TestContext, startMs: number): { setOffsetSecs: (secs: number) => void } {
+  t.mock.timers.enable({ apis: ['Date'], now: startMs });
+  return { setOffsetSecs: (secs) => t.mock.timers.setTime(startMs + secs * 1000) };
+}
+
+describe('scheduler: attestor refusals back off by their reason', () => {
+  const NOW = MINUTE + 30;
+  const live = () => makeRound(6n, BigInt(NOW - 162), POOL, MINT, { status: RoundStatus.Live, rawUp: 50_000_000n, rawDown: 50_000_000n, positionCount: 2 });
+
+  /** A settle against an attestor that refuses with `refusal`; returns how many requests it had seen after each probe. */
+  async function probe(t: TestContext, refusal: { status: number; reason: string }, offsetsSecs: number[]): Promise<number[]> {
+    const clock = clockAt(t, NOW * 1000);
+    const att = await fakeAttestor();
+    att.mode = 'refuse';
+    att.refusal = refusal;
+    const h = await harness({ attestor: new AttestorClient({ url: 'https://attest.example', fetch: att.fetch, pauseMs: 1 }) });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    h.chain.rounds.set(6n, live());
+    const counts: number[] = [];
+    for (const at of offsetsSecs) {
+      clock.setOffsetSecs(at);
+      await tick(h, NOW + at);
+      counts.push(att.seen.length);
+    }
+    assert.equal(h.chain.sent.length, 0, 'a refused price is never sent');
+    return counts;
+  }
+
+  test('a transient refusal (too_few_samples) is asked again after 5 s, 15 s, 60 s, then every 120 s', async (t) => {
+    // Requests at 0, 5, 20, 80, 200 and 320 s; one second before each of them nothing is sent.
+    const counts = await probe(t, { status: 422, reason: 'too_few_samples' }, [0, 4, 5, 19, 20, 79, 80, 199, 200, 319, 320]);
+    assert.deepEqual(counts, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6]);
+  });
+
+  test('a refusal that cannot change (price_mismatch) waits 120 s at once, and every 120 s after', async (t) => {
+    const counts = await probe(t, { status: 422, reason: 'price_mismatch' }, [0, 5, 30, 119, 120, 239, 240]);
+    assert.deepEqual(counts, [1, 1, 1, 1, 2, 2, 3]);
+  });
+
+  test('a wrong ATTEST_TOKEN (401, unauthorized) is not hammered either', async (t) => {
+    const counts = await probe(t, { status: 401, reason: 'missing or wrong bearer token' }, [0, 60, 119, 120]);
+    assert.deepEqual(counts, [1, 1, 1, 2]);
+  });
+
+  test('a reason the keeper does not know is treated as transient', async (t) => {
+    const counts = await probe(t, { status: 422, reason: 'something_new' }, [0, 4, 5, 19, 20]);
+    assert.deepEqual(counts, [1, 1, 2, 2, 3]);
+  });
+
+  test('an attestor that is down (a failure, not a refusal) keeps the step backoff of 2 s, 4 s, 8 s', async (t) => {
+    const clock = clockAt(t, NOW * 1000);
+    const att = await fakeAttestor();
+    att.mode = 'down';
+    const h = await harness({ attestor: new AttestorClient({ url: 'https://attest.example', fetch: att.fetch, pauseMs: 1 }) });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    h.chain.rounds.set(6n, live());
+    const counts: number[] = [];
+    for (const at of [0, 1, 2, 5, 6]) {
+      clock.setOffsetSecs(at);
+      await tick(h, NOW + at);
+      counts.push(att.seen.length);
+    }
+    // Two tries per step (ATTEST_ATTEMPTS): the step runs at 0, 2 and 6 s.
+    assert.deepEqual(counts, [2, 2, 4, 4, 6]);
+  });
+
+  test('retryDelayMs: refusals by reason, NotDue 1 s, a stuck claim 60 s, everything else 2^n s up to 30 s', () => {
+    assert.equal(retryDelayMs(new AttestRefused('too_few_samples', 422, 1), 2), 15_000);
+    assert.equal(retryDelayMs(new AttestRefused('price_mismatch', 422, 1), 1), 120_000);
+    assert.equal(retryDelayMs(Object.assign(new Error('x'), { context: { logs: ['Error Code: NotDue. Error Number: 6009.'] } }), 4), 1_000);
+    assert.equal(retryDelayMs(new ClaimIncomplete(7n, 1), 1), CLAIM_RETRY_MS);
+    assert.deepEqual([1, 2, 3, 4, 5, 6, 9].map((n) => retryDelayMs(new Error('boom'), n)), [2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
+  });
+});
+
+describe('scheduler: claim falls back to one position per transaction', () => {
+  const programError = (name: string) =>
+    Object.assign(new Error('Transaction simulation failed'), { context: { logs: [`Program log: AnchorError occurred. Error Code: ${name}. Error Number: 6000.`] } });
+
+  async function finalRound(h: Harness, id: bigint, count: number): Promise<Address[]> {
+    const round = await roundAddress(id);
+    h.chain.rounds.set(id, makeRound(id, BigInt(MINUTE - 200), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Up, positionCount: count, rawUp: SOL / 10n, rawDown: SOL / 10n }));
+    const owners: Address[] = [];
+    for (let i = 0; i < count; i++) owners.push((await generateKeyPairSigner()).address);
+    const positions: PositionAccount[] = owners.map((owner, i) => ({
+      round,
+      authority: owner,
+      side: i % 2 === 0 ? Side.Up : Side.Down,
+      stake: SOL / 100n,
+      face: new Uint8Array(8),
+      isHouse: false,
+      claimed: false,
+      payout: 0n,
+      bump: 250,
+    }));
+    h.chain.positions.set(id, positions);
+    return owners;
+  }
+
+  /** The chain refuses every transaction that claims `stuck` with `error`; `attempts` lists the sizes of those transactions. */
+  async function refuse(h: Harness, id: bigint, stuck: Address, error: Error): Promise<{ attempts: number[] }> {
+    const bad = await positionAddress(await roundAddress(id), stuck);
+    const seen = { attempts: [] as number[] };
+    h.chain.failWhen = (ixs) => {
+      if (!ixs.some((ix) => ix.accounts.includes(bad))) return null;
+      seen.attempts.push(ixs.length);
+      return error;
+    };
+    return seen;
+  }
+
+  test('one position the program refuses does not stop the others: they are claimed one by one, the bad one is named in the log', async () => {
+    const h = await harness();
+    const owners = await finalRound(h, 5n, 4);
+    const stuck = owners[2] as Address;
+    const seen = await refuse(h, 5n, stuck, programError('NotFinal'));
+    await tick(h, MINUTE + 30);
+    // The batch of four failed once, then every position was tried alone: three landed, one was refused again.
+    assert.deepEqual(seen.attempts, [4, 1]);
+    assert.deepEqual(h.chain.sent.map((tx) => tx.length), [1, 1, 1]);
+    const claimed = h.chain.sent.flat().map((ix) => ix.accounts[3]);
+    assert.deepEqual(claimed, await Promise.all([owners[0], owners[1], owners[3]].map((o) => vaultAddress(o as Address))));
+    assert.deepEqual(h.logs.filter((l) => l.event === 'claim_position_failed'), [
+      { event: 'claim_position_failed', round: 5n, owner: stuck, position: await positionAddress(await roundAddress(5n), stuck), error: 'NotFinal' },
+    ]);
+  });
+
+  test('the stuck position is asked again after CLAIM_RETRY_MS, alone; the claimed ones are not touched', async (t) => {
+    const clock = clockAt(t, (MINUTE + 30) * 1000);
+    const h = await harness();
+    const owners = await finalRound(h, 5n, 3);
+    const stuck = owners[1] as Address;
+    const seen = await refuse(h, 5n, stuck, programError('NotFinal'));
+    await tick(h, MINUTE + 30);
+    assert.equal(h.chain.sent.length, 2);
+    // On chain the two that landed are claimed now.
+    h.chain.positions.set(5n, (h.chain.positions.get(5n) ?? []).map((p) => (p.authority === stuck ? p : { ...p, claimed: true })));
+    seen.attempts.length = 0;
+    const secs = CLAIM_RETRY_MS / 1000;
+    clock.setOffsetSecs(secs - 1);
+    await tick(h, MINUTE + 30 + secs - 1);
+    assert.deepEqual(seen.attempts, []);
+    clock.setOffsetSecs(secs);
+    await tick(h, MINUTE + 30 + secs);
+    assert.deepEqual(seen.attempts, [1]);
+    assert.equal(h.chain.sent.length, 2);
+  });
+
+  test('a position the player claimed meanwhile (AlreadyClaimed) is no failure: the rest is claimed and nothing is flagged', async () => {
+    const h = await harness();
+    const owners = await finalRound(h, 5n, 3);
+    await refuse(h, 5n, owners[0] as Address, programError('AlreadyClaimed'));
+    await tick(h, MINUTE + 30);
+    assert.deepEqual(h.chain.sent.map((tx) => tx.length), [1, 1]);
+    assert.equal(h.logs.some((l) => l.event === 'claim_position_failed'), false);
+  });
+
+  test('a failure that is not a program error (a timeout, a 429) is not split up: the outcome is unknown, the next tick reads the chain', async () => {
+    const h = await harness();
+    const owners = await finalRound(h, 5n, 3);
+    const seen = await refuse(h, 5n, owners[0] as Address, new Error('fetch failed'));
+    await tick(h, MINUTE + 30);
+    assert.deepEqual(seen.attempts, [3]);
+    assert.equal(h.chain.sent.length, 0);
+  });
+
+  test('a batch that is too large still halves first; only a program error splits it per position', async () => {
+    const h = await harness();
+    await finalRound(h, 5n, 5);
+    let tooLarge = 1;
+    h.chain.failWhen = (ixs) => (ixs.length > 2 && tooLarge-- > 0 ? new Error('transaction too large') : null);
+    await tick(h, MINUTE + 30);
+    assert.deepEqual(h.chain.sent.map((tx) => tx.length), [2, 2, 1]);
+    assert.ok(h.logs.some((l) => l.event === 'claim_batch_shrunk' && l.claimBatch === 2));
+  });
+
+  test('with a batch of one, the refused position is named, not resent, and the rest of the round goes through', async () => {
+    const h = await harness();
+    const owners = await finalRound(h, 5n, 3);
+    // The first two batches are too large, so the batch is down to one position.
+    let shrink = 2;
+    const bad = await positionAddress(await roundAddress(5n), owners[1] as Address);
+    const attempts: number[] = [];
+    h.chain.failWhen = (ixs) => {
+      if (ixs.length > 1 && shrink-- > 0) return new Error('transaction too large');
+      if (ixs.some((ix) => ix.accounts.includes(bad))) {
+        attempts.push(ixs.length);
+        return programError('NotFinal');
+      }
+      return null;
+    };
+    await tick(h, MINUTE + 30);
+    assert.deepEqual(attempts, [1]);
+    assert.deepEqual(h.chain.sent.map((tx) => tx.length), [1, 1]);
+    assert.equal(h.logs.filter((l) => l.event === 'claim_position_failed').length, 1);
   });
 });

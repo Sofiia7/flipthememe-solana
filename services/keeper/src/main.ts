@@ -6,7 +6,11 @@
  *   with the attestor co-signing prices when ATTEST_URL is set, and on quiet ticks the closing
  *   of paid positions (rent back to their owners),
  * - devnet clock estimate every 60 s, scan for old unfinished rounds every 10 min,
- * - status.json next to STATE_FILE rewritten every tick.
+ * - status.json next to STATE_FILE rewritten every tick,
+ * - observations.json next to it: the last 15 minutes of price observations, written at most
+ *   every 5 s and on shutdown, loaded at start (a restart inside a price window keeps its samples),
+ * - a self-watchdog: no completed scheduler tick for 120 s = keeper_stalled and exit 1, so
+ *   Docker (restart: unless-stopped) starts the keeper again.
  */
 import { DEVNET_PARAMS } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
@@ -17,21 +21,23 @@ import { PoolDiscovery } from './discovery.ts';
 import { remainingBudget, rollover } from './house.ts';
 import { loadRoleSigners } from './keypair.ts';
 import { hostOf, log, throttled } from './log.ts';
-import { ObservationStore } from './observations.ts';
+import { ObservationPersister, ObservationStore } from './observations.ts';
 import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
 import { FailoverRpc, makeRpc, shortError } from './rpc.ts';
 import { PoolRefs, Sampler } from './sampler.ts';
 import { Scheduler } from './scheduler.ts';
 import { PoolSelector, poolChain, type Selection } from './selector.ts';
 import { StateStore, writeJsonAtomic } from './state.ts';
+import { LoopErrorLog, STALL_AFTER_MS, watchStall } from './supervise.ts';
 
 type Loop = { stop(): void; idle(): Promise<void> };
 
 /**
  * Runs `fn` every `intervalMs`, aligned to the wall clock (plus `phaseMs`), never overlapping
- * itself. Errors are logged and the loop carries on.
+ * itself. An error is logged by `errors` (throttled: the first at once, then one line per 30 s,
+ * then a recovery line) and the loop carries on.
  */
-function every(name: string, intervalMs: number, phaseMs: number, fn: () => Promise<void>): Loop {
+function every(name: string, intervalMs: number, phaseMs: number, errors: LoopErrorLog, fn: () => Promise<void>): Loop {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<void> = Promise.resolve();
@@ -43,7 +49,10 @@ function every(name: string, intervalMs: number, phaseMs: number, fn: () => Prom
   };
   const run = () => {
     running = fn()
-      .catch((error: unknown) => log({ event: 'loop_error', loop: name, error: shortError(error) }))
+      .then(
+        () => errors.success(name, Date.now()),
+        (error: unknown) => errors.failure(name, shortError(error), Date.now()),
+      )
       .finally(schedule);
   };
   run();
@@ -66,6 +75,7 @@ async function main(): Promise<void> {
   const devnet = makeRpc(cfg.devnetRpc, 15_000);
   const mainnet = new FailoverRpc(cfg.mainnetRpcs, log, { timeoutMs: 5_000 });
   const store = new ObservationStore();
+  const persister = new ObservationPersister({ store, path: cfg.observationsFile, logger: log });
   const refs = new PoolRefs(mainnet);
   const sampler = new Sampler({ refs, mainnet, store, logger: log });
   const clock = new ChainClock();
@@ -83,6 +93,7 @@ async function main(): Promise<void> {
     mainnetRpcs: cfg.mainnetRpcs.map(hostOf),
     stateFile: cfg.stateFile,
     statusFile: cfg.statusFile,
+    observationsFile: cfg.observationsFile,
     houseRoundCap: cfg.houseRoundCap,
     houseDailyBudget: cfg.houseDailyBudget,
     poolOverride: cfg.poolOverride,
@@ -95,6 +106,9 @@ async function main(): Promise<void> {
       keepMaxAgeMin: cfg.poolGate.keepMaxAgeMs / MINUTE_MS,
     },
   });
+
+  // Before anything samples: what the last run saw in the last 15 minutes, if it is still usable.
+  persister.restore(Date.now());
 
   let scheduler: Scheduler | null = null;
   const persisted = state.state.pool;
@@ -188,27 +202,51 @@ async function main(): Promise<void> {
     return pools;
   };
 
+  const errors = new LoopErrorLog(log);
+  // The last scheduler tick that completed, with or without an error: a loop that keeps failing
+  // is the error log's business, a loop that stopped completing is the watchdog's.
+  let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
-    every('selector', 60_000, 5_000, () => selector.refresh(Date.now())),
-    every('sampler', 1_000, 0, () => sampler.sample(samplePools())),
-    every('scheduler', 1_000, 300, async () => {
+    every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),
+    every('sampler', 1_000, 0, errors, () => sampler.sample(samplePools())),
+    every('scheduler', 1_000, 300, errors, async () => {
       try {
         await sched.tick(Date.now());
       } finally {
         writeStatus();
+        lastTickDoneMs = Date.now();
       }
     }),
-    every('clock', 60_000, 30_000, async () => {
+    every('clock', 60_000, 30_000, errors, async () => {
       await clock.refresh(devnet);
     }),
-    every('backlog', 10 * 60_000, 15_000, () => sched.scanBacklog()),
+    every('backlog', 10 * 60_000, 15_000, errors, () => sched.scanBacklog()),
+    // The persister writes at most every 5 s; looking once a second keeps that pace even when a timer fires early.
+    every('observations', 1_000, 600, errors, async () => {
+      persister.maybeSave(Date.now());
+    }),
   ];
+
+  const stopWatchdog = watchStall({
+    lastBeatMs: () => lastTickDoneMs,
+    onStall: (idleMs) => {
+      log({ event: 'keeper_stalled', loop: 'scheduler', idleMs, limitMs: STALL_AFTER_MS, action: 'exit 1, the container restarts' });
+      try {
+        // The samplers still ran: keep what they saw, so the restart can price a window in progress.
+        persister.saveNow(Date.now());
+      } catch {
+        // the restart matters more than the file
+      }
+      process.exit(1);
+    },
+  });
 
   let stopping = false;
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
     log({ event: 'stopping', signal });
+    stopWatchdog();
     for (const loop of loops) loop.stop();
     await Promise.allSettled(loops.map((l) => l.idle()));
     await sched.drain(30_000);
@@ -217,6 +255,11 @@ async function main(): Promise<void> {
       writeStatus();
     } catch (error) {
       log({ event: 'final_write_failed', error: shortError(error) });
+    }
+    try {
+      persister.saveNow(Date.now());
+    } catch (error) {
+      log({ event: 'final_write_failed', file: cfg.observationsFile, error: shortError(error) });
     }
     log({ event: 'stopped' });
     process.exit(0);

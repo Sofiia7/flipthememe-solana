@@ -25,6 +25,8 @@ export type KeeperConfig = {
   stateFile: string;
   /** status.json, next to the state file. */
   statusFile: string;
+  /** observations.json, next to the state file: the last 15 minutes of price observations, kept across restarts. */
+  observationsFile: string;
   houseRoundCap: bigint;
   houseDailyBudget: bigint;
   poolOverride: Address | null;
@@ -145,6 +147,7 @@ export function loadConfig(env: Env = process.env, cwd: string = process.cwd()):
     closeAfterSecs: effectiveCloseAfter(BigInt(parseNumber('CLOSE_AFTER_SECS', text(env, 'CLOSE_AFTER_SECS'), Number(CLOSE_AFTER_SECS), { integer: true }))),
     stateFile,
     statusFile: join(dirname(stateFile), 'status.json'),
+    observationsFile: join(dirname(stateFile), 'observations.json'),
     houseRoundCap: parseLamports('HOUSE_ROUND_CAP_LAMPORTS', env.HOUSE_ROUND_CAP_LAMPORTS, DEFAULT_HOUSE_ROUND_CAP),
     houseDailyBudget: parseLamports('HOUSE_DAILY_BUDGET_LAMPORTS', env.HOUSE_DAILY_BUDGET_LAMPORTS, DEFAULT_HOUSE_DAILY_BUDGET),
     poolOverride: override === undefined ? null : (override as Address),

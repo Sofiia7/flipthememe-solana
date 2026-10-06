@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { setStrike } from '@flipthememe/client';
 import { generateKeyPairSigner, getBase58Decoder, getPublicKeyFromAddress, verifySignature, type SignatureBytes } from '@solana/kit';
-import { AttestorClient, sendAttested, type FetchLike } from '../src/attest.ts';
+import { AttestRefused, AttestorClient, TRANSIENT_BACKOFF_MS, refusalBackoffMs, sendAttested, type FetchLike } from '../src/attest.ts';
 import { fakeAttestor, reply } from './fake-attestor.ts';
 import { FakeChain } from './fake-chain.ts';
 
@@ -123,5 +123,35 @@ describe('sendAttested', () => {
     const sent = await sendAttested(chain.rpc(), keeper, [ix], attestor.address, new AttestorClient({ url: 'https://a.example', fetch: attestor.fetch }), later());
     assert.deepEqual(sent, { kind: 'not-attested', attest: { kind: 'failed', reason: 'signature does not verify for the attestor', attempts: 1 } });
     assert.equal(chain.sent.length, 0);
+  });
+});
+
+describe('refusalBackoffMs', () => {
+  test('a transient refusal retries at 5 s, 15 s, 60 s, then every 120 s', () => {
+    assert.deepEqual(TRANSIENT_BACKOFF_MS, [5_000, 15_000, 60_000, 120_000]);
+    assert.deepEqual([1, 2, 3, 4, 5, 6, 50].map((n) => refusalBackoffMs('too_few_samples', n)), [5_000, 15_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
+  });
+
+  test('a refusal that repeating cannot change goes straight to 120 s and never retries sooner', () => {
+    for (const reason of ['price_mismatch', 'slot_out_of_range', 'slot_price_mismatch', 'unpriced', 'samples_withheld', 'strike_too_late', 'unauthorized']) {
+      assert.deepEqual([1, 2, 3, 10].map((n) => refusalBackoffMs(reason, n)), [120_000, 120_000, 120_000, 120_000], reason);
+    }
+  });
+
+  test('refusals about the attestor not having caught up yet (round_not_found, window_open) and unknown reasons are transient', () => {
+    for (const reason of ['round_not_found', 'window_open', 'round_state', 'samples disagree', 'HTTP 418', '']) {
+      assert.equal(refusalBackoffMs(reason, 1), 5_000, reason);
+      assert.equal(refusalBackoffMs(reason, 3), 60_000, reason);
+    }
+  });
+
+  test('a count below 1 is treated as the first refusal', () => {
+    assert.equal(refusalBackoffMs('too_few_samples', 0), 5_000);
+  });
+
+  test('AttestRefused keeps the reason and the status, and the message the scheduler has always logged', () => {
+    const error = new AttestRefused('too_few_samples', 422, 1);
+    assert.deepEqual([error.reason, error.status, error.attempts, error.message], ['too_few_samples', 422, 1, 'attestation refused: too_few_samples']);
+    assert.ok(error instanceof Error);
   });
 });

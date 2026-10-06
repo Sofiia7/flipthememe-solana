@@ -16,6 +16,7 @@ import {
   createRound,
   houseFill,
   isActivated,
+  positionAddress,
   refundExpired,
   roundTimes,
   setStrike,
@@ -27,7 +28,7 @@ import {
   type RoundAccount,
 } from '@flipthememe/client';
 import type { Address, Instruction, KeyPairSigner, Signature } from '@solana/kit';
-import { NO_ATTESTOR, sendAttested, type AttestorClient } from './attest.ts';
+import { AttestRefused, NO_ATTESTOR, refusalBackoffMs, sendAttested, type AttestorClient } from './attest.ts';
 import {
   POSITION_ACCOUNT_SIZE,
   cachedRoundAddress,
@@ -86,6 +87,37 @@ const LOW_BALANCE_LAMPORTS = 200_000_000n;
 export const POSITION_RENT_TTL_MS = 60 * 60_000;
 
 type Failure = { count: number; retryAtMs: number };
+
+/** A claim step that left positions the program refused: asked again after this long (the rest is already claimed). */
+export const CLAIM_RETRY_MS = 60_000;
+
+/** Some positions of a round were refused by the program one by one; the others are claimed. */
+export class ClaimIncomplete extends Error {
+  readonly roundId: bigint;
+  readonly positions: number;
+
+  constructor(roundId: bigint, positions: number) {
+    super(`claim of round ${roundId}: ${positions} position(s) refused by the program`);
+    this.name = 'ClaimIncomplete';
+    this.roundId = roundId;
+    this.positions = positions;
+  }
+}
+
+/**
+ * How long a failed step is left alone, given how many times in a row it has failed (1 for the
+ * first). An attestor refusal waits by its reason (attest.ts), a claim with refused positions a
+ * minute, NotDue (the devnet clock is a little behind) a second, anything else 2^n seconds up to 30.
+ */
+export function retryDelayMs(error: unknown, failures: number): number {
+  if (error instanceof AttestRefused) return refusalBackoffMs(error.reason, failures);
+  if (error instanceof ClaimIncomplete) return CLAIM_RETRY_MS;
+  if (describeError(error) === 'NotDue') return 1_000;
+  return Math.min(30_000, 1_000 * 2 ** failures);
+}
+
+/** The program refused the transaction (as opposed to a transport failure, where the outcome is unknown). */
+const isProgramError = (error: unknown): boolean => PROGRAM_ERRORS.includes(describeError(error) as ProgramErrorName);
 
 export type SchedulerDeps = {
   rpc: SolanaRpc;
@@ -350,9 +382,7 @@ export class Scheduler {
         this.cooldownUntil.set(stepKey, Date.now() + SUCCESS_COOLDOWN_MS);
       } catch (error) {
         const count = (failure?.count ?? 0) + 1;
-        // NotDue means the devnet clock is a little behind: simply try again next tick.
-        const wait = describeError(error) === 'NotDue' ? 1_000 : Math.min(30_000, 1_000 * 2 ** count);
-        this.failures.set(stepKey, { count, retryAtMs: Date.now() + wait });
+        this.failures.set(stepKey, { count, retryAtMs: Date.now() + retryDelayMs(error, count) });
         if (isRateLimited(error)) this.pausedUntilMs = Date.now() + RATE_LIMIT_PAUSE_MS;
       } finally {
         this.inFlight.delete(lane);
@@ -378,7 +408,7 @@ export class Scheduler {
       // Without a program error the outcome is unknown (e.g. HTTP 429 while confirming): keep the
       // signature so it can be looked up. The next tick decides from the chain state either way.
       const sig = (error as { keeperSignature?: string } | null)?.keeperSignature;
-      const unknown = sig !== undefined && !PROGRAM_ERRORS.includes(reason as ProgramErrorName);
+      const unknown = sig !== undefined && !isProgramError(error);
       this.logger({ round: roundId, step, error: reason, ...(unknown ? { sig, landed: 'unknown' } : {}), ...extra });
       throw error;
     }
@@ -414,8 +444,10 @@ export class Scheduler {
    * set_strike or settle, signed by the price key. With ATTEST_URL set and an attestor in
    * OracleConfig, the attestor co-signs first (attest.ts). While the chain requires it, a price
    * goes out only with its signature: a refusal or an outage fails the step, which is retried
-   * with backoff until settle_deadline, after which the round takes its normal refund
-   * (refund_expired needs no attestor). While not required, the keeper sends without it.
+   * until settle_deadline (a refusal by its reason: 5 s, 15 s, 60 s, then every 120 s for the
+   * transient ones, every 120 s for the others; an outage with the step backoff of 2^n s up to
+   * 30 s), after which the round takes its normal refund (refund_expired needs no attestor).
+   * While not required, the keeper sends without it.
    */
   private async price(step: 'strike' | 'settle', round: RoundAccount, samples: PriceSample[], snap: Snapshot, priced: boolean, extra: LogFields): Promise<void> {
     const oracle = snap.oracle;
@@ -457,7 +489,11 @@ export class Scheduler {
           attempts: a.attempts,
           required,
         });
-        if (required) throw new Error(`attestation ${a.kind}: ${a.reason}`);
+        if (required) {
+          // A refusal backs off by its reason (retryDelayMs); an outage keeps the step backoff.
+          if (a.kind === 'refused') throw new AttestRefused(a.reason, a.status, a.attempts);
+          throw new Error(`attestation ${a.kind}: ${a.reason}`);
+        }
         // Not required yet (the attestor runs alongside): the price goes out as before.
         return sendInstructions(this.rpc, this.signer, [await unattested()]);
       },
@@ -550,25 +586,60 @@ export class Scheduler {
     this.state.save();
   }
 
-  /** Claims every unclaimed position, several per transaction; halves the batch if it is too large. */
+  /**
+   * Claims every unclaimed position, several per transaction; halves the batch if it is too large.
+   * When the program refuses a batch, its positions are claimed one per transaction, so one bad
+   * position cannot keep the others from being paid: it is named in the log (`claim_position_failed`),
+   * the step ends with ClaimIncomplete and asks for the leftovers again after CLAIM_RETRY_MS. A
+   * failure that is not a program error (a timeout, HTTP 429) stays as it was: the outcome is
+   * unknown, the step fails and the next attempt reads the positions from the chain again.
+   */
   private async claimAll(round: RoundAccount): Promise<void> {
-    const positions = (await fetchPositions(this.rpc, await cachedRoundAddress(round.id))).filter((p) => !p.claimed);
+    const roundKey = await cachedRoundAddress(round.id);
+    const positions = (await fetchPositions(this.rpc, roundKey)).filter((p) => !p.claimed);
+    let refused = 0;
     let i = 0;
     while (i < positions.length) {
       const chunk = positions.slice(i, i + this.claimBatch);
       const ixs = await Promise.all(chunk.map((p) => claim({ roundId: round.id, owner: p.authority })));
       try {
         await this.act(round.id, 'claim', ixs, { positions: chunk.length });
-        i += chunk.length;
       } catch (error) {
         if (isTooLarge(error) && this.claimBatch > 1) {
           this.claimBatch = Math.max(1, Math.floor(this.claimBatch / 2));
           this.logger({ round: round.id, event: 'claim_batch_shrunk', claimBatch: this.claimBatch });
           continue;
         }
-        throw error;
+        if (!isProgramError(error)) throw error;
+        const only = chunk[0];
+        if (chunk.length === 1 && only) {
+          // Already tried alone (the failed attempt is in the log); only name it.
+          if (await this.noteRefused(round.id, roundKey, only.authority, error)) refused++;
+        } else {
+          for (const p of chunk) {
+            try {
+              await this.act(round.id, 'claim', [await claim({ roundId: round.id, owner: p.authority })], { positions: 1, owner: p.authority });
+            } catch (single) {
+              if (!isProgramError(single)) throw single;
+              if (await this.noteRefused(round.id, roundKey, p.authority, single)) refused++;
+            }
+          }
+        }
       }
+      i += chunk.length;
     }
+    if (refused > 0) throw new ClaimIncomplete(round.id, refused);
+  }
+
+  /**
+   * Logs a position the program refused to claim. AlreadyClaimed is not a problem (the player
+   * claimed it from the app in the meantime): returns false for it, true for any other refusal.
+   */
+  private async noteRefused(roundId: bigint, round: Address, owner: Address, error: unknown): Promise<boolean> {
+    const reason = describeError(error);
+    if (reason === 'AlreadyClaimed') return false;
+    this.logger({ event: 'claim_position_failed', round: roundId, owner, position: await positionAddress(round, owner), error: reason });
+    return true;
   }
 
   /**
