@@ -263,7 +263,7 @@ export function useWalletActions(input: {
   }, [mwa, onChanged]);
 
   /**
-   * One wallet approval: open the vault if needed, deposit, grant the session key a 24 h budget
+   * One wallet approval: open the vault if needed, deposit, grant the session key a 7-day budget
    * equal to the deposit, and send the key 0.03 SOL for fees when it runs low.
    */
   const topUpAndPlay = useCallback(
@@ -307,13 +307,13 @@ export function useWalletActions(input: {
         );
         if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
         const signed = await walletSign(payer, ixs);
-        return submitGuarded('topup', payer, signed, `Topped up ${sol(amount)}. Bets are one tap for 24 h, up to ${sol(amount)} in total.`);
+        return submitGuarded('topup', payer, signed, `Topped up ${sol(amount)}. Bets are one tap for 7 days, up to ${sol(amount)} in total.`);
       }),
     [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
   );
 
   /**
-   * Fast bets again without a deposit: a new 24 h session whose budget is the game balance the
+   * Fast bets again without a deposit: a new 7-day session whose budget is the game balance the
    * player already has (shown on the button), plus 0.03 SOL for the key when it runs low.
    */
   const renewSession = useCallback(
@@ -338,7 +338,7 @@ export function useWalletActions(input: {
         ];
         if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
         const signed = await walletSign(payer, ixs);
-        return submitGuarded('renew', payer, signed, `Fast bets are on for 24 h, up to ${sol(budget)} in total.`);
+        return submitGuarded('renew', payer, signed, `Fast bets are on for 7 days, up to ${sol(budget)} in total.`);
       }),
     [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
   );

@@ -56,6 +56,8 @@ export function formatAge(ms: number): string {
 /** "23h 59m", "5m 03s", "42s" */
 export function formatDuration(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
+  const d = Math.floor(s / 86400);
+  if (d > 0) return `${d}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, '0')}h`;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;

@@ -132,7 +132,7 @@ export function WalletScreen() {
                 <Text style={T.dim}>
                   {myStatus === 'none'
                     ? 'This phone has no session yet (a new install gets a new device key). One approval, no deposit: bets come from your game balance.'
-                    : 'One approval, no deposit: a new 24 h session over your game balance.'}
+                    : 'One approval, no deposit: a new 7-day session over your game balance.'}
                 </Text>
               </>
             ) : null}
@@ -155,7 +155,7 @@ export function WalletScreen() {
               </View>
             )}
             <Text style={T.dim}>
-              One approval: deposit, a 24 h session for this phone with a limit equal to the top up (max 0.1 SOL per bet), and{' '}
+              One approval: deposit, a 7-day session for this phone with a limit equal to the top up (max 0.1 SOL per bet), and{' '}
               {formatSol(SESSION_RULES.gasTopUp)} SOL for the session key's fees when it is low.
             </Text>
             <Btn

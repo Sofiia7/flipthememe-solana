@@ -47,10 +47,13 @@ export const TOP_UP_AMOUNTS: readonly bigint[] = [sol(10n), sol(25n), sol(50n)];
 export const AIRDROP_LAMPORTS = LAMPORTS_PER_SOL;
 
 export const SESSION_RULES = {
-  /** Session lifetime granted by Top up & play. */
-  durationSecs: 24 * 60 * 60,
+  /**
+   * Session lifetime granted by Top up & play: 7 days, the program's maximum, less 10 minutes so a
+   * phone clock a little ahead of the chain never asks for more than the program allows.
+   */
+  durationSecs: 7 * 24 * 60 * 60 - 10 * 60,
   maxPerBet: sol(10n),
-  /** The session key pays fees and the position rent (about 0.00116 SOL per bet; not reclaimed yet). */
+  /** The session key pays fees and the position rent (about 0.00116 SOL per bet; the keeper returns the rent to the wallet a day after the round). */
   gasTopUp: sol(3n),
   /** Top the key up only when it holds less than this. */
   gasMin: sol(1n),

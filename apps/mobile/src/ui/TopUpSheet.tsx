@@ -19,7 +19,7 @@ const solUp = (lamports: bigint) => formatSol(((lamports + 99_999n) / 100_000n) 
 let rentCache: Rent | null = null;
 
 /**
- * "Top up & play": one wallet approval for vault, deposit, 24 h session and key fees, with every
+ * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with every
  * part of the amount listed before the wallet opens. With money already in the game balance the
  * sheet first offers to renew fast bets without a deposit.
  */
@@ -128,7 +128,7 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
                 void wallet.renewSession(available);
               }}
             />
-            <Text style={styles.terms}>24 h of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(available)} · the device key cannot withdraw</Text>
+            <Text style={styles.terms}>7 days of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(available)} · the device key cannot withdraw</Text>
             <Text style={styles.or}>OR ADD MORE</Text>
           </>
         ) : null}
@@ -155,7 +155,7 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
           </View>
         </View>
         {!canRenew ? (
-          <Text style={styles.terms}>24 h of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(amount)} · the device key cannot withdraw</Text>
+          <Text style={styles.terms}>7 days of one-tap bets · up to {formatSol(SESSION_RULES.maxPerBet)} per bet · budget {formatSol(amount)} · the device key cannot withdraw</Text>
         ) : null}
 
         <Text style={styles.balance}>

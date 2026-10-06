@@ -8,6 +8,7 @@ import { Outcome, RefundReason, RoundStatus, Side, TransactionFailed, type Round
 import {
   changeMicroPct,
   formatCountdown,
+  formatDuration,
   formatMicroPct,
   formatSol,
   parseRoundLink,
@@ -304,4 +305,12 @@ test('Seeker ID: the name after the 200-byte record header, one plain label, det
   assert.equal(nameFromRecord(record('')), null);
   assert.equal(pickName(['zed.skr', 'Alpha.skr', 'alpha.skr']), 'Alpha.skr');
   assert.equal(pickName([]), null);
+});
+
+test('session time left reads in days once it is a day or more', () => {
+  assert.equal(formatDuration(7 * 86400 - 600), '6d 23h');
+  assert.equal(formatDuration(86400), '1d 00h');
+  assert.equal(formatDuration(86399), '23h 59m');
+  assert.equal(formatDuration(125), '2m 05s');
+  assert.equal(formatDuration(-5), '0s');
 });
