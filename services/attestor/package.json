@@ -1,0 +1,24 @@
+{
+  "name": "@flipthememe/attestor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run",
+    "dev": "wrangler dev",
+    "smoke": "node scripts/smoke.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "wrangler types && tsc --noEmit"
+  },
+  "dependencies": {
+    "@flipthememe/client": "workspace:*",
+    "@solana/kit": "^7.1.1"
+  },
+  "devDependencies": {
+    "@noble/curves": "^2.4.0",
+    "@types/node": "^22.20.5",
+    "typescript": "~5.9.3",
+    "wrangler": "^4.147.0"
+  }
+}

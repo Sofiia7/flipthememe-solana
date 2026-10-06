@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "test": "node --test \"packages/client/test/*.test.ts\" \"services/keeper/test/*.test.ts\" \"services/chatter/test/*.test.ts\" \"services/link/test/*.test.ts\" \"apps/mobile/src/__tests__/*.test.ts\"",
+    "test": "node --test \"packages/client/test/*.test.ts\" \"services/keeper/test/*.test.ts\" \"services/chatter/test/*.test.ts\" \"services/link/test/*.test.ts\" \"services/attestor/test/*.test.ts\" \"apps/mobile/src/__tests__/*.test.ts\"",
     "test:legacy": "node --test \"packages/arena-core/test/*.test.mjs\"",
     "start": "pnpm --filter @flipthememe/mobile start",
     "android": "pnpm --filter @flipthememe/mobile android",

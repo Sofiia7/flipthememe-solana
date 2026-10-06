@@ -1,0 +1,29 @@
+{
+  // Price attestor: the second signer of set_strike and settle, on infrastructure apart from the keeper.
+  // It samples each round's PumpSwap pool on mainnet by itself during the strike and exit windows and
+  // co-signs a price only when the keeper's samples agree with its own. See README.md.
+  //
+  // Secrets (wrangler secret put NAME, value on stdin):
+  //   ATTESTOR_SECRET  required: base58 of the attestor's 64-byte Solana secret key, or of its 32-byte seed
+  //   MAINNET_RPC      optional: keyed mainnet RPC URL, tried before publicnode
+  //   DEVNET_RPC       optional: keyed devnet RPC URL, tried before OnFinality
+  //   ATTEST_TOKEN     optional: when set, POST /v1/attest needs "Authorization: Bearer <token>"
+  "name": "ftm-attestor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  // @solana/kit's workerd build imports node:events, node:fs/promises and node:path.
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    // Largest gap between the keeper's mean price and the attestor's, in basis points of the attestor's.
+    "ATTEST_TOLERANCE_BPS": "150"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ATTESTOR", "class_name": "Attestor" }]
+  },
+  // SQLite-backed: the only Durable Object storage on the Workers Free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Attestor"] }],
+  // Wakes the object every minute, so the sampling loop restarts after an eviction or a dropped alarm.
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true }
+}
