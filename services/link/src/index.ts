@@ -134,30 +134,36 @@ ${opts.body}
 
 function challengePage(c: Challenge, url: string): string {
   const { round, side, ticker, name } = c;
+  // No side but a sender: an invitation to play from outside a bet, not a call to answer.
+  const invite = side === null && c.by !== null;
   const other = side === 'up' ? 'down' : side === 'down' ? 'up' : null;
   const token = ticker ? `$${ticker}` : 'a fresh memecoin';
-  const title = side ? `I'm ${side.toUpperCase()} on ${token}. Take the other side.` : `FlipTheMeme round #${round}`;
+  const title = side
+    ? `I'm ${side.toUpperCase()} on ${token}. Take the other side.`
+    : invite
+      ? `${name ?? 'A friend'} invites you to FlipTheMeme`
+      : `FlipTheMeme round #${round}`;
   const who = escapeHtml((name ?? 'friend').toUpperCase());
   const headline = side
     ? `<div class="big ${side}">${who} IS ${side.toUpperCase()} ${side === 'up' ? '&#9650;' : '&#9660;'}</div>
 <div class="call">ON ${escapeHtml(token.toUpperCase())}</div>
 <div class="big ${other}">CALL ${other!.toUpperCase()} ${other === 'up' ? '&#9650;' : '&#9660;'}</div>`
-    : `<div class="big">PICK A SIDE</div><div class="call">UP &#9650; OR DOWN &#9660;</div>`;
+    : `<div class="big">${invite ? `${name ? who : 'A FRIEND'} INVITES YOU` : 'PICK A SIDE'}</div><div class="call">UP &#9650; OR DOWN &#9660;</div>`;
   return page({
     title,
     description: '60-second UP/DOWN calls on fresh Solana memecoins, matched 1:1. Devnet, test SOL.',
     url,
     body: `<div class="card">
 ${headline}
-<div class="round">ROUND #${escapeHtml(round)}</div>
+<div class="round">${invite ? 'A NEW ROUND EVERY MINUTE' : `ROUND #${escapeHtml(round)}`}</div>
 </div>
 <a class="btn go" href="${escapeHtml(appIntent(c))}">OPEN FLIPTHEMEME</a>
 <a class="btn get" href="${escapeHtml(getLink(c))}">GET THE ANDROID APP</a>
-<p>No rush: rounds start every minute. Install the app, top up once and take the other side whenever you are ready. In the app your friend's face is marked RIVAL when you meet in a round. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
+<p>No rush: rounds start every minute. Install the app, top up once and ${side ? 'take the other side' : 'make your call'} whenever you are ready. In the app your friend's face is marked RIVAL when you meet in a round. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
   });
 }
 
-/** How to install and play; with a challenge (r, side, t, by, n), a button that opens the app on it once installed. */
+/** How to install and play; with a challenge or an invite (r, side, t, by, n), a button that opens the app on it once installed. */
 function getPage(c: Challenge | null): string {
   return page({
     title: 'FlipTheMeme for Android',
@@ -167,8 +173,8 @@ function getPage(c: Challenge | null): string {
 <a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>${
       c
         ? `
-<a class="btn get" href="${escapeHtml(appIntent(c))}">OPEN THE CHALLENGE</a>
-<p>After installing, come back here and tap it: the app opens on your friend's challenge.</p>`
+<a class="btn get" href="${escapeHtml(appIntent(c))}">OPEN THE ${c.side ? 'CHALLENGE' : c.by ? 'INVITE' : 'ROUND'}</a>
+<p>After installing, come back here and tap it: the app opens on ${c.side ? "your friend's challenge" : c.by ? "your friend's invite" : `round #${escapeHtml(c.round)}`}.</p>`
         : ''
     }
 <ol>

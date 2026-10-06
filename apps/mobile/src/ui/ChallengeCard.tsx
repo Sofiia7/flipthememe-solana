@@ -1,6 +1,6 @@
-// A friend's challenge from a shared link, on the Arena until OK: who called what in which round, how
-// that round went, and where to meet now. Text only: no bet button and no side picked for the reader,
-// the bet buttons below stay the only way to play.
+// A friend's challenge or invite from a shared link, on the Arena until OK: who called what in which
+// round, how that round went, and where to meet now. Text only: no bet button and no side picked for the
+// reader, the bet buttons below stay the only way to play.
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { RoundView } from '../chain/fetch';
 import { useSkrNames } from '../chain/skr';
@@ -10,6 +10,7 @@ import {
   challengeHeadline,
   challengeRoundState,
   inviterPosition,
+  isInvite,
   meetLine,
   roundStateLine,
   type Challenge,
@@ -45,7 +46,8 @@ export function ChallengeCard({
   // While the round is in the arena window the arena's read is the fresher one (every 2 s).
   const round = arena.rounds.find((r) => r.id === challenge.round) ?? read?.round ?? null;
   const state = challengeRoundState(round?.account ?? null, nowSec);
-  const stateText = roundStateLine(challenge, state);
+  // An invite's round is only the one open when it was sent: nothing to say about how it went.
+  const stateText = isInvite(challenge) ? null : roundStateLine(challenge, state);
   // The meeting point: the inviter's own call in the round open now, from the players the arena already reads.
   const met = open ? inviterPosition(arena.positions.get(open.id) ?? [], challenge.by) : null;
   return (

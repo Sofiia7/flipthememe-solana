@@ -85,12 +85,26 @@ test('/get with a challenge offers OPEN THE CHALLENGE; without one it is unchang
   assert.match(body, /After installing, come back here and tap it: the app opens on your friend's challenge\./);
   assert.equal(href(body, 'OPEN THE CHALLENGE'), appIntent(readChallenge('496', new URLSearchParams(`side=up&t=Tesla&by=${BY}&n=oxbla.skr`))));
   // Any valid round is enough; without one (or with a bad one) the page is the plain install page.
-  assert.match(await get('/get?r=5').text(), /OPEN THE CHALLENGE/);
+  assert.match(await get('/get?r=5').text(), /OPEN THE ROUND<\/a>\n<p>After installing, come back here and tap it: the app opens on round #5\.<\/p>/);
   const plain = await get('/get').text();
   for (const path of ['/get?r=abc&side=up', '/get?side=up&t=WIF', `/get?r=${'9'.repeat(21)}`, '/']) {
     assert.equal(await get(path).text(), plain, path);
   }
   assert.ok(!plain.includes('OPEN THE CHALLENGE') && !plain.includes('intent://'));
+});
+
+test('a link with its sender and no side is an invitation to play', async () => {
+  const body = await get(`/r/496?by=${BY}&n=OxBla.skr`).text();
+  assert.match(body, /<div class="big">OXBLA\.SKR INVITES YOU<\/div><div class="call">UP &#9650; OR DOWN &#9660;<\/div>/);
+  assert.match(body, /A NEW ROUND EVERY MINUTE/);
+  assert.ok(!body.includes('ROUND #496') && !body.includes('PICK A SIDE') && !body.includes('take the other side'));
+  assert.match(body, /top up once and make your call whenever you are ready/);
+  assert.match(body, /<meta property="og:title" content="oxbla\.skr invites you to FlipTheMeme">/);
+  assert.equal(href(body, 'OPEN FLIPTHEMEME'), appIntent(readChallenge('496', new URLSearchParams(`by=${BY}&n=oxbla.skr`))));
+  // Without a name the page still says who: a friend.
+  assert.match(await get(`/r/496?by=${BY}`).text(), /A FRIEND INVITES YOU/);
+  const install = await get(`/get?r=496&by=${BY}&n=oxbla.skr`).text();
+  assert.match(install, /OPEN THE INVITE<\/a>\n<p>After installing, come back here and tap it: the app opens on your friend's invite\.<\/p>/);
 });
 
 test('hostile query values never reach the page or the intent unescaped', async () => {

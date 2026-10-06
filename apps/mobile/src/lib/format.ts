@@ -243,14 +243,15 @@ export function parseRoundLink(url: string | null | undefined): RoundLink | null
 
 /**
  * Link to a round for messengers. A challenge also names the side, the token and the inviter (wallet and
- * display name) for the landing page and the friend's app; values the reader would refuse are left out.
+ * display name) for the landing page and the friend's app; an invite names only the inviter. Values the
+ * reader would refuse are left out.
  */
 export function roundLink(
   roundId: bigint,
-  challenge?: { side: string; token: string | null; by?: string | null; name?: string | null },
+  challenge?: { side: string | null; token: string | null; by?: string | null; name?: string | null },
 ): string {
   if (!challenge) return `${WEB_ROUND_LINK}${roundId}`;
-  const side = challenge.side.toLowerCase();
+  const side = challenge.side?.toLowerCase() ?? null;
   const pairs: [string, string | null][] = [
     ['side', side === 'up' || side === 'down' ? side : null],
     ['t', cleanTicker(challenge.token)],

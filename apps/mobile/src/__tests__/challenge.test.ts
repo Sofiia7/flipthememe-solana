@@ -10,6 +10,7 @@ import {
   CHALLENGE_TTL_MS,
   challengeActive,
   challengeHeadline,
+  isInvite,
   challengeRoundState,
   createChallengeStore,
   inviterPosition,
@@ -53,6 +54,10 @@ test('a challenge link round-trips: round, side, ticker, inviter wallet and name
   const spaced = roundLink(9n, { side: 'DOWN', token: 'Dog Wif', by: null, name: null });
   assert.equal(spaced, `${WEB}9?side=down&t=Dog%20Wif`);
   assert.equal(parseRoundLink(spaced)?.ticker, 'Dog Wif');
+  // An invite from outside a bet: no side, only the sender.
+  const invite = roundLink(500n, { side: null, token: null, by: BY, name: 'oxbla.skr' });
+  assert.equal(invite, `${WEB}500?by=${BY}&n=oxbla.skr`);
+  assert.deepEqual(parseRoundLink(invite), { round: 500n, side: null, ticker: null, by: BY, name: 'oxbla.skr' });
 });
 
 test('old links and plain round links keep working', () => {
@@ -216,7 +221,13 @@ test('the card says who called what, how that round went and where to meet, neve
   assert.equal(challengeHeadline(c), 'oxbla.skr called UP on $TSLA · round #496');
   assert.equal(challengeHeadline(challenge({ name: null })), `${shortAddress(BY)} called UP on $TSLA · round #496`);
   assert.equal(challengeHeadline(challenge({ name: null, by: null, ticker: null, side: 'down' })), 'A FRIEND called DOWN · round #496');
-  assert.equal(challengeHeadline(challenge({ side: null })), 'oxbla.skr sent you round #496 on $TSLA');
+  // No side but a sender is an invite; a link with neither (a shared result) only names its round.
+  assert.equal(challengeHeadline(challenge({ side: null })), 'oxbla.skr invited you to play');
+  assert.equal(challengeHeadline(challenge({ side: null, name: null })), `${shortAddress(BY)} invited you to play`);
+  assert.equal(challengeHeadline(challenge({ side: null, by: null, name: null })), 'A FRIEND sent you round #496 on $TSLA');
+  assert.equal(isInvite(challenge({ side: null })), true);
+  assert.equal(isInvite(challenge()), false);
+  assert.equal(isInvite(challenge({ side: null, by: null })), false);
 
   const now = 1_000_000;
   const state = (over: Partial<RoundAccount> & { opensAt: bigint }) => challengeRoundState(account(over), now);

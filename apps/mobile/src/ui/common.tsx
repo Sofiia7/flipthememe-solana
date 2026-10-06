@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { C, MONO, T } from '../theme';
 
-type BtnKind = 'primary' | 'ghost' | 'up' | 'down' | 'danger' | 'gold';
+type BtnKind = 'primary' | 'ghost' | 'up' | 'down' | 'danger' | 'gold' | 'friend';
 
 export function Btn({
   title,
@@ -61,6 +61,8 @@ const BTN: Record<BtnKind, { bg: string; border: string; ink: string }> = {
   down: { bg: C.down, border: C.downBorder, ink: C.downInk },
   danger: { bg: 'transparent', border: C.danger, ink: C.danger },
   gold: { bg: C.gold, border: '#ffd978', ink: '#2a1d00' },
+  // Challenges and invites: the pink of the RIVAL tag.
+  friend: { bg: 'rgba(255,79,216,0.08)', border: C.neonPink, ink: C.neonPink },
 };
 
 export function Banner({ tone, text, action }: { tone: 'warn' | 'error' | 'info' | 'ok'; text: string; action?: { label: string; onPress: () => void } }) {
@@ -135,8 +137,9 @@ const styles = StyleSheet.create({
   btnText: { fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
   btnTextSmall: { fontSize: 11 },
   btnSub: { fontSize: 10, fontWeight: '700', marginTop: 1, opacity: 0.85 },
-  banner: { borderWidth: 1, backgroundColor: C.panelDeep, padding: 8, gap: 4 },
-  bannerText: { fontSize: 11, fontWeight: '700', lineHeight: 15 },
+  // The action sits on the right, so a short note takes one line.
+  banner: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, backgroundColor: C.panelDeep, paddingHorizontal: 8, paddingVertical: 6, gap: 10 },
+  bannerText: { flex: 1, fontSize: 11, fontWeight: '700', lineHeight: 15 },
   bannerAction: { fontSize: 11, fontWeight: '900', textDecorationLine: 'underline' },
   section: { gap: 6 },
   sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },

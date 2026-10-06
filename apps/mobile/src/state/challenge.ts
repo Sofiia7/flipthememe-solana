@@ -86,10 +86,16 @@ export function inviterName(c: Pick<Challenge, 'name' | 'by'>): string {
   return c.name ?? (c.by ? shortAddress(c.by) : 'A FRIEND');
 }
 
-/** "oxbla.skr called UP on $WIF · round #496"; a link without a side only names the round. */
+/** No side but a sender: an invitation to play from outside a bet. Its round is only the one open when it was sent. */
+export function isInvite(c: Pick<Challenge, 'side' | 'by'>): boolean {
+  return c.side === null && c.by !== null;
+}
+
+/** "oxbla.skr called UP on $WIF · round #496"; an invite names its sender, another link without a side only the round. */
 export function challengeHeadline(c: Challenge): string {
   const token = c.ticker ? ` on $${c.ticker}` : '';
-  return c.side ? `${inviterName(c)} called ${c.side.toUpperCase()}${token} · round #${c.round}` : `${inviterName(c)} sent you round #${c.round}${token}`;
+  if (c.side) return `${inviterName(c)} called ${c.side.toUpperCase()}${token} · round #${c.round}`;
+  return isInvite(c) ? `${inviterName(c)} invited you to play` : `${inviterName(c)} sent you round #${c.round}${token}`;
 }
 
 /** The challenged round as the card tells it. Unknown: not read yet, closed because nobody played it, or unreadable. */

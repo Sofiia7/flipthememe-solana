@@ -81,9 +81,10 @@ export function ArenaScreen() {
   const [sharing, setSharing] = useState(false);
   const chatter = useBoolStore(chatterOn);
   const chatterShown = chatter.loaded && chatter.value;
-  // The chart takes the spare height of taller phones, a little less when the X lane is on.
+  // The chart takes the spare height of taller phones, a little less when the X lane is on. On a Seeker
+  // that leaves my round in play and its CHALLENGE A FRIEND above the dock, even under a one-line note.
   const { height: screenHeight } = useWindowDimensions();
-  const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * (chatterShown ? 0.2 : 0.22))));
+  const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * (chatterShown ? 0.175 : 0.2))));
 
   // The rules open by themselves once, on the first launch.
   useEffect(() => {
@@ -274,6 +275,18 @@ export function ArenaScreen() {
     ).finally(() => setSharing(false));
   };
 
+  // My round in play can be shared too; the dock offers it for a call in the open round instead.
+  const challengeFocus = panel.kind === 'mine' && focus && owner && panel.stage !== 'settling' && !inOpen ? focus : null;
+  // Outside a bet the same place invites a friend to play. The link names no side, only me (wallet and
+  // name for their RIVAL tag) and the round open now, so their app shows where to meet.
+  const inviteRound = challengeFocus || inOpen ? null : (open ?? groups.upcoming);
+  const invite = (round: RoundView) => {
+    const link = roundLink(round.id, { side: null, token: null, by: owner, name: myName });
+    const text = `Play FlipTheMeme with me: call UP or DOWN on a fresh Solana meme coin, a new 60-second round every minute (devnet, test SOL). Join me: ${link}`;
+    setSharing(true);
+    void shareCard({ kind: 'invite', face: app.face, roundId: round.id, name: myName }, text, 'Play with a friend').finally(() => setSharing(false));
+  };
+
   const lateRounds = myUnresolved.filter((m) => nowSec > Number(m.round.account.exitEnd) + OVERDUE_SECS);
   const extraRounds = panel.kind === 'mine' ? panel.others.map((r) => mine.get(r.id)).filter((m): m is Mine => !!m) : [];
 
@@ -358,9 +371,10 @@ export function ArenaScreen() {
               upcoming={panel.kind !== 'open'}
             />
           )}
-          {/* My round in play can be shared too; the dock offers it for a call in the open round instead. */}
-          {panel.kind === 'mine' && focus && owner && panel.stage !== 'settling' && !inOpen ? (
-            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(focus, true)} />
+          {challengeFocus ? (
+            <Btn small kind="friend" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} style={styles.friend} />
+          ) : inviteRound ? (
+            <Btn small kind="friend" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
           ) : null}
           {extraRounds.map((m) => (
             <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />
@@ -596,7 +610,8 @@ const styles = StyleSheet.create({
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
   stage: { flex: 1, overflow: 'hidden' },
-  page: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 16, gap: 10 },
+  page: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 16, gap: 8 },
+  friend: { minHeight: 32, paddingVertical: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
   loadingText: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   results: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
@@ -608,15 +623,15 @@ const styles = StyleSheet.create({
   footer: { color: C.dim, fontSize: 10, textAlign: 'center', textDecorationLine: 'underline' },
   dock: {
     paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 10,
-    gap: 8,
+    paddingTop: 6,
+    paddingBottom: 8,
+    gap: 6,
     borderTopWidth: 1,
     borderTopColor: '#3a2c5e',
     backgroundColor: '#140f26',
   },
   amounts: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 7, alignItems: 'center' },
+  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 5, alignItems: 'center' },
   amountActive: { backgroundColor: C.neonPurple, borderColor: '#d9b8ff' },
   amountText: { color: C.white, fontSize: 15, fontWeight: '900', fontFamily: MONO },
   amountTextActive: { color: C.white },

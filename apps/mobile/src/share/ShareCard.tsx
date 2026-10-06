@@ -14,7 +14,9 @@ import { PixelText } from '../ui/PixelText';
 
 export type ShareCardData =
   | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; profit: bigint; name?: string | null }
-  | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; name?: string | null };
+  | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; name?: string | null }
+  /** From outside a bet: no side and no token, just me and the invitation. */
+  | { kind: 'invite'; face: Face; roundId: bigint; name?: string | null };
 
 export const CARD_W = 360;
 export const CARD_H = 450;
@@ -44,18 +46,19 @@ function TokenMark({ symbol, imageUrl, onDone }: { symbol: string | null; imageU
 
 /** The card itself (360 x 450 dp): face, headline, token, side, round and the brand line. */
 export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: () => void }) {
-  const up = data.side === Side.Up;
+  const up = data.kind !== 'invite' && data.side === Side.Up;
   const sideColor = up ? C.neonGreen : C.neonRed;
-  const token = data.symbol ? `$${data.symbol}` : 'THE ARENA TOKEN';
+  const token = data.kind !== 'invite' && data.symbol ? `$${data.symbol}` : 'THE ARENA TOKEN';
+  const frameColor = data.kind === 'win' ? C.neonYellow : data.kind === 'invite' ? C.neonPink : sideColor;
   return (
     <Gradient colors={GRAD.card} style={styles.card}>
-      <View style={[styles.frame, { borderColor: data.kind === 'win' ? C.neonYellow : sideColor }]} />
+      <View style={[styles.frame, { borderColor: frameColor }]} />
       <View style={styles.top}>
         <PixelText text="$FLIPTHEMEME" size={2} color={C.white} shadow={C.accent} />
         <Text style={styles.net}>DEVNET</Text>
       </View>
       <View style={styles.faceBox}>
-        <View style={[styles.faceRing, { borderColor: data.kind === 'win' ? C.neonYellow : sideColor }]}>
+        <View style={[styles.faceRing, { borderColor: frameColor }]}>
           <PixelFace face={data.face} size={120} expression={data.kind === 'win' ? 'happy' : undefined} />
         </View>
         {data.name ? <Text style={styles.nick}>{data.name}</Text> : null}
@@ -74,6 +77,16 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
             </Text>
           </View>
         </View>
+      ) : data.kind === 'invite' ? (
+        <View style={styles.center}>
+          <PixelText text="PLAY WITH ME" size={4} color={C.neonPink} glow={C.neonPink} shadow="#2a0b52" />
+          <View style={styles.tokenRow}>
+            <Text style={[styles.side, { color: C.neonGreen }]}>UP ▲</Text>
+            <Text style={styles.small}>OR</Text>
+            <Text style={[styles.side, { color: C.neonRed }]}>DOWN ▼</Text>
+          </View>
+          <Text style={styles.small}>60 SECONDS · FRESH SOLANA MEMECOINS</Text>
+        </View>
       ) : (
         <View style={styles.center}>
           <PixelText text={up ? "I'M UP" : "I'M DOWN"} size={6} color={sideColor} glow={sideColor} shadow="#2a0b52" />
@@ -88,7 +101,7 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
         </View>
       )}
       <View style={styles.bottom}>
-        <Text style={styles.round}>ROUND #{data.roundId.toString()}</Text>
+        <Text style={styles.round}>{data.kind === 'invite' ? 'A NEW ROUND EVERY MINUTE' : `ROUND #${data.roundId.toString()}`}</Text>
         <Text style={styles.brand}>FlipTheMeme · Solana devnet</Text>
       </View>
     </Gradient>
@@ -137,7 +150,7 @@ export function ShareCardHost() {
   const [laidOutId, setLaidOutId] = useState(0);
   const [imageDoneId, setImageDoneId] = useState(0);
   const id = current?.id ?? 0;
-  const hasImage = !!current?.data.imageUrl;
+  const hasImage = current !== null && current.data.kind !== 'invite' && !!current.data.imageUrl;
   const ready = current !== null && laidOutId === id && (!hasImage || imageDoneId === id);
 
   useEffect(() => {

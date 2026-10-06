@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
   off: { opacity: 0.38 },
   pressed: { transform: [{ scale: 0.97 }] },
   fill: { minHeight: 50, paddingVertical: 9, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
-  fillBig: { minHeight: 66, paddingVertical: 10 },
+  fillBig: { minHeight: 56, paddingVertical: 5 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
   title: { fontSize: 16, fontWeight: '900', letterSpacing: 0.8 },
   titleBig: { fontSize: 24, letterSpacing: 0.5 },
