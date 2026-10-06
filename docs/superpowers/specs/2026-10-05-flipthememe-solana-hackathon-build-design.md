@@ -8,8 +8,8 @@
 
 | Хакатон | Срок | Что нужно |
 |---|---|---|
-| [CLOCK IN](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon) (Solana Mobile) | 9.10, 08:59 по времени Софии (CEST) | APK с MWA, исходники на GitHub, демо-видео, презентация |
-| [Perps and Prediction Markets](https://hackathons.solana.com/hackathons/perps-and-prediction-markets) (Solana Foundation) | 9.10, время не указано | то же приложение; ориентир по прошлому хакатону фонда: рабочий прототип, видео до 3 минут, GitHub |
+| [CLOCK IN](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon) (Solana Mobile) | 12.10, 13:59 GMT+2 (по времени Софии, CEST; перенесено организаторами, было 9.10 08:59; судейство 13.10-9.11, итоги 11.11) | APK с MWA, исходники на GitHub, демо-видео, презентация |
+| [Perps and Prediction Markets](https://hackathons.solana.com/hackathons/perps-and-prediction-markets) (Solana Foundation) | на странице хакатона сейчас стоит 5.12.2026 (было 9.10), Софии проверить | то же приложение; ориентир по прошлому хакатону фонда: рабочий прототип, видео до 3 минут, GitHub |
 
 Внутренний срок готовности всех материалов: вечер 8 октября. Одно видео до 3 минут на английском для обоих.
 
