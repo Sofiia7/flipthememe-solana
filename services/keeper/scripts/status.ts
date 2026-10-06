@@ -46,9 +46,14 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const roles = await loadRoleSigners(cfg);
   const signer = roles.keeper;
-  const house = roles.house.address;
+  let house = roles.house.address;
   const rpc = makeRpc(cfg.devnetRpc, 20_000);
-  const head = await readSnapshot(rpc, signer.address, [], house);
+  let head = await readSnapshot(rpc, signer.address, [], house);
+  // Without HOUSE_KEYPAIR, show the house that Config names rather than the keeper's old vault.
+  if (house === signer.address && head.config && head.config.houseAuthority !== house) {
+    house = head.config.houseAuthority;
+    head = await readSnapshot(rpc, signer.address, [], house);
+  }
   console.log(`devnet ${hostOf(cfg.devnetRpc)}  program ${PROGRAM_ID}`);
   console.log(`keeper ${signer.address}  balance ${sol(head.keeperLamports)} SOL`);
   if (house !== signer.address) console.log(`house key ${house}  balance ${sol(head.houseLamports)} SOL`);
