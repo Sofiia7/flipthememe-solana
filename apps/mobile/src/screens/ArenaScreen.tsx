@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { RoundStatus, Side, winMultiplierBps } from '@flipthememe/client';
-import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer, roundLink } from '../config';
+import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
 import { useSkrNames } from '../chain/skr';
 import {
@@ -22,7 +22,7 @@ import { isFeedStale, type PoolFeed } from '../chain/usePoolPrice';
 import { useRents } from '../chain/rent';
 import { peekTokenInfo, useTokenInfo } from '../chain/useTokenInfo';
 import { faceFromBytes } from '../face/faceModel';
-import { deltaView, formatCountdown, formatSol } from '../lib/format';
+import { deltaView, formatCountdown, formatSol, roundLink } from '../lib/format';
 import { chatterOn, howItWorksSeen, useBoolStore } from '../lib/prefs';
 import { useNow } from '../lib/usePolling';
 import { shareCard } from '../share/ShareCard';
@@ -31,9 +31,10 @@ import { sessionStatusOf, useApp, type SessionStatus } from '../state/AppProvide
 import { awayText } from '../state/away';
 import { C, MONO } from '../theme';
 import { ArenaClock, type ClockSide } from '../ui/ArenaClock';
+import { ChallengeCard } from '../ui/ChallengeCard';
 import { PriceChart } from '../ui/Chart';
 import { ChatterLane } from '../ui/ChatterLane';
-import { Banner, ExtLink } from '../ui/common';
+import { Banner, Btn, ExtLink } from '../ui/common';
 import { HowItWorksSheet } from '../ui/HowItWorks';
 import { NeonButton } from '../ui/NeonButton';
 import { PixelText } from '../ui/PixelText';
@@ -72,6 +73,8 @@ export function ArenaScreen() {
   const nowWhole = Math.floor(nowSec);
   const owner = wallet.owner;
   const myName = useSkrNames(owner ? [owner] : []).get(owner ?? '') ?? null;
+  // The friend whose challenge link opened the app: their face in the round panels says RIVAL.
+  const rival = app.challenge?.by ?? null;
   const [amount, setAmount] = useState<bigint>(BET_AMOUNTS[1]);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
@@ -244,19 +247,26 @@ export function ArenaScreen() {
     void betting.place(open.id, side, amount);
   };
 
-  // A challenge is always for the open round, whose token may differ from the stage's.
-  const challenge = (roundId: bigint, side: number, position?: PositionView) => {
-    const token = openSymbol ? `$${openSymbol}` : 'a fresh meme coin';
-    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${roundId} (Solana devnet, test SOL). Take the other side: ${roundLink(roundId, { side: sideName(side), token: openSymbol })}`;
+  // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
+  // invites them to any later round and carries my wallet and name for their RIVAL tag. It names the
+  // round's own coin, which may differ from the stage's (the open round's often does).
+  const challenge = (m: Mine, live: boolean) => {
+    if (!owner) return;
+    const side = m.position.account.side;
+    const info = peekTokenInfo(m.round.account.tokenMint);
+    const symbol = info?.symbol ?? null;
+    const token = symbol ? `$${symbol}` : 'a fresh meme coin';
+    const link = roundLink(m.round.id, { side: sideName(side), token: symbol, by: owner, name: myName });
+    const text = `I'm ${sideName(side)} on ${token} in FlipTheMeme round #${m.round.id}${live ? ', live now' : ''} (Solana devnet, test SOL). Take the other side: rounds start every minute, join any time: ${link}`;
     setSharing(true);
     void shareCard(
       {
         kind: 'challenge',
-        face: position ? faceFromBytes(position.account.face) : app.face,
+        face: faceFromBytes(m.position.account.face),
         side,
-        roundId,
-        symbol: openSymbol,
-        imageUrl: (open && open.account.tokenMint !== tokenMint ? openInfo : tokenInfo)?.imageUrl ?? null,
+        roundId: m.round.id,
+        symbol,
+        imageUrl: info?.imageUrl ?? null,
         name: myName,
       },
       text,
@@ -295,17 +305,7 @@ export function ArenaScreen() {
           ) : arenaStaleSec !== null && arenaStaleSec > 10 ? (
             <Banner tone="warn" text={`Data ${arenaStaleSec} s old - devnet is slow, retrying.`} />
           ) : null}
-          {app.deepLinkRound !== null ? (
-            <Banner
-              tone="info"
-              text={
-                open && app.deepLinkRound === open.id
-                  ? `You were challenged! Round #${app.deepLinkRound} is open - pick your side.`
-                  : `Round #${app.deepLinkRound} has closed${open ? ` - #${open.id} is open now.` : '.'}`
-              }
-              action={{ label: 'OK', onPress: app.clearDeepLink }}
-            />
-          ) : null}
+          {app.challenge ? <ChallengeCard challenge={app.challenge} open={open} nowSec={nowSec} onClose={app.clearChallenge} /> : null}
           {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
           {app.away ? <Banner tone="info" text={awayText(app.away, formatSol)} action={{ label: 'OK', onPress: app.ackAway }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
@@ -347,15 +347,21 @@ export function ArenaScreen() {
               stage={panel.stage}
               standing={standingOf(focus)}
               me={owner}
+              rival={rival}
             />
           ) : (
             <OpenRoundPanel
               round={panelRound}
               positions={panelRound ? (arena.positions.get(panelRound.id) ?? []) : []}
               me={owner}
+              rival={rival}
               upcoming={panel.kind !== 'open'}
             />
           )}
+          {/* My round in play can be shared too; the dock offers it for a call in the open round instead. */}
+          {panel.kind === 'mine' && focus && owner && panel.stage !== 'settling' && !inOpen ? (
+            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(focus, true)} />
+          ) : null}
           {extraRounds.map((m) => (
             <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />
           ))}
@@ -413,12 +419,7 @@ export function ArenaScreen() {
               </Text>{' '}
               {formatSol(inOpen.position.account.stake)} SOL
             </Text>
-            <NeonButton
-              title="CHALLENGE A FRIEND"
-              kind="purple"
-              busy={sharing}
-              onPress={() => challenge(inOpen.round.id, inOpen.position.account.side, inOpen.position)}
-            />
+            <NeonButton title="CHALLENGE A FRIEND" kind="purple" busy={sharing} onPress={() => challenge(inOpen, false)} />
           </View>
         ) : topUpReason && !pendingHere ? (
           <>

@@ -1,13 +1,18 @@
 // sol.flipthememe.com: the web side of a shared round link.
 //
-//   /r/<round>?side=up&t=<ticker>   challenge page: opens the app on that round, or offers the APK
-//   /get                            how to install and play
+//   /r/<round>?side=up&t=<ticker>&by=<wallet>&n=<name>
+//                                   challenge page: opens the app on the challenge, or offers the APK
+//   /get?r=<round>&side=..&t=..&by=..&n=..
+//                                   how to install and play; with a challenge, a button that opens the
+//                                   app on it once installed
 //   /.well-known/assetlinks.json    Android App Links: lets the app open /r/ links directly
 //   /v1/names?a=<addr>,<addr>       Seeker ID (.skr) names for the app's player rows, see names.ts
 //
-// The app is not a web app: this page only bridges a messenger link to the Android app.
+// The app is not a web app: this page only bridges a messenger link to the Android app. A friend
+// rarely installs, connects and tops up within the minute a round is open, so the challenge travels
+// on (to /get, then into the app) and the copy invites them to any later round.
 
-import { names, type NamesEnv } from './names.ts';
+import { base58Decode, names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
 /** SHA-256 of the release signing certificate (public, printed by apksigner in CI). */
@@ -34,9 +39,53 @@ export function cleanTicker(raw: string | null): string | null {
   return t || null;
 }
 
-/** Opens the app on the round when it is installed; Chrome falls back to the install page. */
-export function appIntent(round: string): string {
-  return `intent://round/${round}#Intent;scheme=flipthememe;package=${PACKAGE};S.browser_fallback_url=${encodeURIComponent(`${ORIGIN}/get`)};end`;
+/** The inviter's wallet from the query: base58, 32-44 characters, exactly 32 bytes; anything else is refused. */
+export function cleanAddress(raw: string | null): string | null {
+  return raw && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(raw) && base58Decode(raw)?.length === 32 ? raw : null;
+}
+
+/** The inviter's display name (a Seeker ID such as oxbla.skr): lowercase letters, digits, dots, hyphens, underscores, 32 at most. */
+export function cleanName(raw: string | null): string | null {
+  const name = raw?.toLowerCase() ?? '';
+  return /^[a-z0-9._-]{1,32}$/.test(name) ? name : null;
+}
+
+/** A challenge as the link carries it; every value but the round may be missing. */
+export type Challenge = { round: string; side: 'up' | 'down' | null; ticker: string | null; by: string | null; name: string | null };
+
+/** The challenge of `round` from a query: each value is checked on its own, a refused one is dropped. */
+export function readChallenge(round: string, query: URLSearchParams): Challenge {
+  const side = query.get('side');
+  return {
+    round,
+    side: side === 'up' || side === 'down' ? side : null,
+    ticker: cleanTicker(query.get('t')),
+    by: cleanAddress(query.get('by')),
+    name: cleanName(query.get('n')),
+  };
+}
+
+/** "side=up&t=WIF&by=..&n=..": the values present, each URL-encoded. */
+function challengeQuery(c: Challenge): string {
+  const pairs: [string, string | null][] = [
+    ['side', c.side],
+    ['t', c.ticker],
+    ['by', c.by],
+    ['n', c.name],
+  ];
+  return pairs.flatMap(([key, value]) => (value === null ? [] : [`${key}=${encodeURIComponent(value)}`])).join('&');
+}
+
+/** The install page that keeps the challenge, to open the app on it once installed. */
+export function getLink(c: Challenge): string {
+  const query = challengeQuery(c);
+  return `${ORIGIN}/get?r=${encodeURIComponent(c.round)}${query ? `&${query}` : ''}`;
+}
+
+/** Opens the app on the challenge when it is installed; Chrome falls back to the install page, which keeps it. */
+export function appIntent(c: Challenge): string {
+  const query = challengeQuery(c);
+  return `intent://round/${encodeURIComponent(c.round)}${query ? `?${query}` : ''}#Intent;scheme=flipthememe;package=${PACKAGE};S.browser_fallback_url=${encodeURIComponent(getLink(c))};end`;
 }
 
 function page(opts: { title: string; description: string; url: string; body: string }): string {
@@ -65,7 +114,7 @@ function page(opts: { title: string; description: string; url: string; body: str
   .brand { font-weight: 900; font-size: 20px; letter-spacing: 1px; color: #fff; text-shadow: 2px 2px 0 var(--purple); }
   .tag { border: 1px solid var(--gold); color: var(--gold); font-size: 11px; font-weight: 900; padding: 1px 6px; }
   .card { border: 3px solid var(--purple); background: var(--panel); padding: 22px 18px; text-align: center; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 0 24px #b46cff44; }
-  .big { font-size: 34px; font-weight: 900; line-height: 1.1; }
+  .big { font-size: 34px; font-weight: 900; line-height: 1.1; overflow-wrap: anywhere; }
   .up { color: var(--green); } .down { color: var(--red); }
   .round { color: var(--dim); font-size: 14px; letter-spacing: 2px; }
   .call { font-size: 22px; font-weight: 900; color: #fff; letter-spacing: 1px; }
@@ -83,12 +132,14 @@ ${opts.body}
 </html>`;
 }
 
-function challengePage(round: string, side: 'up' | 'down' | null, ticker: string | null, url: string): string {
+function challengePage(c: Challenge, url: string): string {
+  const { round, side, ticker, name } = c;
   const other = side === 'up' ? 'down' : side === 'down' ? 'up' : null;
   const token = ticker ? `$${ticker}` : 'a fresh memecoin';
   const title = side ? `I'm ${side.toUpperCase()} on ${token}. Take the other side.` : `FlipTheMeme round #${round}`;
+  const who = escapeHtml((name ?? 'friend').toUpperCase());
   const headline = side
-    ? `<div class="big ${side}">FRIEND IS ${side.toUpperCase()} ${side === 'up' ? '&#9650;' : '&#9660;'}</div>
+    ? `<div class="big ${side}">${who} IS ${side.toUpperCase()} ${side === 'up' ? '&#9650;' : '&#9660;'}</div>
 <div class="call">ON ${escapeHtml(token.toUpperCase())}</div>
 <div class="big ${other}">CALL ${other!.toUpperCase()} ${other === 'up' ? '&#9650;' : '&#9660;'}</div>`
     : `<div class="big">PICK A SIDE</div><div class="call">UP &#9650; OR DOWN &#9660;</div>`;
@@ -98,21 +149,28 @@ function challengePage(round: string, side: 'up' | 'down' | null, ticker: string
     url,
     body: `<div class="card">
 ${headline}
-<div class="round">ROUND #${round}</div>
+<div class="round">ROUND #${escapeHtml(round)}</div>
 </div>
-<a class="btn go" href="${escapeHtml(appIntent(round))}">OPEN FLIPTHEMEME</a>
-<a class="btn get" href="/get">GET THE ANDROID APP</a>
-<p>A new round every minute on a busy fresh memecoin, so you can always catch the next one. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
+<a class="btn go" href="${escapeHtml(appIntent(c))}">OPEN FLIPTHEMEME</a>
+<a class="btn get" href="${escapeHtml(getLink(c))}">GET THE ANDROID APP</a>
+<p>No rush: rounds start every minute. Install the app, top up once and take the other side whenever you are ready. In the app your friend's face is marked RIVAL when you meet in a round. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
   });
 }
 
-function getPage(): string {
+/** How to install and play; with a challenge (r, side, t, by, n), a button that opens the app on it once installed. */
+function getPage(c: Challenge | null): string {
   return page({
     title: 'FlipTheMeme for Android',
     description: '60-second UP/DOWN calls on fresh Solana memecoins. Android app on Solana devnet.',
     url: `${ORIGIN}/get`,
     body: `<div class="card"><div class="big">60 SECONDS.<br>UP OR DOWN.</div><div class="round">FRESH SOLANA MEMECOINS</div></div>
-<a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>
+<a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>${
+      c
+        ? `
+<a class="btn get" href="${escapeHtml(appIntent(c))}">OPEN THE CHALLENGE</a>
+<p>After installing, come back here and tap it: the app opens on your friend's challenge.</p>`
+        : ''
+    }
 <ol>
 <li>Install the APK on an Android phone (built for Solana Seeker).</li>
 <li>Switch your wallet to Devnet: Seed Vault Wallet or Solflare, Settings, Network, Devnet.</li>
@@ -134,12 +192,12 @@ export function handle(request: Request): Response {
     });
   }
   const round = url.pathname.match(/^\/r\/(\d{1,20})\/?$/)?.[1];
-  if (round) {
-    const sideRaw = url.searchParams.get('side');
-    const side = sideRaw === 'up' || sideRaw === 'down' ? sideRaw : null;
-    return html(challengePage(round, side, cleanTicker(url.searchParams.get('t')), `${ORIGIN}/r/${round}`));
+  if (round) return html(challengePage(readChallenge(round, url.searchParams), `${ORIGIN}/r/${round}`));
+  if (url.pathname === '/get') {
+    const r = url.searchParams.get('r');
+    return html(getPage(r && /^\d{1,20}$/.test(r) ? readChallenge(r, url.searchParams) : null));
   }
-  if (url.pathname === '/get' || url.pathname === '/') return html(getPage());
+  if (url.pathname === '/') return html(getPage(null));
   return new Response(null, { status: 302, headers: { location: `${ORIGIN}/get` } });
 }
 

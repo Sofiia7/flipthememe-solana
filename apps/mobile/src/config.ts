@@ -1,5 +1,4 @@
 import { LAMPORTS_PER_SOL } from '@flipthememe/client';
-import { WEB_ROUND_LINK } from './lib/format';
 
 export const DEVNET_RPC = 'https://api.devnet.solana.com';
 /** Devnet endpoints in failover order: a phone whose DNS loses one host still reaches the other. */
@@ -28,6 +27,8 @@ export const POLL = {
   positionsMaxAgeMs: 120_000,
   /** A round the arena read this recently is taken from there instead of being read again for my account. */
   sharedRoundMs: 3_000,
+  /** The round of a friend's challenge, outside the arena window: read again this often until it is final. */
+  challengeRoundMs: 15_000,
   priceMs: 1_500,
   clockMs: 60_000,
   /** Data older than this shows the offline / stale banner. */
@@ -78,9 +79,3 @@ export const explorer = {
   /** Where traders look at a token: its PumpSwap pair on DexScreener. */
   dexscreener: (pool: string) => `https://dexscreener.com/solana/${pool}`,
 };
-
-/** Link to a round for messengers; a challenge also names the side and the token for the landing page. */
-export const roundLink = (roundId: bigint, challenge?: { side: string; token: string | null }) =>
-  `${WEB_ROUND_LINK}${roundId}${
-    challenge ? `?side=${challenge.side.toLowerCase()}${challenge.token ? `&t=${encodeURIComponent(challenge.token)}` : ''}` : ''
-  }`;

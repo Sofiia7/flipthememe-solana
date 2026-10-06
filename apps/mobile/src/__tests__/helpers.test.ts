@@ -59,10 +59,10 @@ test('countdown, short address and deep links', () => {
   assert.equal(formatCountdown(65), '1:05');
   assert.equal(formatCountdown(-3), '0:00');
   assert.equal(shortAddress('5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz'), '5kUC...WuCz');
-  assert.equal(parseRoundLink('flipthememe://round/123'), 123n);
-  assert.equal(parseRoundLink('flipthememe:///round/7?x=1'), 7n);
+  assert.equal(parseRoundLink('flipthememe://round/123')?.round, 123n);
+  assert.equal(parseRoundLink('flipthememe:///round/7?x=1')?.round, 7n);
   assert.equal(parseRoundLink('https://example.com/round/1'), null);
-  assert.equal(parseRoundLink('https://sol.flipthememe.com/r/496?side=up&t=Tesla'), 496n);
+  assert.equal(parseRoundLink('https://sol.flipthememe.com/r/496?side=up&t=Tesla')?.round, 496n);
   assert.equal(parseRoundLink('https://sol.flipthememe.com/r/'), null);
   assert.equal(parseRoundLink('https://evil.example/r/5?u=https://sol.flipthememe.com/r/5'), null);
   assert.equal(parseRoundLink(null), null);

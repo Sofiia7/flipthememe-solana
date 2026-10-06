@@ -3,7 +3,6 @@ import { Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Address } from '@solana/kit';
 import { RoundStatus, Side } from '@flipthememe/client';
-import { roundLink } from '../config';
 import { positionResult, roundResultLabel, type PositionResult, type ResultLabel } from '../chain/phase';
 import type { RoundView } from '../chain/fetch';
 import { devnetRpc, type SolanaRpc } from '../chain/rpc';
@@ -16,12 +15,13 @@ import { peekTokenInfo } from '../chain/useTokenInfo';
 import { faceToBytes, type Face } from '../face/faceModel';
 import { loadOrCreateFace, saveFace } from '../face/faceStore';
 import { humanError } from '../lib/errors';
-import { parseRoundLink, sol } from '../lib/format';
+import { parseRoundLink, roundLink, sol } from '../lib/format';
 import { clearPendingBet, loadPendingBet, type PendingBet } from '../session/pendingBet';
 import { loadOrCreateSessionKey, type SessionKey } from '../session/sessionKey';
 import { useBetting, type Betting } from '../session/useBetting';
 import { useWalletActions, type WalletActions } from '../wallet/useWalletActions';
 import { awaySummary, type AwayItem, type AwaySummary } from './away';
+import { challengeActive, createChallengeStore, type Challenge } from './challenge';
 import { HISTORY_CAP, createHistoryStore, mergeHistory, reconcileHistory, type HistoryEntry, type HistoryRecord } from './history';
 
 export { sessionStatusOf, type SessionStatus } from '../wallet/sessionList';
@@ -76,8 +76,9 @@ type AppValue = {
   finalSeenAt: (roundAddress: string) => number | null;
   tab: Tab;
   setTab: (tab: Tab) => void;
-  deepLinkRound: bigint | null;
-  clearDeepLink: () => void;
+  /** A friend's challenge from the last round link that opened the app: kept a week, until OK. */
+  challenge: Challenge | null;
+  clearChallenge: () => void;
   refreshAll: () => void;
 };
 
@@ -327,20 +328,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [away, owner, saveAck]);
   const finalSeenAt = useCallback((roundAddress: string) => finalSeen.current.get(roundAddress) ?? null, []);
 
-  const [deepLinkRound, setDeepLinkRound] = useState<bigint | null>(null);
+  // A round link that opens the app (at launch or later) becomes the challenge, replacing an older one.
+  // It is kept on the phone, so it outlives installing, connecting and topping up; OK clears it.
+  const [challenge, setChallenge] = useState<Challenge | null>(null);
+  // Once a link arrived or OK was tapped, the stored challenge read at start is out of date.
+  const challengeTouched = useRef(false);
   useEffect(() => {
+    challengeStore
+      .load(Date.now())
+      .then((stored) => {
+        if (stored && !challengeTouched.current) setChallenge(stored);
+      })
+      .catch(() => undefined);
     const handle = (url: string | null) => {
-      const id = parseRoundLink(url);
-      if (id !== null) {
-        setDeepLinkRound(id);
-        setTab('arena');
-      }
+      const link = parseRoundLink(url);
+      if (!link) return;
+      const next: Challenge = { ...link, at: Date.now() };
+      challengeTouched.current = true;
+      setChallenge(next);
+      setTab('arena');
+      void challengeStore.save(next).catch(() => undefined);
     };
-    Linking.getInitialURL().then(handle).catch(() => undefined);
+    // Android hands the launch link over again when it restores a killed app: one launch link
+    // counts once, so a challenge dismissed with OK does not come back by itself.
+    Linking.getInitialURL()
+      .then(async (url) => {
+        if (!url || (await AsyncStorage.getItem(LAUNCH_LINK_KEY).catch(() => null)) === url) return;
+        await AsyncStorage.setItem(LAUNCH_LINK_KEY, url).catch(() => undefined);
+        handle(url);
+      })
+      .catch(() => undefined);
     const subscription = Linking.addEventListener('url', ({ url }) => handle(url));
     return () => subscription.remove();
   }, []);
-  const clearDeepLink = useCallback(() => setDeepLinkRound(null), []);
+  const clearChallenge = useCallback(() => {
+    challengeTouched.current = true;
+    setChallenge(null);
+    void challengeStore.clear().catch(() => undefined);
+  }, []);
 
   const my = myReady ? myRaw : { ...myRaw, positions: [], vault: null, session: null, keyLamports: null, walletLamports: null };
   const chainPositions = myReady ? myRaw.positions : NO_POSITIONS;
@@ -373,8 +398,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     finalSeenAt,
     tab,
     setTab,
-    deepLinkRound,
-    clearDeepLink,
+    challenge: challenge && challengeActive(challenge, Date.now()) ? challenge : null,
+    clearChallenge,
     refreshAll,
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -384,6 +409,10 @@ const ackKey = (owner: string) => `ftm.resultsAck.v1.${owner}`;
 
 /** Finished rounds per wallet, on the phone (state/history.ts). */
 const historyStore = createHistoryStore(AsyncStorage);
+/** The friend's challenge from the last round link (state/challenge.ts). */
+const challengeStore = createChallengeStore(AsyncStorage);
+/** The last link that launched the app, so a restored app does not replay it. */
+const LAUNCH_LINK_KEY = 'ftm.launchLink.v1';
 const NO_POSITIONS: MyPosition[] = [];
 const NO_RECORDS: readonly HistoryRecord[] = [];
 /** How often a pending bet's signature is looked up. */

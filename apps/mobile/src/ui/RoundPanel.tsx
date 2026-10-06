@@ -27,17 +27,27 @@ export function Pulse({ color, size = 8 }: { color: string; size?: number }) {
   return <Animated.View style={{ width: size, height: size, backgroundColor: color, opacity: v }} />;
 }
 
-function sortPlayers(positions: readonly PositionView[], me: string | null): PositionView[] {
-  const rank = (p: PositionView) => (me !== null && p.account.authority === me && !p.account.isHouse ? 0 : p.account.isHouse ? 1 : 2);
+/** The friend whose challenge link opened the app, on their face in the round panels (YOU wins on my own face). */
+export function RivalTag() {
+  return <Text style={[styles.youTag, { backgroundColor: C.neonPink }]}>RIVAL</Text>;
+}
+
+function sortPlayers(positions: readonly PositionView[], me: string | null, rival: string | null): PositionView[] {
+  const rank = (p: PositionView) =>
+    p.account.isHouse ? 2 : me !== null && p.account.authority === me ? 0 : rival !== null && p.account.authority === rival ? 1 : 3;
   return [...positions].sort((a, b) => rank(a) - rank(b) || (a.account.stake > b.account.stake ? -1 : a.account.stake < b.account.stake ? 1 : 0));
 }
 
-/** One side of a round: total on top, then the players as pixel faces (mine first and bigger, the house as HOUSE). */
+/**
+ * One side of a round: total on top, then the players as pixel faces (mine first and bigger, then the
+ * rival of a challenge, the house as HOUSE).
+ */
 export function SideColumn({
   side,
   total,
   positions,
   me,
+  rival = null,
   myExpression,
   big = false,
 }: {
@@ -45,12 +55,14 @@ export function SideColumn({
   total: bigint;
   positions: readonly PositionView[];
   me: string | null;
+  /** Wallet of the friend whose challenge is open: their face gets the RIVAL tag. */
+  rival?: string | null;
   myExpression?: Expression;
   big?: boolean;
 }) {
   const up = side === Side.Up;
   const color = up ? C.neonGreen : C.neonRed;
-  const sorted = sortPlayers(positions, me);
+  const sorted = sortPlayers(positions, me, rival);
   const shown = sorted.slice(0, MAX_CHIPS);
   const more = sorted.length - shown.length;
   const hasMe = me !== null && positions.some((p) => p.account.authority === me && !p.account.isHouse);
@@ -87,6 +99,8 @@ export function SideColumn({
                 <Text style={[styles.youTag, { backgroundColor: color }]}>YOU</Text>
               ) : house ? (
                 <Text style={styles.houseTag}>HOUSE</Text>
+              ) : rival !== null && p.account.authority === rival ? (
+                <RivalTag />
               ) : names.get(p.account.authority) ? (
                 <Text style={styles.nickTag} numberOfLines={1}>
                   {names.get(p.account.authority)!.replace(/\.skr$/, '')}
@@ -120,6 +134,7 @@ export function MyRoundPanel({
   stage,
   standing,
   me,
+  rival = null,
 }: {
   round: RoundView;
   position: PositionView;
@@ -127,6 +142,7 @@ export function MyRoundPanel({
   stage: InFlightStage;
   standing: 'winning' | 'losing' | 'tie' | null;
   me: string;
+  rival?: string | null;
 }) {
   const a = round.account;
   // The arena window may not include this round's positions yet: my own one is always known.
@@ -149,8 +165,8 @@ export function MyRoundPanel({
         <StandingBadge stage={stage} standing={standing} />
       </View>
       <View style={styles.sides}>
-        <SideColumn side={Side.Up} total={a.rawUp} positions={ups} me={me} myExpression={expression} big />
-        <SideColumn side={Side.Down} total={a.rawDown} positions={downs} me={me} myExpression={expression} big />
+        <SideColumn side={Side.Up} total={a.rawUp} positions={ups} me={me} rival={rival} myExpression={expression} big />
+        <SideColumn side={Side.Down} total={a.rawDown} positions={downs} me={me} rival={rival} myExpression={expression} big />
       </View>
       {/* While the strike is being fixed the house may still fill the short side: wait until the book is final. */}
       {stage !== 'fixing' ? <MatchedLine rawUp={a.rawUp} rawDown={a.rawDown} minBank={a.minBank} side={position.account.side} stake={position.account.stake} /> : null}
@@ -189,11 +205,13 @@ export function OpenRoundPanel({
   round,
   positions,
   me,
+  rival = null,
   upcoming,
 }: {
   round: RoundView | null;
   positions: readonly PositionView[];
   me: string | null;
+  rival?: string | null;
   upcoming: boolean;
 }) {
   const ups = positions.filter((p) => p.account.side === Side.Up);
@@ -223,8 +241,8 @@ export function OpenRoundPanel({
         </View>
       ) : (
         <View style={styles.sides}>
-          <SideColumn side={Side.Up} total={round?.account.rawUp ?? 0n} positions={ups} me={me} />
-          <SideColumn side={Side.Down} total={round?.account.rawDown ?? 0n} positions={downs} me={me} />
+          <SideColumn side={Side.Up} total={round?.account.rawUp ?? 0n} positions={ups} me={me} rival={rival} />
+          <SideColumn side={Side.Down} total={round?.account.rawDown ?? 0n} positions={downs} me={me} rival={rival} />
         </View>
       )}
     </View>

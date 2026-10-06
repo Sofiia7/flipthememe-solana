@@ -1,5 +1,6 @@
 // Pure formatting helpers. No React Native imports: node tests load this file directly.
 // Money is always bigint lamports; nothing here turns lamports into a float.
+import { isAddress } from '@solana/kit';
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
 
@@ -158,15 +159,104 @@ export function poolAgeLabel(pairCreatedAtMs: number | null | undefined, nowMs: 
 /** Web link to a round: shared in messengers, opens the app through Android App Links. */
 export const WEB_ROUND_LINK = 'https://sol.flipthememe.com/r/';
 
-/** Round id from the app scheme (flipthememe://round/12) or the web link (https://sol.flipthememe.com/r/12). */
-export function parseRoundLink(url: string | null | undefined): bigint | null {
-  if (!url) return null;
-  const match =
-    url.match(/^flipthememe:\/\/+round\/(\d{1,20})(?:[/?#].*)?$/i) ?? url.match(/^https:\/\/sol\.flipthememe\.com\/r\/(\d{1,20})(?:[/?#].*)?$/i);
-  if (!match) return null;
-  try {
-    return BigInt(match[1]);
-  } catch {
-    return null;
+/**
+ * A round link as the app reads it. Everything but the round id comes from whoever made the link,
+ * so it is display text only: nothing in it ever places a bet or picks a side.
+ */
+export type RoundLink = {
+  round: bigint;
+  /** The side the inviter called. */
+  side: 'up' | 'down' | null;
+  ticker: string | null;
+  /** The inviter's wallet. */
+  by: string | null;
+  /** The inviter's display name (a Seeker ID such as oxbla.skr). */
+  name: string | null;
+};
+
+const U64_MAX = 18_446_744_073_709_551_615n;
+const ROUND_URL = /^(?:flipthememe:\/\/+round|https:\/\/sol\.flipthememe\.com\/r)\/(\d{1,20})(?:\/[^?#]*)?(?:\?([^#]*))?(?:#.*)?$/i;
+
+/** A round id from text: digits that fit the program's u64, else null. */
+export function cleanRoundId(raw: string | null | undefined): bigint | null {
+  if (!raw || !/^\d{1,20}$/.test(raw)) return null;
+  const id = BigInt(raw);
+  return id <= U64_MAX ? id : null;
+}
+
+/** A ticker from a link, cut to what a ticker can be: letters, digits, a few marks, 20 at most (as services/link). */
+export function cleanTicker(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const t = Array.from(raw.replace(/^\$+/, '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim()).slice(0, 20).join('');
+  return t || null;
+}
+
+/** A display name from a link: lowercase letters, digits, dots, hyphens and underscores, 32 at most; anything else is refused. */
+export function cleanName(raw: string | null | undefined): string | null {
+  const name = raw?.toLowerCase() ?? '';
+  return /^[a-z0-9._-]{1,32}$/.test(name) ? name : null;
+}
+
+/** A wallet address from a link: base58, 32-44 characters, exactly 32 bytes; anything else is refused. */
+export function cleanAddress(raw: string | null | undefined): string | null {
+  return raw && isAddress(raw) ? raw : null;
+}
+
+/** Query values by name; the first one wins (as URLSearchParams.get), one that does not decode counts as missing. */
+function queryValues(query: string): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const decode = (s: string) => {
+    try {
+      return decodeURIComponent(s.replace(/\+/g, ' '));
+    } catch {
+      return null;
+    }
+  };
+  for (const part of query.split('&')) {
+    const eq = part.indexOf('=');
+    const key = decode(eq < 0 ? part : part.slice(0, eq));
+    if (key === null || out.has(key)) continue;
+    out.set(key, decode(eq < 0 ? '' : part.slice(eq + 1)));
   }
+  return out;
+}
+
+/**
+ * The round link from the app scheme (flipthememe://round/12?side=up) or the web link
+ * (https://sol.flipthememe.com/r/12?side=up&t=WIF&by=<wallet>&n=oxbla.skr). Null for anything else.
+ * Query values that fail their check are dropped one by one, so an old or damaged link still opens its round.
+ */
+export function parseRoundLink(url: string | null | undefined): RoundLink | null {
+  const match = url?.match(ROUND_URL);
+  const round = cleanRoundId(match?.[1]);
+  if (!match || round === null) return null;
+  const query = queryValues(match[2] ?? '');
+  const side = query.get('side');
+  return {
+    round,
+    side: side === 'up' || side === 'down' ? side : null,
+    ticker: cleanTicker(query.get('t')),
+    by: cleanAddress(query.get('by')),
+    name: cleanName(query.get('n')),
+  };
+}
+
+/**
+ * Link to a round for messengers. A challenge also names the side, the token and the inviter (wallet and
+ * display name) for the landing page and the friend's app; values the reader would refuse are left out.
+ */
+export function roundLink(
+  roundId: bigint,
+  challenge?: { side: string; token: string | null; by?: string | null; name?: string | null },
+): string {
+  if (!challenge) return `${WEB_ROUND_LINK}${roundId}`;
+  const side = challenge.side.toLowerCase();
+  const pairs: [string, string | null][] = [
+    ['side', side === 'up' || side === 'down' ? side : null],
+    ['t', cleanTicker(challenge.token)],
+    ['by', cleanAddress(challenge.by)],
+    ['n', cleanName(challenge.name)],
+  ];
+  const query = pairs.flatMap(([key, value]) => (value === null ? [] : [`${key}=${encodeURIComponent(value)}`])).join('&');
+  return `${WEB_ROUND_LINK}${roundId}${query ? `?${query}` : ''}`;
 }
