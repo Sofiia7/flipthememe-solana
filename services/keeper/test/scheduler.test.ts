@@ -32,7 +32,7 @@ import { Scheduler } from '../src/scheduler.ts';
 import type { PoolSelector, Selection } from '../src/selector.ts';
 import { StateStore } from '../src/state.ts';
 import { fakeAttestor } from './fake-attestor.ts';
-import { FakeChain, SOL, makeConfig, makeRound, readAddress, readI64, readU32, readU64, type SentInstruction } from './fake-chain.ts';
+import { FAKE_POSITION_RENT, FakeChain, SOL, makeConfig, makeRound, readAddress, readI64, readU32, readU64, type SentInstruction } from './fake-chain.ts';
 
 const POOL = address('11111111111111111111111111111112');
 const MINT = address('11111111111111111111111111111113');
@@ -356,6 +356,24 @@ describe('scheduler: October 2026 upgrade', () => {
     assert.equal(readU64(only(yesterday).data, 8), 50_000_000n);
   });
 
+  test('house fill: the house vault must also cover the position rent, which the program takes from it', async () => {
+    const now = MINUTE + 30;
+    const tight = await harness();
+    // 0.05 SOL plus the rent, less one lamport: the fill is one lamport short of 0.05 SOL.
+    tight.chain.vault = { authority: tight.signer.address, available: 50_000_000n + FAKE_POSITION_RENT - 1n, locked: 0n, bump: 255 };
+    tight.chain.rounds.set(9n, lone(now));
+    await tick(tight, now);
+    assert.equal(readU64(only(tight).data, 8), 49_999_999n);
+    assert.equal(tight.scheduler.status().positionRent, FAKE_POSITION_RENT);
+
+    const empty = await harness();
+    empty.chain.vault = { authority: empty.signer.address, available: FAKE_POSITION_RENT, locked: 0n, bump: 255 };
+    empty.chain.rounds.set(9n, lone(now));
+    await tick(empty, now);
+    assert.equal(empty.chain.sent.length, 0);
+    assert.equal(empty.logs.find((l) => l.step === 'fill')?.skipped, 'vault');
+  });
+
   test('house fill: no HouseLimits account, no fill', async () => {
     const h = await harness();
     h.chain.houseLimits = null;
@@ -510,6 +528,11 @@ describe('scheduler: October 2026 upgrade', () => {
     assert.equal(h.chain.sent.length, 1);
     await tick(h, MINUTE + 21);
     assert.deepEqual(h.chain.sent.slice(1).map((tx) => tx.map((ix) => ix.name)), [['closePosition', 'closePosition']]);
-    assert.deepEqual(h.chain.sent[1]?.[0]?.accounts, [round5, await positionAddress(round5, owners[0] as Address), owners[0]]);
+    assert.deepEqual(h.chain.sent[1]?.[0]?.accounts, [
+      await configAddress(),
+      round5,
+      await positionAddress(round5, owners[0] as Address),
+      await vaultAddress(owners[0] as Address),
+    ]);
   });
 });

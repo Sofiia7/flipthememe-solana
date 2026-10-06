@@ -3,7 +3,7 @@
 
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::solana_program::instruction::Instruction;
-use anchor_lang::{system_program, AccountDeserialize, Event, InstructionData, ToAccountMetas};
+use anchor_lang::{system_program, AccountDeserialize, AccountSerialize, Event, InstructionData, Space, ToAccountMetas};
 use flip_the_meme::{
     accounts as acc, instruction as ixs, Config, ConfigParams, CreateRoundArgs, HouseLimits, OracleConfig, Outcome,
     Position, PositionClosed, PriceSample, RefundReason, Round, RoundStatus, Session, Side, Vault, ID,
@@ -73,6 +73,12 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// The build under test, `target/deploy/flip_the_meme.so`.
+fn program() -> Vec<u8> {
+    let so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/flip_the_meme.so");
+    std::fs::read(&so).expect("build the program first: cargo build-sbf")
+}
+
 fn ix(accounts: impl ToAccountMetas, data: impl InstructionData) -> Instruction {
     Instruction {
         program_id: ID,
@@ -85,7 +91,12 @@ impl Env {
     /// Config and the funded house vault, with roomy house limits and an oracle that requires no
     /// attestor (what the devnet deployment starts with after the upgrade).
     fn new() -> Self {
-        let mut env = Self::bare();
+        Self::new_with(&program())
+    }
+
+    /// `new` on another build of the program, for example the one live on devnet.
+    fn new_with(program: &[u8]) -> Self {
+        let mut env = Self::bare_with(program);
         let admin = env.admin.insecure_clone();
         env.init_house_limits(&admin, SOL, 5 * SOL).unwrap();
         env.init_oracle(&admin, Pubkey::default(), false).unwrap();
@@ -94,10 +105,12 @@ impl Env {
 
     /// Config and the house vault only: no HouseLimits, no OracleConfig.
     fn bare() -> Self {
+        Self::bare_with(&program())
+    }
+
+    fn bare_with(program: &[u8]) -> Self {
         let mut svm = LiteSVM::new();
-        let so = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/deploy/flip_the_meme.so");
-        let bytes = std::fs::read(&so).expect("build the program first: cargo build-sbf");
-        let _ = svm.add_program(ID, &bytes);
+        svm.add_program(ID, program).unwrap();
         let admin = Keypair::new();
         let treasury = Keypair::new();
         svm.airdrop(&admin.pubkey(), 100 * SOL).unwrap();
@@ -197,13 +210,65 @@ impl Env {
         self.send(vec![i], &admin, &[&admin, attestor])
     }
 
-    /// Anyone may close a position; a stranger pays the fee so the owner's balance shows the rent alone.
+    /// Anyone may close a position; a stranger pays the fee, so no wallet of the owner moves.
     fn close_position(&mut self, id: u64, owner: &Pubkey) -> Result<Vec<String>, String> {
         let round = round_pda(id);
-        let i = ix(acc::ClosePosition { round, position: position_pda(&round, owner), authority: *owner }, ixs::ClosePosition {});
+        let i = ix(
+            acc::ClosePosition { config: config_pda(), round, position: position_pda(&round, owner), vault: vault_pda(owner) },
+            ixs::ClosePosition {},
+        );
         let stranger = Keypair::new();
         self.svm.airdrop(&stranger.pubkey(), SOL).unwrap();
         self.send_logs(vec![i], &stranger, &[&stranger])
+    }
+
+    fn withdraw(&mut self, owner: &Keypair, amount: u64) -> Result<(), String> {
+        let i = ix(
+            acc::Withdraw { config: config_pda(), vault: vault_pda(&owner.pubkey()), authority: owner.pubkey() },
+            ixs::Withdraw { amount },
+        );
+        self.send(vec![i], owner, &[owner])
+    }
+
+    /// What a position account costs; since this upgrade the owner's vault pays it.
+    fn position_rent(&self) -> u64 {
+        self.svm.minimum_balance_for_rent_exemption(8 + Position::INIT_SPACE)
+    }
+
+    /// Config holds exactly its own rent, every lamport the vaults count, and the fees of rounds
+    /// that are fully claimed but not swept. Exact, so a lamport moved without its booking shows.
+    fn assert_books(&self, rounds: &[u64]) {
+        let c: Config = self.read(&config_pda());
+        let reserve = self.svm.minimum_balance_for_rent_exemption(8 + Config::INIT_SPACE);
+        let mut fees = 0;
+        for &id in rounds {
+            let r = self.round(id);
+            assert!(r.claimed_count == 0 || r.claimed_count == r.position_count, "round {id} is claimed only in part");
+            if r.claimed_count > 0 && !r.fees_swept {
+                fees += r.raw_up + r.raw_down - r.total_paid;
+            }
+        }
+        assert_eq!(self.lamports(&config_pda()), reserve + c.total_available + c.total_locked + fees, "Config books");
+    }
+
+    /// Rewrites the books as the October program left them for a position it opened: the device
+    /// or house key paid the rent, so neither the owner's vault nor Config was charged.
+    fn as_if_a_key_paid_the_rent(&mut self, owner: &Pubkey) {
+        let rent = self.position_rent();
+        let mut vault: Vault = self.read(&vault_pda(owner));
+        vault.available += rent;
+        self.write(&vault_pda(owner), &vault, 0);
+        let mut config: Config = self.read(&config_pda());
+        config.total_available += rent;
+        self.write(&config_pda(), &config, rent);
+    }
+
+    fn write<T: AccountSerialize>(&mut self, key: &Pubkey, value: &T, add_lamports: u64) {
+        let mut account = self.svm.get_account(key).expect("account exists");
+        account.data.clear();
+        value.try_serialize(&mut account.data).unwrap();
+        account.lamports += add_lamports;
+        self.svm.set_account(*key, account).unwrap();
     }
 
     fn house_limits(&self) -> HouseLimits {
@@ -399,19 +464,23 @@ fn full_round_up_returns_surplus_and_pays_1_96() {
     for p in [&a, &b, &c] {
         env.claim(0, &p.owner.pubkey()).unwrap();
     }
-    // A: 0.015 of 0.06 played (0.02 * 0.06 / 0.08), 0.045 back, 0.015 * 1.96 won.
-    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 6 * CSOL + 4_500_000 * 10 + 15_000_000 * 196 / 100);
-    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - 2 * CSOL + 15_000_000 + 5_000_000 * 196 / 100);
-    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 2 * CSOL);
+    // A: 0.015 of 0.06 played (0.02 * 0.06 / 0.08), 0.045 back, 0.015 * 1.96 won. Every vault
+    // also paid its position's rent, which comes back when the position is closed.
+    let rent = env.position_rent();
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 6 * CSOL + 4_500_000 * 10 + 15_000_000 * 196 / 100 - rent);
+    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - 2 * CSOL + 15_000_000 + 5_000_000 * 196 / 100 - rent);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 2 * CSOL - rent);
     for p in [&a, &b, &c] {
         assert_eq!(env.vault(&p.owner.pubkey()).locked, 0);
     }
 
     let before = env.lamports(&env.treasury.pubkey());
+    env.assert_books(&[0]);
     env.sweep(0).unwrap();
     // 2% of the accepted bank 0.04.
     assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 4 * CSOL * 2 / 100);
     assert_err(env.sweep(0), "NotSweepable");
+    env.assert_books(&[0]);
 }
 
 #[test]
@@ -439,8 +508,9 @@ fn house_fills_a_lone_player_and_the_round_plays() {
     env.price_round(0, 1_000, 900);
     env.claim(0, &a.owner.pubkey()).unwrap();
     env.claim(0, &admin.pubkey()).unwrap();
-    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL);
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL - env.position_rent());
     assert_eq!(env.vault(&admin.pubkey()).available, house_before + 5 * CSOL * 196 / 100);
+    env.assert_books(&[0]);
 }
 
 #[test]
@@ -465,8 +535,9 @@ fn unmatched_round_is_not_activated_and_returns_everything() {
     env.set_strike(0, &admin, vec![]).unwrap();
     assert_eq!(env.round(0).outcome, Outcome::NotActivated);
     env.claim(0, &a.owner.pubkey()).unwrap();
+    // The whole stake is back; the position rent returns when the position is closed.
     let v = env.vault(&a.owner.pubkey());
-    assert_eq!((v.available, v.locked), (SOL, 0));
+    assert_eq!((v.available, v.locked), (SOL - env.position_rent(), 0));
     env.sweep(0).unwrap();
 }
 
@@ -482,7 +553,7 @@ fn tie_refunds_minus_one_percent() {
     assert_eq!((r.outcome, r.refund_reason), (Outcome::Refund, RefundReason::Tie));
     env.claim(0, &a.owner.pubkey()).unwrap();
     env.claim(0, &b.owner.pubkey()).unwrap();
-    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100);
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100 - env.position_rent());
     let before = env.lamports(&env.treasury.pubkey());
     env.sweep(0).unwrap();
     assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 10 * CSOL / 100);
@@ -543,7 +614,7 @@ fn expired_round_refunds_through_anyone() {
     let admin = env.admin.insecure_clone();
     assert_err(env.set_strike(0, &admin, samples(1, &[1_000; 6])), "NotDue");
     env.claim(0, &b.owner.pubkey()).unwrap();
-    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100 - env.position_rent());
 }
 
 #[test]
@@ -663,16 +734,12 @@ fn locked_stake_cannot_be_withdrawn() {
     env.create_round(0, T0, SOL).unwrap();
     env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
     let owner = a.owner.insecure_clone();
-    let withdraw = |amount| {
-        ix(
-            acc::Withdraw { config: config_pda(), vault: vault_pda(&owner.pubkey()), authority: owner.pubkey() },
-            ixs::Withdraw { amount },
-        )
-    };
-    assert_err(env.send(vec![withdraw(6 * CSOL)], &owner, &[&owner]), "InsufficientAvailable");
+    // Locked: the stake. Spent until the position closes: its rent. The rest can leave.
+    let free = 5 * CSOL - env.position_rent();
+    assert_err(env.withdraw(&owner, free + 1), "InsufficientAvailable");
     let before = env.lamports(&owner.pubkey());
-    env.send(vec![withdraw(5 * CSOL)], &owner, &[&owner]).unwrap();
-    assert_eq!(env.lamports(&owner.pubkey()), before + 5 * CSOL - 5_000);
+    env.withdraw(&owner, free).unwrap();
+    assert_eq!(env.lamports(&owner.pubkey()), before + free - 5_000);
 }
 
 #[test]
@@ -688,7 +755,7 @@ fn pause_stops_new_bets_but_not_payouts() {
     assert_err(env.bet(0, &c, Side::Up, CSOL), "Paused");
     env.price_round(0, 1_000, 900);
     env.claim(0, &b.owner.pubkey()).unwrap();
-    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100 - env.position_rent());
 }
 
 #[test]
@@ -763,12 +830,146 @@ fn config_update_applies_to_new_rounds_only() {
     );
 }
 
+/// Closed: no lamports, no data, owned by the System Program (or gone from the ledger entirely).
+fn assert_closed(env: &Env, key: &Pubkey) {
+    if let Some(account) = env.svm.get_account(key) {
+        assert_eq!((account.lamports, account.data.len(), account.owner), (0, 0, system_program::ID));
+    }
+}
+
 #[test]
-fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_to_the_owner() {
+fn a_bet_takes_the_position_rent_from_the_vault_and_the_device_key_pays_only_the_fee() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    let owner = a.owner.pubkey();
+    let (key_before, config_lamports) = (env.lamports(&a.key.pubkey()), env.lamports(&config_pda()));
+    let before: Config = env.read(&config_pda());
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+
+    let v = env.vault(&owner);
+    assert_eq!((v.available, v.locked), (SOL - 5 * CSOL - rent, 5 * CSOL));
+    let c: Config = env.read(&config_pda());
+    assert_eq!((c.total_available, c.total_locked), (before.total_available - 5 * CSOL - rent, before.total_locked + 5 * CSOL));
+    // Exactly the rent left Config, into the position; the device key paid the signature fee alone.
+    let position = position_pda(&round_pda(0), &owner);
+    assert_eq!((env.lamports(&config_pda()), env.lamports(&position)), (config_lamports - rent, rent));
+    assert_eq!(env.lamports(&a.key.pubkey()), key_before - 5_000);
+    let p: Position = env.read(&position);
+    assert_eq!((p.round, p.authority, p.side, p.stake, p.face), (round_pda(0), owner, Side::Up, 5 * CSOL, [1, 2, 3, 4, 5, 0, 0, 0]));
+    assert_eq!((p.is_house, p.claimed, p.payout), (false, false, 0));
+    assert_eq!(env.svm.get_account(&position).unwrap().owner, ID);
+    // The session budget counts the stake, never the rent.
+    let s: Session = env.read(&session_pda(&vault_pda(&owner), &a.key.pubkey()));
+    assert_eq!(s.spent, 5 * CSOL);
+    env.assert_books(&[0]);
+
+    // Stake plus rent must be available.
+    let b = env.player(2 * CSOL + rent - 1);
+    assert_err(env.bet(0, &b, Side::Down, 2 * CSOL), "InsufficientAvailable");
+    env.bet(0, &b, Side::Down, 2 * CSOL - 1).unwrap();
+    assert_eq!(env.vault(&b.owner.pubkey()).available, 0);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn a_house_fill_takes_the_position_rent_from_the_house_vault() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    env.create_round(1, T0 + 60, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    let house = env.vault(&admin.pubkey());
+    let (wallet, config_lamports) = (env.lamports(&admin.pubkey()), env.lamports(&config_pda()));
+    env.house_fill(0, &admin, 5 * CSOL).unwrap();
+    let after = env.vault(&admin.pubkey());
+    assert_eq!((after.available, after.locked), (house.available - 5 * CSOL - rent, house.locked + 5 * CSOL));
+    // The house key signed and, as fee payer here, paid the fee alone; the caps count the stake.
+    assert_eq!(env.lamports(&admin.pubkey()), wallet - 5_000);
+    assert_eq!(env.lamports(&config_pda()), config_lamports - rent);
+    assert_eq!(env.house_limits().spent, 5 * CSOL);
+    env.assert_books(&[0, 1]);
+
+    // A house vault without stake plus rent cannot fill.
+    env.bet(1, &b, Side::Up, 5 * CSOL).unwrap();
+    env.warp(T0 + 120);
+    let keep = 5 * CSOL + rent - 1;
+    let available = env.vault(&admin.pubkey()).available;
+    env.withdraw(&admin, available - keep).unwrap();
+    assert_err(env.house_fill(1, &admin, 5 * CSOL), "InsufficientAvailable");
+    env.house_fill(1, &admin, 5 * CSOL - 1).unwrap();
+    assert_eq!(env.vault(&admin.pubkey()).available, 0);
+    env.assert_books(&[0, 1]);
+}
+
+#[test]
+fn a_pre_funded_position_address_takes_only_what_it_lacks() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    let (a_position, b_position) = (position_pda(&round_pda(0), &a.owner.pubkey()), position_pda(&round_pda(0), &b.owner.pubkey()));
+    // Anyone can send lamports to an address: part of the rent to one, twice the rent to the other.
+    let gift = 1_000_000;
+    assert!(gift < rent);
+    env.svm.airdrop(&a_position, gift).unwrap();
+    env.svm.airdrop(&b_position, 2 * rent).unwrap();
+    let config_lamports = env.lamports(&config_pda());
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    // Only the missing part moved, and only that was charged.
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL - (rent - gift));
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL);
+    assert_eq!((env.lamports(&a_position), env.lamports(&b_position)), (rent, 2 * rent));
+    assert_eq!(env.lamports(&config_pda()), config_lamports - (rent - gift));
+    assert_eq!(env.read::<Position>(&b_position).stake, 5 * CSOL);
+    env.assert_books(&[0]);
+
+    // Closing hands every lamport of the position to its owner's vault, the gift included.
+    env.price_round(0, 1_000, 1_100);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.claim(0, &b.owner.pubkey()).unwrap();
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    env.close_position(0, &a.owner.pubkey()).unwrap();
+    env.close_position(0, &b.owner.pubkey()).unwrap();
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100 + gift);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 2 * rent);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn an_existing_position_cannot_be_created_again() {
+    let mut env = Env::new();
+    let a = env.player(SOL);
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 2 * CSOL).unwrap();
+    let position = position_pda(&round_pda(0), &a.owner.pubkey());
+    let (vault, config_lamports, data) = (env.vault(&a.owner.pubkey()), env.lamports(&config_pda()), env.svm.get_account(&position).unwrap().data);
+    // Same key, or another session key of the same owner: the position address is the same.
+    assert_err(env.bet(0, &a, Side::Down, 2 * CSOL), "already in use");
+    let other = Keypair::new();
+    env.svm.airdrop(&other.pubkey(), SOL).unwrap();
+    env.start_session(&a.owner, &other, T0 + 3_600, 10 * CSOL, SOL).unwrap();
+    let again = Player { owner: a.owner.insecure_clone(), key: other };
+    assert_err(env.bet(0, &again, Side::Down, 2 * CSOL), "already in use");
+    // Nothing moved.
+    assert_eq!(env.vault(&a.owner.pubkey()).available, vault.available);
+    assert_eq!(env.lamports(&config_pda()), config_lamports);
+    assert_eq!(env.svm.get_account(&position).unwrap().data, data);
+    assert_eq!(env.round(0).position_count, 1);
+}
+
+#[test]
+fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_back_into_the_vault() {
     let mut env = Env::new();
     let a = env.player(SOL);
     let admin = env.admin.insecure_clone();
     let owner = a.owner.pubkey();
+    let rent = env.position_rent();
     env.create_round(0, T0, SOL).unwrap();
     env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
     env.warp(T0 + 60);
@@ -790,33 +991,37 @@ fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_to_
 
     env.warp(r.exit_end + POSITION_CLOSE_DELAY_SECS);
     let position = position_pda(&round_pda(0), &owner);
-    let rent = env.lamports(&position);
-    let (owner_before, key_before) = (env.lamports(&owner), env.lamports(&a.key.pubkey()));
-    let vault_before = env.vault(&owner);
+    let (wallet, key, config_lamports) = (env.lamports(&owner), env.lamports(&a.key.pubkey()), env.lamports(&config_pda()));
+    let (vault_before, books): (Vault, Config) = (env.vault(&owner), env.read(&config_pda()));
     let logs = env.close_position(0, &owner).unwrap();
-    // The session key paid the rent; it goes back to the owner's wallet.
-    assert_eq!(env.lamports(&owner), owner_before + rent);
-    assert_eq!(env.lamports(&a.key.pubkey()), key_before);
-    assert_eq!(env.lamports(&position), 0);
+    // The rent is available in the vault again; no wallet moved (a stranger paid the fee).
+    let v = env.vault(&owner);
+    assert_eq!((v.available, v.locked), (vault_before.available + rent, vault_before.locked));
+    assert_eq!(v.available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100);
+    let c: Config = env.read(&config_pda());
+    assert_eq!((c.total_available, c.total_locked), (books.total_available + rent, books.total_locked));
+    assert_eq!(env.lamports(&config_pda()), config_lamports + rent);
+    assert_eq!((env.lamports(&owner), env.lamports(&a.key.pubkey())), (wallet, key));
+    assert_closed(&env, &position);
     let event = PositionClosed { round_id: 0, authority: owner, is_house: false, lamports: rent };
     assert!(logs.contains(&format!("Program data: {}", base64(&event.data()))), "{logs:?}");
+    env.assert_books(&[0]);
 
     // Gone for good: no second close, no second claim, and no bet can create it again.
     assert_err(env.close_position(0, &owner), "AccountNotInitialized");
     assert_err(env.claim(0, &owner), "AccountNotInitialized");
     assert_err(env.bet(0, &a, Side::Up, 5 * CSOL), "RoundNotOpen");
-    assert_eq!(env.lamports(&position), 0);
-    let v = env.vault(&owner);
-    assert_eq!((v.available, v.locked), (vault_before.available, vault_before.locked));
+    assert_closed(&env, &position);
+    assert_eq!(env.vault(&owner).available, v.available);
 
-    // The house position closes the same way, and the house cannot fill the final round again.
-    let house_position = position_pda(&round_pda(0), &admin.pubkey());
-    let house_rent = env.lamports(&house_position);
-    let admin_before = env.lamports(&admin.pubkey());
+    // The house position closes into the house vault, and the house cannot fill the final round again.
+    let house_vault = env.vault(&admin.pubkey()).available;
+    let admin_wallet = env.lamports(&admin.pubkey());
     env.close_position(0, &admin.pubkey()).unwrap();
-    assert_eq!(env.lamports(&admin.pubkey()), admin_before + house_rent);
+    assert_eq!(env.vault(&admin.pubkey()).available, house_vault + rent);
+    assert_eq!(env.lamports(&admin.pubkey()), admin_wallet);
     assert_err(env.house_fill(0, &admin, CSOL), "NotFillWindow");
-    assert_eq!(env.lamports(&house_position), 0);
+    assert_closed(&env, &position_pda(&round_pda(0), &admin.pubkey()));
 
     // The round keeps its counts, so the fee sweep still works with every position closed.
     let r = env.round(0);
@@ -824,10 +1029,36 @@ fn a_claimed_position_closes_an_hour_after_the_exit_window_and_its_rent_goes_to_
     let before = env.lamports(&env.treasury.pubkey());
     env.sweep(0).unwrap();
     assert_eq!(env.lamports(&env.treasury.pubkey()) - before, 10 * CSOL * 2 / 100);
+    env.assert_books(&[0]);
 }
 
 #[test]
-fn closing_needs_the_owner_wallet_and_the_round_of_the_position() {
+fn a_position_from_before_the_upgrade_closes_into_the_vault_too() {
+    let mut env = Env::new();
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 5 * CSOL).unwrap();
+    // As the October program left them: same account bytes, but the device keys paid the rent.
+    env.as_if_a_key_paid_the_rent(&a.owner.pubkey());
+    env.as_if_a_key_paid_the_rent(&b.owner.pubkey());
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL);
+    env.assert_books(&[0]);
+    env.price_round(0, 1_000, 900);
+    env.claim(0, &a.owner.pubkey()).unwrap();
+    env.claim(0, &b.owner.pubkey()).unwrap();
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    env.close_position(0, &a.owner.pubkey()).unwrap();
+    env.close_position(0, &b.owner.pubkey()).unwrap();
+    // The rent a device key paid lands in the game balance, which is intended.
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL + rent);
+    assert_eq!(env.vault(&b.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100 + rent);
+    env.assert_books(&[0]);
+}
+
+#[test]
+fn closing_needs_the_owners_vault_and_the_round_of_the_position() {
     let mut env = Env::new();
     let (a, b) = (env.player(SOL), env.player(SOL));
     env.create_round(0, T0, SOL).unwrap();
@@ -842,15 +1073,15 @@ fn closing_needs_the_owner_wallet_and_the_round_of_the_position() {
     env.svm.airdrop(&anyone.pubkey(), SOL).unwrap();
     let round = round_pda(0);
     let a_position = position_pda(&round, &a.owner.pubkey());
-    // The rent cannot be sent to another wallet.
-    let elsewhere = ix(acc::ClosePosition { round, position: a_position, authority: b.owner.pubkey() }, ixs::ClosePosition {});
-    assert_err(env.send(vec![elsewhere], &anyone, &[&anyone]), "Unauthorized");
+    let close = |round, vault| ix(acc::ClosePosition { config: config_pda(), round, position: a_position, vault }, ixs::ClosePosition {});
+    // The rent cannot go into another player's vault.
+    assert_err(env.send(vec![close(round, vault_pda(&b.owner.pubkey()))], &anyone, &[&anyone]), "ConstraintSeeds");
     // Nor can another round (here an open one) stand in for the position's own final round.
-    let other_round = ix(acc::ClosePosition { round: round_pda(1), position: a_position, authority: a.owner.pubkey() }, ixs::ClosePosition {});
-    assert_err(env.send(vec![other_round], &anyone, &[&anyone]), "ConstraintSeeds");
+    assert_err(env.send(vec![close(round_pda(1), vault_pda(&a.owner.pubkey()))], &anyone, &[&anyone]), "ConstraintSeeds");
     assert!(env.lamports(&a_position) > 0);
     env.close_position(0, &a.owner.pubkey()).unwrap();
     env.close_position(0, &b.owner.pubkey()).unwrap();
+    env.assert_books(&[0]);
 }
 
 #[test]
@@ -877,14 +1108,16 @@ fn refunded_positions_are_claimed_like_any_other_and_close_the_same_way() {
     // A refund is paid by claim like a win, and only claim sets the flag: unpaid, it stays.
     env.warp(r1.exit_end + POSITION_CLOSE_DELAY_SECS);
     assert_err(env.close_position(1, &b.owner.pubkey()), "NotClaimed");
+    let rent = env.position_rent();
     for (id, p) in [(0, &a), (1, &b), (1, &c)] {
         env.claim(id, &p.owner.pubkey()).unwrap();
-        let before = env.lamports(&p.owner.pubkey());
-        let rent = env.lamports(&position_pda(&round_pda(id), &p.owner.pubkey()));
+        let before = env.vault(&p.owner.pubkey()).available;
         env.close_position(id, &p.owner.pubkey()).unwrap();
-        assert_eq!(env.lamports(&p.owner.pubkey()), before + rent);
+        assert_eq!(env.vault(&p.owner.pubkey()).available, before + rent);
     }
+    // The lone bet is back in full, rent included.
     assert_eq!(env.vault(&a.owner.pubkey()).available, SOL);
+    env.assert_books(&[0, 1]);
 }
 
 #[test]
@@ -1106,8 +1339,56 @@ fn an_attestor_outage_ends_in_the_normal_refund_and_unmatched_rounds_need_no_att
     assert_eq!((env.round(0).outcome, env.round(0).refund_reason), (Outcome::Refund, RefundReason::Expired));
     for p in [&a, &b] {
         env.claim(0, &p.owner.pubkey()).unwrap();
-        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100);
+        assert_eq!(env.vault(&p.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 99 / 100 - env.position_rent());
     }
     env.claim(1, &c.owner.pubkey()).unwrap();
-    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL);
+    assert_eq!(env.vault(&c.owner.pubkey()).available, SOL - env.position_rent());
+}
+
+/// The live program's own positions under this build. Needs the program as it runs on devnet:
+///   solana program dump 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz <file> --url devnet
+///   FTM_LIVE_SO=<file> cargo test --manifest-path programs/flip-the-meme/Cargo.toml --test flow -- --ignored
+#[test]
+#[ignore = "needs FTM_LIVE_SO, a dump of the program live on devnet"]
+fn positions_opened_by_the_live_program_close_into_the_vault_after_the_upgrade() {
+    let live = std::fs::read(std::env::var("FTM_LIVE_SO").expect("FTM_LIVE_SO")).expect("read FTM_LIVE_SO");
+    let mut env = Env::new_with(&live);
+    let (a, b) = (env.player(SOL), env.player(SOL));
+    let admin = env.admin.insecure_clone();
+    let rent = env.position_rent();
+    env.create_round(0, T0, SOL).unwrap();
+    let key = env.lamports(&a.key.pubkey());
+    env.bet(0, &a, Side::Up, 5 * CSOL).unwrap();
+    env.bet(0, &b, Side::Down, 3 * CSOL).unwrap();
+    env.warp(T0 + 60);
+    env.house_fill(0, &admin, 2 * CSOL).unwrap();
+    // The live program: the device key paid the rent, the vault only the stake.
+    assert_eq!(env.lamports(&a.key.pubkey()), key - 5_000 - rent);
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL);
+    env.assert_books(&[0]);
+
+    // Upgrade in the middle of the round, as on devnet; the rest runs on this build.
+    env.svm.add_program(ID, &program()).unwrap();
+    env.price_round(0, 1_000, 1_100);
+    for owner in [a.owner.pubkey(), b.owner.pubkey(), admin.pubkey()] {
+        env.claim(0, &owner).unwrap();
+    }
+    env.warp(env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS);
+    let house = env.vault(&admin.pubkey()).available;
+    for owner in [a.owner.pubkey(), b.owner.pubkey(), admin.pubkey()] {
+        env.close_position(0, &owner).unwrap();
+        assert_closed(&env, &position_pda(&round_pda(0), &owner));
+    }
+    assert_eq!(env.vault(&a.owner.pubkey()).available, SOL - 5 * CSOL + 5 * CSOL * 196 / 100 + rent);
+    assert_eq!(env.vault(&admin.pubkey()).available, house + rent);
+    env.assert_books(&[0]);
+    // A new bet on this build: the rent comes out of the vault.
+    env.create_round(1, env.round(0).exit_end + POSITION_CLOSE_DELAY_SECS + 10, SOL).unwrap();
+    let r1 = env.round(1);
+    env.warp(r1.opens_at);
+    env.start_session(&a.owner, &a.key, r1.opens_at + 3_600, 10 * CSOL, SOL).unwrap();
+    let before = env.vault(&a.owner.pubkey()).available;
+    env.bet(1, &a, Side::Up, CSOL).unwrap();
+    assert_eq!(env.vault(&a.owner.pubkey()).available, before - CSOL - rent);
+    env.assert_books(&[0, 1]);
 }

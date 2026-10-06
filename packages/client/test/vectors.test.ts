@@ -81,9 +81,11 @@ test('instruction data matches the program', async () => {
 
 test('account order and roles match the program (instructions added or changed in October 2026)', async () => {
   // Same keys as vectors.rs: admin 9, house 2, price authority 1, attestor 6, attestor in office 8,
-  // position owner 10, round 42.
+  // position owner 10, session key 7, round 42.
   const built: Record<string, Instruction> = {
     closePosition: await ix.closePosition({ roundId: 42n, owner: key(10) }),
+    // The program must keep accepting exactly what apps already on phones send.
+    placeBet: await ix.placeBet({ owner: key(10), sessionSigner: key(7), roundId: 42n, side: Side.Up, amount: 1n, face: new Uint8Array(8) }),
     initHouseLimits: await ix.initHouseLimits({ admin: key(9), roundCap: 1n, dailyCap: 2n }),
     updateHouseLimits: await ix.updateHouseLimits({ admin: key(9), roundCap: 1n, dailyCap: 2n }),
     initOracle: await ix.initOracle({ admin: key(9), attestor: key(6), required: false }),

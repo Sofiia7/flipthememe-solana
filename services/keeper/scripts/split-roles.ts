@@ -5,12 +5,14 @@
  * the role where it is. The keeper key stays admin and fee payer. One transaction, so it lands
  * whole or not at all (src/plans.ts, planRoleSplit):
  *   withdraw    the free house money from the keeper's house vault       (keeper key signs)
- *   transfer    it, the new vault's rent and a position-rent reserve      (keeper key signs)
+ *   transfer    it and the new vault's rent                               (keeper key signs)
  *   open_vault  and deposit for the new house key                         (house key signs)
  *   update_config with the new price authority, house authority and treasury, all else unchanged
  *
- *   node services/keeper/scripts/split-roles.ts [--amount <lamports>] [--house-rent-reserve <lamports>] [--execute]
+ *   node services/keeper/scripts/split-roles.ts [--amount <lamports>] [--execute]
  *
+ * The house wallet needs no SOL of its own afterwards: position rent comes out of the house vault
+ * and the keeper pays every fee.
  * Run it while betting is paused and no round is in flight, then start the keeper with the same
  * PRICE_KEYPAIR and HOUSE_KEYPAIR; without them it skips strikes and fills (keeper_not_*_authority).
  * Env: DEVNET_RPC, KEEPER_KEYPAIR, PRICE_KEYPAIR, HOUSE_KEYPAIR, TREASURY (see src/config.ts).
@@ -34,8 +36,6 @@ import { hostOf } from '../src/log.ts';
 import { argValue, lamportsArg, planRoleSplit, type SplitStep } from '../src/plans.ts';
 import { makeRpc } from '../src/rpc.ts';
 
-/** About 200 house positions at 0.00116 SOL each: the keeper closes them a day after their round. */
-const DEFAULT_RENT_RESERVE = 250_000_000n;
 const FEE_RESERVE = 50_000_000n;
 
 const sol = (lamports: bigint): string => `${lamports / 1_000_000_000n}.${(lamports % 1_000_000_000n).toString().padStart(9, '0')} SOL`;
@@ -45,7 +45,7 @@ function describe(step: SplitStep): string {
     case 'withdraw':
       return `withdraw ${sol(step.lamports)} from the house vault of ${step.vaultOwner} to that wallet`;
     case 'transfer':
-      return `transfer ${sol(step.lamports)} from ${step.from} to ${step.to} (deposit ${sol(step.deposit)} + vault rent ${sol(step.vaultRent)} + position-rent reserve ${sol(step.rentTopUp)})`;
+      return `transfer ${sol(step.lamports)} from ${step.from} to ${step.to} (deposit ${sol(step.deposit)} + vault rent ${sol(step.vaultRent)})`;
     case 'open-vault':
       return `open_vault for ${step.owner} (rent ${sol(step.rent)}, paid by ${step.owner})`;
     case 'deposit':
@@ -68,9 +68,8 @@ async function main(): Promise<void> {
   if (!config) throw new Error('Config does not exist on this cluster');
   const house = roles.house.address;
   const treasury = cfg.treasury ?? config.treasury;
-  const [keeperLamports, newHouseLamports, oldVault, newVault, vaultRent] = await Promise.all([
+  const [keeperLamports, oldVault, newVault, vaultRent] = await Promise.all([
     rpc.getBalance(keeper.address, { commitment: 'confirmed' }).send().then((r) => r.value),
-    rpc.getBalance(house, { commitment: 'confirmed' }).send().then((r) => r.value),
     vaultAddress(config.houseAuthority).then((v) => readAccount(rpc, v, decodeVault)),
     vaultAddress(house).then((v) => readAccount(rpc, v, decodeVault)),
     rpc.getMinimumBalanceForRentExemption(BigInt(VAULT_ACCOUNT_SIZE)).send(),
@@ -88,10 +87,8 @@ async function main(): Promise<void> {
     treasury,
     oldVault,
     newVault,
-    newHouseLamports,
     amount: argValue(argv, '--amount') === null ? null : lamportsArg(argv, '--amount', 0n),
     vaultRent,
-    rentReserve: lamportsArg(argv, '--house-rent-reserve', DEFAULT_RENT_RESERVE),
     feeReserve: FEE_RESERVE,
   });
   for (const warning of plan.warnings) console.log(`  WARNING: ${warning}`);

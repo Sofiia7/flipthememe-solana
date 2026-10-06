@@ -207,9 +207,10 @@ Measured on devnet on 5 October 2026 (rent there is 5080 lamports per byte inclu
 
 - Empty round (nobody bets): create, strike (ends NotActivated), close = 3 fees of 5000 lamports;
   the round rent (0.00184 SOL) comes back on close. 0.0009 SOL per hour.
-- Played round: 6 fees (create, house fill, strike, settle, claim, sweep) plus rent that stays on
-  chain as history: the round (0.00184 SOL) and the house position (0.00116 SOL), about 0.003 SOL
-  per round. The treasury (the keeper key) gets the 2% fee back at the sweep; the house stake
+- Played round: 6 fees (create, house fill, strike, settle, claim, sweep) plus the round's rent
+  (0.00184 SOL), which stays on chain as history. Since 6 October the house position's rent
+  (0.00116 SOL) comes out of the house Vault and goes back into it when the keeper closes the
+  position a day later, and the 2% fee goes to the separate treasury at the sweep; the house stake
   itself is won or lost inside the house Vault.
 
 ## RPC limits
@@ -227,7 +228,8 @@ are appended (6023 `NotClaimed`, 6024 `HouseRoundCapExceeded`, 6025 `HouseDailyC
 6026 `AttestorRequired`, 6027 `InvalidAttestor`).
 
 - `close_position` (anyone): a claimed position of a Final round closes once its exit window ended
-  at least an hour ago; the rent (0.00116 SOL) goes to the owner's wallet. The keeper closes them
+  at least an hour ago; the rent (0.00116 SOL) goes to the owner's wallet (since the next
+  upgrade, below: back into the owner's vault). The keeper closes them
   a day after the round (`CLOSE_AFTER_SECS`, default 86400): the app keeps a finished round in the
   phone's history only while it still sees the position on chain.
 - `HouseLimits` (`init_house_limits`, `update_house_limits`, admin only): per-round and per-UTC-day
@@ -355,8 +357,9 @@ except the two VPS steps (Git Bash, `vps.sh`, as in section 2).
    ```
 
    One transaction: withdraw the free house money from the keeper's vault, transfer it plus the
-   new vault's rent (0.00094 SOL) plus 0.25 SOL for house position rent (`--house-rent-reserve`)
-   to the house key, open its vault, deposit, and `update_config` with the new price authority,
+   new vault's rent (0.00094 SOL) to the house key (in October also 0.25 SOL for house position
+   rent; since the next upgrade the house vault pays that rent and the reserve is gone), open its
+   vault, deposit, and `update_config` with the new price authority,
    house authority and `TREASURY` (unset: unchanged). The keeper key stays admin and fee payer.
    Once the attestor is required (step 9), the admin alone cannot switch it off or replace it,
    so a stolen keeper key cannot price rounds alone; it can still pause betting, create rounds
@@ -410,7 +413,120 @@ New log events: `positions_scan` (claimed, closable, lamports, waiting, skipped)
 `positions_closed` (positions, lamports, house, rounds, queued, sig), `positions_close_failed`,
 `close_batch_shrunk`, `fill_skipped_onchain_cap` (with the caps and today's spend),
 `house_limits_missing`, `oracle_missing`, `attest_ok`, `attest_refused` (reason, status),
-`attest_failed`, `attestor_required_no_url`, `house_wallet_low`. Strike and settle lines carry
+`attest_failed`, `attestor_required_no_url` (and in October `house_wallet_low`, gone since the
+house wallet pays no rent any more). Strike and settle lines carry
 `"attested"` when an attestor is set up. Position closing runs only when nothing else is in
 flight, in seconds 3 to 33 of the minute, one transaction of up to 8 closes every 10 s at most,
 with a scan of claimed positions every 5 minutes.
+
+## Program upgrade (October 2026, second): position rent from the game balance
+
+What changes on chain. No account layout, no error code and no account list of `place_bet` or
+`house_fill` changes, so the apps already on phones keep working.
+
+- `place_bet`: the position's rent (0.00116 SOL at devnet's rent) comes out of the owner's vault,
+  on top of the stake: the bet needs `available >= stake + rent`, else `InsufficientAvailable`.
+  The session key pays only the 5000-lamport network fee, so one session approval lasts its
+  week. The session budget counts the stake only.
+- `house_fill`: the house position's rent comes out of the house vault the same way. The house
+  key only signs; the house wallet needs no SOL any more.
+- `close_position`: the position's lamports go back into the owner's vault as available balance,
+  not to a wallet. New account list: config (w), round, position (w), the owner's vault (w).
+  Positions opened before this upgrade (rent paid by a device key or the house wallet) also pay
+  out into the vault, so players get that rent back as balance. House positions from before the
+  role split return to the keeper's old vault, later ones to the house vault.
+- Someone sending lamports to a future position address only lowers what the vault pays; a
+  position that exists already fails as before ("already in use").
+
+Size and costs, at devnet's rent of 5080 lamports per byte measured on 5 October:
+
+| | bytes | lamports | SOL |
+|---|---:|---:|---:|
+| current program data (the October build) | 473768 | | |
+| new `flip_the_meme.so`, smaller: no `solana program extend` | 467840 | | |
+| upload buffer (37 + 467840 bytes), returned after the deploy | 467877 | 2377465400 | 2.377 |
+| about 468 buffer write transactions at 5000 lamports | | 2340000 | 0.002 |
+
+The keeper wallet needs about 2.38 SOL free while the deploy runs; all but the fees comes back.
+At the older rate of 6960 lamports per byte the buffer would need 3.257 SOL.
+
+Run nothing of this before Sofia agrees. Commands for cmd.exe from `C:\Server\memepred_solana`,
+except the VPS step (Git Bash, `vps.sh`, as in section 2).
+
+1. Build and test, check the authority and the money, and test the live program's own positions
+   against the new build:
+
+   ```
+   cd C:\Server\memepred_solana
+   set PATH=C:\Users\sofia\.local\agave\3.1.14\bin;%PATH%
+   cargo build-sbf --manifest-path programs\flip-the-meme\Cargo.toml
+   cargo test --manifest-path programs\flip-the-meme\Cargo.toml
+   node --test "packages/client/test/*.test.ts"
+   node --test "services/keeper/test/*.test.ts"
+   dir target\deploy\flip_the_meme.so
+   solana program show 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz --url devnet
+   solana balance --keypair C:\Users\sofia\.flipthememe\keeper.json --url devnet
+   solana rent 467877 --url devnet
+   solana program dump 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz C:\Users\sofia\.flipthememe\flip_the_meme-2026-10-06.so --url devnet
+   set FTM_LIVE_SO=C:\Users\sofia\.flipthememe\flip_the_meme-2026-10-06.so
+   cargo test --manifest-path programs\flip-the-meme\Cargo.toml --test flow -- --ignored
+   ```
+
+   `program show` must list `Authority 4ppbN5D5W5R6TiQ5LhG1BUBF7AvpqLYe6csXFa4gUs9q` (upgrade.json)
+   and `Data Length: 473768`. The last test opens positions with the dumped live program, swaps
+   in the new build in the middle of the round and checks that they close into the vaults with
+   exact books; it must pass.
+
+2. Stop new bets, then wait until the last rounds are Final and claimed (about 4 minutes):
+
+   ```
+   node services\keeper\scripts\set-pause.ts on
+   node services\keeper\scripts\status.ts 6
+   ```
+
+3. Stop the keeper on the VPS (Git Bash): its `close_position` has the old account list.
+
+   ```bash
+   bash /c/Server/twitter_hermes/tools/vps.sh run <<'CMD'
+   cd /home/openclaw/ftm-sol-keeper/deploy
+   docker compose stop
+   CMD
+   ```
+
+4. Deploy; the new program is smaller than the program data account, so nothing to extend:
+
+   ```
+   solana program deploy target\deploy\flip_the_meme.so --program-id 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz --upgrade-authority C:\Users\sofia\.flipthememe\upgrade.json --keypair C:\Users\sofia\.flipthememe\keeper.json --url devnet
+   solana program show 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz --url devnet
+   ```
+
+   If the buffer writes stall, repeat with `--use-rpc`; a buffer left behind gives its rent back
+   with `solana program close --buffers --keypair C:\Users\sofia\.flipthememe\keeper.json --url devnet`.
+
+5. Push the new keeper: build as in section 1, push as in section 2 "Updates" (it starts the
+   container). Check `cat data/status.json`: `positionRent` appears after the first house fill,
+   and the house fill now leaves the rent in the house vault.
+
+6. Reopen betting and run one played round end to end:
+
+   ```
+   node services\keeper\scripts\set-pause.ts off
+   node services\keeper\scripts\smoke-bet.ts
+   ```
+
+   The smoke bet deposits the stake plus the position rent; after the bet it prints
+   `vault available 0 locked 50000000` and `session key paid 5000 lamports`.
+
+7. Optional: the house wallet holds the 0.25 SOL position-rent reserve from the role split, which
+   nothing needs any more. Send it back to the keeper wallet (the house key signs and pays):
+
+   ```
+   solana transfer <KEEPER_ADDRESS> ALL --from C:\Users\sofia\.flipthememe\house.json --fee-payer C:\Users\sofia\.flipthememe\house.json --url devnet
+   ```
+
+Rollback: deploy `C:\Users\sofia\.flipthememe\flip_the_meme-2026-10-06.so` as in step 4, with
+the previous `dist/keeper.mjs`. Positions opened meanwhile are ordinary positions; the old
+program closes them to the owner's wallet.
+
+Apps on phones: their bets go through unchanged. A player whose available balance covers the
+stake but not stake plus rent gets `InsufficientAvailable` until the app checks both.

@@ -1,10 +1,11 @@
 /**
  * Returns the rent of paid positions (audit A09). close_position is permissionless: once a round
  * is Final, a position is claimed and POSITION_CLOSE_DELAY_SECS have passed since the round's
- * exit_end, anyone may close it and the rent goes to the owner's wallet. The keeper waits longer
- * than the program requires (CLOSE_AFTER_SECS). This is the least urgent work of the keeper: the
- * scheduler starts one scan or one batch at a time, only while nothing else is in flight (see
- * Scheduler.closePositions).
+ * exit_end, anyone may close it and its lamports go back into the owner's vault as available
+ * balance (the vault paid the rent at the bet; for older positions a device key did). The keeper
+ * waits longer than the program requires (CLOSE_AFTER_SECS). This is the least urgent work of the
+ * keeper: the scheduler starts one scan or one batch at a time, only while nothing else is in
+ * flight (see Scheduler.closePositions).
  */
 import { POSITION_CLOSE_DELAY_SECS, RoundStatus, closePosition } from '@flipthememe/client';
 import type { Address, TransactionSigner } from '@solana/kit';
@@ -25,7 +26,10 @@ export function effectiveCloseAfter(secs: bigint): bigint {
   return secs > POSITION_CLOSE_DELAY_SECS ? secs : POSITION_CLOSE_DELAY_SECS;
 }
 
-/** Closes per transaction: eight with distinct rounds and owners still fit the 1232-byte limit. */
+/**
+ * Closes per transaction: config, then round, position and vault per close; eight with distinct
+ * rounds and owners still fit the 1232-byte limit.
+ */
 export const CLOSE_BATCH = 8;
 export const CLOSE_SCAN_MS = 5 * 60_000;
 /** The first scan waits this long after start-up, out of the way of the start-up reads. */

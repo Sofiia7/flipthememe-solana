@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program::{self, Transfer};
+use anchor_lang::system_program::{self, Allocate, Assign, Transfer};
 
 pub mod payout;
 
@@ -233,7 +233,9 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Signed by the session key, which also pays for the position account.
+    /// Signed by the session key, which pays only the network fee: the position's rent comes out of
+    /// the owner's vault (open_position) and goes back into it when the position is closed. The
+    /// session budget counts the stake alone.
     pub fn place_bet(ctx: Context<PlaceBet>, side: Side, amount: u64, face: [u8; 8]) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
@@ -255,7 +257,10 @@ pub mod flip_the_meme {
         );
         let spent = session.spent.checked_add(amount).ok_or(ErrorCode::Arithmetic)?;
         require!(spent <= session.session_cap, ErrorCode::SessionCapExceeded);
-        require!(vault.available >= amount, ErrorCode::InsufficientAvailable);
+        require!(
+            vault.available >= amount.checked_add(position_rent()?).ok_or(ErrorCode::Arithmetic)?,
+            ErrorCode::InsufficientAvailable
+        );
         let (raw_up, raw_down) = add_to_side(round.raw_up, round.raw_down, side, amount)?;
         require!(
             within_depth(raw_up, raw_down, round.max_bank),
@@ -268,16 +273,20 @@ pub mod flip_the_meme {
         round.raw_down = raw_down;
         round.position_count = round.position_count.checked_add(1).ok_or(ErrorCode::Arithmetic)?;
 
-        let position = &mut ctx.accounts.position;
-        position.round = round.key();
-        position.authority = session.authority;
-        position.side = side;
-        position.stake = amount;
-        position.face = face;
-        position.is_house = false;
-        position.claimed = false;
-        position.payout = 0;
-        position.bump = ctx.bumps.position;
+        let (round_key, authority, bump) = (round.key(), session.authority, ctx.bumps.position);
+        let seeds: &[&[u8]] = &[b"position", round_key.as_ref(), authority.as_ref(), &[bump]];
+        let position = Position {
+            round: round_key,
+            authority,
+            side,
+            stake: amount,
+            face,
+            is_house: false,
+            claimed: false,
+            payout: 0,
+            bump,
+        };
+        open_position(&ctx.accounts.position, seeds, config, vault, &position)?;
 
         emit!(BetPlaced {
             round_id: round.id,
@@ -291,7 +300,8 @@ pub mod flip_the_meme {
 
     /// After entry closes, the house may bring the smaller side up to the larger one, so a
     /// lone player still gets a matched round. It never takes the larger side. HouseLimits caps
-    /// the house total in one round and the house spend per UTC day.
+    /// the house total in one round and the house spend per UTC day (stakes only). The house
+    /// position's rent comes out of the house vault, like a player's.
     pub fn house_fill(ctx: Context<HouseFill>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
@@ -310,7 +320,10 @@ pub mod flip_the_meme {
             return err!(ErrorCode::NothingToFill);
         };
         require!(amount > 0 && amount <= gap, ErrorCode::InvalidAmount);
-        require!(vault.available >= amount, ErrorCode::InsufficientAvailable);
+        require!(
+            vault.available >= amount.checked_add(position_rent()?).ok_or(ErrorCode::Arithmetic)?,
+            ErrorCode::InsufficientAvailable
+        );
         let (raw_up, raw_down) = add_to_side(round.raw_up, round.raw_down, side, amount)?;
         require!(
             within_depth(raw_up, raw_down, round.max_bank),
@@ -335,16 +348,20 @@ pub mod flip_the_meme {
         round.house_amount = house_amount;
         round.position_count = round.position_count.checked_add(1).ok_or(ErrorCode::Arithmetic)?;
 
-        let position = &mut ctx.accounts.position;
-        position.round = round.key();
-        position.authority = ctx.accounts.house_authority.key();
-        position.side = side;
-        position.stake = amount;
-        position.face = [0; 8];
-        position.is_house = true;
-        position.claimed = false;
-        position.payout = 0;
-        position.bump = ctx.bumps.position;
+        let (round_key, authority, bump) = (round.key(), ctx.accounts.house_authority.key(), ctx.bumps.position);
+        let seeds: &[&[u8]] = &[b"position", round_key.as_ref(), authority.as_ref(), &[bump]];
+        let position = Position {
+            round: round_key,
+            authority,
+            side,
+            stake: amount,
+            face: [0; 8],
+            is_house: true,
+            claimed: false,
+            payout: 0,
+            bump,
+        };
+        open_position(&ctx.accounts.position, seeds, config, vault, &position)?;
 
         emit!(BetPlaced {
             round_id: round.id,
@@ -518,10 +535,11 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Anyone may close a paid position an hour after its round's exit window; the rent goes to
-    /// the owner's wallet. Claim needs the account, and an unclaimed stake is still locked in the
-    /// vault, so only claimed positions close. A Final round never opens again, so place_bet and
-    /// house_fill cannot create the account anew and nothing can be claimed twice.
+    /// Anyone may close a paid position an hour after its round's exit window. Its lamports move
+    /// to Config and count as available in the owner's vault; that holds for older positions too,
+    /// whose rent a device key paid. Claim needs the account, and an unclaimed stake is still
+    /// locked in the vault, so only claimed positions close. A Final round never opens again, so
+    /// place_bet and house_fill cannot create the account anew and nothing can be claimed twice.
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &ctx.accounts.round;
@@ -532,11 +550,20 @@ pub mod flip_the_meme {
             now.saturating_sub(round.exit_end) >= POSITION_CLOSE_DELAY_SECS,
             ErrorCode::NotDue
         );
+        // `close = config` moves every lamport of the position, whoever put it there.
+        let lamports = position.get_lamports();
+        let vault = &mut ctx.accounts.vault;
+        vault.available = vault.available.checked_add(lamports).ok_or(ErrorCode::Arithmetic)?;
+        let config = &mut ctx.accounts.config;
+        config.total_available = config
+            .total_available
+            .checked_add(lamports)
+            .ok_or(ErrorCode::Arithmetic)?;
         emit!(PositionClosed {
             round_id: round.id,
             authority: position.authority,
             is_house: position.is_house,
-            lamports: position.to_account_info().lamports(),
+            lamports,
         });
         Ok(())
     }
@@ -553,6 +580,55 @@ fn add_to_side(raw_up: u64, raw_down: u64, side: Side, amount: u64) -> Result<(u
 /// A bet on the larger side does not grow it and always passes.
 fn within_depth(raw_up: u64, raw_down: u64, max_bank: u64) -> bool {
     (raw_up.min(raw_down) as u128) * 2 <= max_bank as u128
+}
+
+/// Rent-exempt minimum of a position account, at the cluster's current rent.
+fn position_rent() -> Result<u64> {
+    Ok(Rent::get()?.minimum_balance(8 + Position::INIT_SPACE))
+}
+
+/// Creates a position PDA owned by this program, its rent paid out of the owner's vault: the
+/// lamports move from Config, which holds every deposited lamport, so session and house keys pay
+/// network fees only. An address someone pre-funded takes only what it still lacks, and the vault
+/// pays only that. An existing position makes allocate fail ("already in use"), as `init` did.
+fn open_position<'info>(
+    position: &UncheckedAccount<'info>,
+    seeds: &[&[u8]],
+    config: &mut Account<'info, Config>,
+    vault: &mut Account<'info, Vault>,
+    value: &Position,
+) -> Result<()> {
+    // The system calls come first: at a CPI the runtime balances only the accounts of that call,
+    // so lamports moved by hand before it would show the position's credit without Config's debit.
+    let info = position.to_account_info();
+    let signer: &[&[&[u8]]] = &[seeds];
+    system_program::allocate(
+        CpiContext::new_with_signer(system_program::ID, Allocate { account_to_allocate: info.clone() }, signer),
+        (8 + Position::INIT_SPACE) as u64,
+    )?;
+    system_program::assign(
+        CpiContext::new_with_signer(system_program::ID, Assign { account_to_assign: info.clone() }, signer),
+        &crate::ID,
+    )?;
+    let charge = position_rent()?.saturating_sub(info.lamports());
+    if charge > 0 {
+        vault.available = vault.available.checked_sub(charge).ok_or(ErrorCode::InsufficientAvailable)?;
+        config.total_available = config
+            .total_available
+            .checked_sub(charge)
+            .ok_or(ErrorCode::Arithmetic)?;
+        let rent_reserve = Rent::get()?.minimum_balance(8 + Config::INIT_SPACE);
+        require!(
+            config.get_lamports()
+                >= rent_reserve.checked_add(charge).ok_or(ErrorCode::Arithmetic)?,
+            ErrorCode::Insolvent
+        );
+        config.sub_lamports(charge)?;
+        info.add_lamports(charge)?;
+    }
+    let mut data = info.try_borrow_mut_data()?;
+    value.try_serialize(&mut &mut data[..])?;
+    Ok(())
 }
 
 fn lock_stake(vault: &mut Vault, config: &mut Config, amount: u64) -> Result<()> {
@@ -960,8 +1036,11 @@ pub struct PlaceBet<'info> {
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [b"session", vault.key().as_ref(), session_signer.key().as_ref()], bump = session.bump, constraint = session.signer == session_signer.key() @ ErrorCode::SessionInvalid)]
     pub session: Account<'info, Session>,
-    #[account(init, payer = session_signer, space = 8 + Position::INIT_SPACE, seeds = [b"position", round.key().as_ref(), session.authority.as_ref()], bump)]
-    pub position: Account<'info, Position>,
+    /// CHECK: the position PDA of this round and the session's owner, created by the handler
+    /// (open_position) with its rent taken from the vault.
+    #[account(mut, seeds = [b"position", round.key().as_ref(), session.authority.as_ref()], bump)]
+    pub position: UncheckedAccount<'info>,
+    /// Pays the network fee only. Still writable, so apps built before keep sending the same accounts.
     #[account(mut)]
     pub session_signer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -977,8 +1056,11 @@ pub struct HouseFill<'info> {
     pub house_vault: Account<'info, Vault>,
     #[account(mut, seeds = [b"house_limits"], bump = house_limits.bump)]
     pub house_limits: Account<'info, HouseLimits>,
-    #[account(init, payer = house_authority, space = 8 + Position::INIT_SPACE, seeds = [b"position", round.key().as_ref(), house_authority.key().as_ref()], bump)]
-    pub position: Account<'info, Position>,
+    /// CHECK: the position PDA of this round and the house authority, created by the handler
+    /// (open_position) with its rent taken from the house vault.
+    #[account(mut, seeds = [b"position", round.key().as_ref(), house_authority.key().as_ref()], bump)]
+    pub position: UncheckedAccount<'info>,
+    /// Signs the fill and pays nothing now. Still writable, so the account list stays as it was.
     #[account(mut)]
     pub house_authority: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -1039,20 +1121,21 @@ pub struct CloseEmptyRound<'info> {
 
 #[derive(Accounts)]
 pub struct ClosePosition<'info> {
+    #[account(mut, seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
     #[account(seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
     #[account(
         mut,
-        close = authority,
+        close = config,
         seeds = [b"position", round.key().as_ref(), position.authority.as_ref()],
         bump = position.bump,
         has_one = round @ ErrorCode::InvalidAccount,
-        has_one = authority @ ErrorCode::Unauthorized,
     )]
     pub position: Account<'info, Position>,
-    /// CHECK: the owner's wallet, which gets the rent; its address is pinned by `position.authority`.
-    #[account(mut)]
-    pub authority: UncheckedAccount<'info>,
+    /// The owner's vault: the rent comes back into its available balance.
+    #[account(mut, seeds = [b"vault", position.authority.as_ref()], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
 }
 
 #[event]

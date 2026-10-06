@@ -97,7 +97,7 @@ fn write_vectors() {
 
     // Account order and roles of the instructions added or changed in the October 2026 upgrade,
     // with distinct keys so a swapped pair shows: admin 9, house 2, price authority 1, attestor 6,
-    // attestor in office 8, position owner 10, round 42.
+    // attestor in office 8, position owner 10, session key 7, round 42.
     let config_key = pda(&[b"config"]);
     let round_key = pda(&[b"round", &42u64.to_le_bytes()]);
     let house_limits_key = pda(&[b"house_limits"]);
@@ -105,8 +105,27 @@ fn write_vectors() {
     let account_metas: Vec<(&str, Vec<AccountMeta>)> = vec![
         (
             "closePosition",
-            acc::ClosePosition { round: round_key, position: pda(&[b"position", round_key.as_ref(), key(10).as_ref()]), authority: key(10) }
-                .to_account_metas(None),
+            acc::ClosePosition {
+                config: config_key,
+                round: round_key,
+                position: pda(&[b"position", round_key.as_ref(), key(10).as_ref()]),
+                vault: pda(&[b"vault", key(10).as_ref()]),
+            }
+            .to_account_metas(None),
+        ),
+        // Unchanged since before October: apps already on phones build exactly this list.
+        (
+            "placeBet",
+            acc::PlaceBet {
+                config: config_key,
+                round: round_key,
+                vault: pda(&[b"vault", key(10).as_ref()]),
+                session: pda(&[b"session", pda(&[b"vault", key(10).as_ref()]).as_ref(), key(7).as_ref()]),
+                position: pda(&[b"position", round_key.as_ref(), key(10).as_ref()]),
+                session_signer: key(7),
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
         ),
         (
             "initHouseLimits",

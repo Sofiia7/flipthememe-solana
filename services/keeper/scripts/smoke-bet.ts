@@ -1,29 +1,33 @@
 /**
  * Devnet smoke test of a played round; the keeper must be running. A throwaway player (new key,
- * funded with about 0.07 SOL from the keeper key) opens a vault, starts a session and bets on UP
- * in the round that is open now. The keeper should then fill DOWN as the house after cutoff, set
- * the strike, settle, claim both positions and sweep the fees; this script follows the round
- * until it is swept (at most 6 minutes).
+ * funded with about 0.07 SOL from the keeper key) opens a vault, deposits the stake plus the
+ * position rent, starts a session and bets on UP in the round that is open now; the session key
+ * gets only enough for fees, since the vault pays the rent. The keeper should then fill DOWN as
+ * the house after cutoff, set the strike, settle, claim both positions and sweep the fees; this
+ * script follows the round until it is swept (at most 6 minutes).
  *
  *   node services/keeper/scripts/smoke-bet.ts [stakeLamports=50000000]
  *
  * Env: DEVNET_RPC, KEEPER_KEYPAIR (see src/config.ts).
  */
 import {
+  POSITION_ACCOUNT_SIZE,
   RoundStatus,
   Outcome,
   Side,
   decodeRound,
+  decodeVault,
   deposit,
   openVault,
   placeBet,
   roundAddress,
   startSession,
   transferSol,
+  vaultAddress,
   type RoundAccount,
 } from '@flipthememe/client';
 import { generateKeyPairSigner, getBase64Encoder } from '@solana/kit';
-import { describeError, readSnapshot, sendInstructions } from '../src/chain.ts';
+import { describeError, readAccount, readSnapshot, sendInstructions } from '../src/chain.ts';
 import { loadConfig } from '../src/config.ts';
 import { loadKeypairSigner } from '../src/keypair.ts';
 import { makeRpc, type SolanaRpc } from '../src/rpc.ts';
@@ -60,11 +64,14 @@ async function main(): Promise<void> {
   if (roundId === null) throw new Error('no open round with 15 s of entry left within 3 minutes; is the keeper running?');
   console.log(`betting UP in round ${roundId}`);
 
-  const fund = await sendInstructions(rpc, keeper, [transferSol({ from: keeper, to: player.address, lamports: stake + 20_000_000n })]);
+  // The vault pays the position rent on top of the stake; the session key pays fees only, and
+  // 0.001 SOL keeps it above the rent-exempt minimum of a plain wallet with fees to spare.
+  const rent = await rpc.getMinimumBalanceForRentExemption(BigInt(POSITION_ACCOUNT_SIZE)).send();
+  const fund = await sendInstructions(rpc, keeper, [transferSol({ from: keeper, to: player.address, lamports: stake + rent + 20_000_000n })]);
   console.log(`funded player: ${fund}`);
   const setup = await sendInstructions(rpc, player, [
     await openVault({ owner: player }),
-    await deposit({ owner: player, amount: stake }),
+    await deposit({ owner: player, amount: stake + rent }),
     await startSession({
       owner: player,
       sessionSigner: session.address,
@@ -72,14 +79,19 @@ async function main(): Promise<void> {
       maxPerBet: stake,
       sessionCap: stake,
     }),
-    transferSol({ from: player, to: session.address, lamports: 3_000_000n }),
+    transferSol({ from: player, to: session.address, lamports: 1_000_000n }),
   ]);
-  console.log(`vault + deposit + session: ${setup}`);
+  console.log(`vault + deposit of stake ${stake} + position rent ${rent} + session: ${setup}`);
   const face = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  const keyBefore = (await rpc.getBalance(session.address, { commitment: 'confirmed' }).send()).value;
   const bet = await sendInstructions(rpc, session, [
     await placeBet({ owner: player.address, sessionSigner: session, roundId, side: Side.Up, amount: stake, face }),
   ]);
+  const keyAfter = (await rpc.getBalance(session.address, { commitment: 'confirmed' }).send()).value;
+  const vault = await readAccount(rpc, await vaultAddress(player.address), decodeVault);
   console.log(`bet placed: ${bet}`);
+  // Expected: the vault keeps 0 available (stake locked, rent paid), the session key paid one fee.
+  console.log(`vault available ${vault?.available} locked ${vault?.locked}; session key paid ${keyBefore - keyAfter} lamports`);
 
   let last = '';
   const deadline = Date.now() + 6 * 60_000;

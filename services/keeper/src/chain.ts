@@ -4,6 +4,7 @@
 import {
   ACCOUNT,
   OFFSETS,
+  POSITION_ACCOUNT_SIZE,
   PROGRAM_ID,
   configAddress,
   decodeConfig,
@@ -45,8 +46,8 @@ export const ROUND_ACCOUNT_SIZE = 235;
 /** Offset of `fees_swept` in Round account data; false on every round that is not fully done. */
 export const ROUND_FEES_SWEPT_OFFSET = 212;
 export const ROUND_ID_OFFSET = 8;
-/** 8-byte discriminator + Position::INIT_SPACE. */
-export const POSITION_ACCOUNT_SIZE = 100;
+/** 8-byte discriminator + Position::INIT_SPACE, as the client defines it. */
+export { POSITION_ACCOUNT_SIZE };
 /** 8-byte discriminator + HouseLimits::INIT_SPACE, OracleConfig::INIT_SPACE and Vault::INIT_SPACE. */
 export const HOUSE_LIMITS_ACCOUNT_SIZE = 41;
 export const ORACLE_ACCOUNT_SIZE = 42;

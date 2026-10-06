@@ -52,6 +52,11 @@ export const EVENT = {
 
 /** Program: a claimed position of a Final round may be closed once its exit_end is this far behind. */
 export const POSITION_CLOSE_DELAY_SECS = 3_600n;
+/**
+ * Bytes of a Position account (8-byte discriminator + Position::INIT_SPACE). Its rent-exempt
+ * minimum (getMinimumBalanceForRentExemption) comes out of the vault at every bet, on top of the stake.
+ */
+export const POSITION_ACCOUNT_SIZE = 100;
 /** Program: the house daily cap counts per UTC day, `unix_timestamp / SECS_PER_DAY`. */
 export const SECS_PER_DAY = 86_400n;
 

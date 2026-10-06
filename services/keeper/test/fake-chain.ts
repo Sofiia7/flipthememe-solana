@@ -209,6 +209,9 @@ const addressAt = getAddressDecoder();
 const IX_NAMES = Object.entries(IX) as [string, Uint8Array][];
 /** Rent the fake reports for every program account (positions included). */
 export const FAKE_ACCOUNT_LAMPORTS = 2_000_000n;
+export const FAKE_RENT_PER_BYTE = 5_080n;
+/** What the fake answers for a position's rent-exempt minimum: (100 + 128) x 5080. */
+export const FAKE_POSITION_RENT = 1_158_240n;
 
 export class FakeChain {
   readonly keeper: Address;
@@ -313,6 +316,8 @@ export class FakeChain {
           }
           return rows;
         }),
+      // Devnet's rent as measured on 5 October 2026: 5080 lamports per byte, 128 bytes of overhead.
+      getMinimumBalanceForRentExemption: (size: bigint) => send(() => (size + 128n) * FAKE_RENT_PER_BYTE),
       getLatestBlockhash: () =>
         send(() => ({ context: { slot: 1n }, value: { blockhash: '11111111111111111111111111111111', lastValidBlockHeight: 1_000n } })),
       sendTransaction: (wire: string) =>

@@ -99,20 +99,17 @@ export type SplitInput = {
   /** Vault of the current house authority, and of the new house key if it already has one. */
   oldVault: VaultAccount | null;
   newVault: VaultAccount | null;
-  newHouseLamports: bigint;
   /** Lamports to move into the new house vault; null = everything free in the old one. */
   amount: bigint | null;
   /** Rent-exempt minimum of a Vault account, paid by the new house key at open_vault. */
   vaultRent: bigint;
-  /** Lamports the new house wallet should hold for position rent (close_position returns it a day later). */
-  rentReserve: bigint;
   /** Lamports the keeper wallet keeps for fees. */
   feeReserve: bigint;
 };
 
 export type SplitStep =
   | { kind: 'withdraw'; vaultOwner: Address; lamports: bigint }
-  | { kind: 'transfer'; from: Address; to: Address; lamports: bigint; deposit: bigint; vaultRent: bigint; rentTopUp: bigint }
+  | { kind: 'transfer'; from: Address; to: Address; lamports: bigint; deposit: bigint; vaultRent: bigint }
   | { kind: 'open-vault'; owner: Address; rent: bigint }
   | { kind: 'deposit'; owner: Address; lamports: bigint }
   | { kind: 'update-config'; priceAuthority: Address; houseAuthority: Address; treasury: Address };
@@ -122,9 +119,10 @@ export type SplitPlan = { steps: SplitStep[]; warnings: string[]; errors: string
 /**
  * Moving the house and price roles off the keeper key, in one transaction so it lands whole or
  * not at all: free house money leaves the keeper's vault (withdraw), goes to the new house wallet
- * with the new vault's rent and a reserve for position rent (transfer), the new house opens its
- * vault and deposits it, and update_config names the new price authority, house authority and
- * treasury. Every other Config value stays. The keeper key stays admin and fee payer.
+ * with the new vault's rent (transfer), the new house opens its vault and deposits it, and
+ * update_config names the new price authority, house authority and treasury. Every other Config
+ * value stays. The keeper key stays admin and fee payer. The house wallet needs nothing more:
+ * position rent comes out of the house vault and the keeper pays every fee.
  */
 export function planRoleSplit(i: SplitInput): SplitPlan {
   const steps: SplitStep[] = [];
@@ -141,16 +139,14 @@ export function planRoleSplit(i: SplitInput): SplitPlan {
     if (amount > available) errors.push(`amount ${amount} exceeds the ${available} lamports free in the old house vault`);
     if (locked > 0n) warnings.push(`${locked} lamports are still locked in rounds in flight; claims return them to the old vault, withdraw them later`);
     const vaultRent = i.newVault ? 0n : i.vaultRent;
-    const rentTopUp = i.rentReserve > i.newHouseLamports ? i.rentReserve - i.newHouseLamports : 0n;
-    const transfer = amount + vaultRent + rentTopUp;
+    const transfer = amount + vaultRent;
     if (amount > 0n) steps.push({ kind: 'withdraw', vaultOwner: c.houseAuthority, lamports: amount });
-    if (transfer > 0n) steps.push({ kind: 'transfer', from: i.keeper, to: i.house, lamports: transfer, deposit: amount, vaultRent, rentTopUp });
+    if (transfer > 0n) steps.push({ kind: 'transfer', from: i.keeper, to: i.house, lamports: transfer, deposit: amount, vaultRent });
     if (!i.newVault) steps.push({ kind: 'open-vault', owner: i.house, rent: i.vaultRent });
     if (amount > 0n) steps.push({ kind: 'deposit', owner: i.house, lamports: amount });
-    // The withdrawn amount passes through; the keeper wallet pays the rest.
-    const keeperPays = vaultRent + rentTopUp;
-    if (i.keeperLamports < keeperPays + i.feeReserve) {
-      errors.push(`keeper wallet holds ${i.keeperLamports} lamports, needs ${keeperPays} for the new house plus a ${i.feeReserve} fee reserve`);
+    // The withdrawn amount passes through; the keeper wallet pays the vault's rent.
+    if (i.keeperLamports < vaultRent + i.feeReserve) {
+      errors.push(`keeper wallet holds ${i.keeperLamports} lamports, needs ${vaultRent} for the new house vault plus a ${i.feeReserve} fee reserve`);
     }
   }
   if (i.price !== c.priceAuthority || houseMoves || i.treasury !== c.treasury) {

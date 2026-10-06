@@ -2,7 +2,17 @@
 // how one failing position is isolated. Fake devnet; the fake never applies a transaction.
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { Outcome, POSITION_CLOSE_DELAY_SECS, RoundStatus, Side, positionAddress, roundAddress, type PositionAccount } from '@flipthememe/client';
+import {
+  Outcome,
+  POSITION_CLOSE_DELAY_SECS,
+  RoundStatus,
+  Side,
+  configAddress,
+  positionAddress,
+  roundAddress,
+  vaultAddress,
+  type PositionAccount,
+} from '@flipthememe/client';
 import { address, generateKeyPairSigner, type Address, type KeyPairSigner } from '@solana/kit';
 import { CLOSE_AFTER_SECS, CLOSE_BATCH, CLOSE_MARGIN_SECS, PositionCloser, effectiveCloseAfter } from '../src/closer.ts';
 import type { LogFields } from '../src/log.ts';
@@ -89,7 +99,7 @@ describe('PositionCloser', () => {
     assert.equal(demo.queue.length, 1);
   });
 
-  test(`closes ${CLOSE_BATCH} positions per transaction, rent to each owner, and logs counts and lamports`, async () => {
+  test(`closes ${CLOSE_BATCH} positions per transaction, rent into each owner's vault, and logs counts and lamports`, async () => {
     const { chain, logs, closer } = await setup();
     const many = await owners(10);
     await finalRound(chain, 5n, 30n * HOUR, many.slice(0, 6).map((owner) => ({ owner, claimed: true })));
@@ -102,7 +112,8 @@ describe('PositionCloser', () => {
     assert.ok(chain.sent.flat().every((ix) => ix.name === 'closePosition'));
     const round5 = await roundAddress(5n);
     const [first] = chain.sent[0] ?? [];
-    assert.deepEqual(first?.accounts, [round5, await positionAddress(round5, many[0] as Address), many[0]]);
+    // config, round, position, the owner's vault: the rent goes back into the game balance.
+    assert.deepEqual(first?.accounts, [await configAddress(), round5, await positionAddress(round5, many[0] as Address), await vaultAddress(many[0] as Address)]);
     const closed = logs.filter((l) => l.event === 'positions_closed');
     assert.deepEqual(
       closed.map((l) => [l.positions, l.lamports, l.house, l.rounds, l.queued]),
@@ -112,6 +123,17 @@ describe('PositionCloser', () => {
       ],
     );
     assert.deepEqual([pc.closed, pc.closedLamports, pc.hasWork()], [10, 10n * FAKE_ACCOUNT_LAMPORTS, false]);
+  });
+
+  test(`the worst case still fits: ${CLOSE_BATCH} closes of ${CLOSE_BATCH} different rounds and owners in one transaction`, async () => {
+    const { chain, logs, closer } = await setup();
+    const owners8 = await owners(CLOSE_BATCH);
+    for (const [k, owner] of owners8.entries()) await finalRound(chain, 20n + BigInt(k), 30n * HOUR, [{ owner, claimed: true }]);
+    const pc = closer();
+    await pc.scan(0, NOW);
+    await pc.closeNext(0);
+    assert.deepEqual(chain.sent.map((tx) => tx.length), [CLOSE_BATCH]);
+    assert.equal(logs.some((l) => l.event === 'close_batch_shrunk'), false);
   });
 
   test('a failing batch is retried one position at a time, and the one that fails is set aside', async () => {
@@ -133,7 +155,7 @@ describe('PositionCloser', () => {
     await assert.rejects(pc.closeNext(0));
     assert.deepEqual(logs.at(-1), { event: 'positions_close_failed', positions: 1, error: 'NotDue', retry: 'after the next scan' });
     await pc.closeNext(0);
-    assert.deepEqual(chain.sent.map((tx) => tx.map((ix) => ix.accounts[2])), [[a], [c]]);
+    assert.deepEqual(chain.sent.map((tx) => tx.map((ix) => ix.accounts[3])), [[await vaultAddress(a)], [await vaultAddress(c)]]);
     // On chain only b is left; the next scan leaves it out for an hour.
     chain.positions.set(7n, (chain.positions.get(7n) ?? []).filter((p) => p.authority === b));
     await pc.scan(0, NOW);

@@ -242,7 +242,11 @@ export async function createRound(i: { admin: SignerLike; roundId: bigint; args:
   );
 }
 
-/** Signed and paid by the session key; `owner` is the wallet that owns the vault. */
+/**
+ * Signed by the session key, which pays only the network fee; `owner` is the wallet that owns the
+ * vault. The vault must hold the stake plus the position rent (POSITION_ACCOUNT_SIZE at the current
+ * rent): the program takes the rent from it and gives it back when the position is closed.
+ */
 export async function placeBet(
   i: { owner: Address; sessionSigner: SignerLike; roundId: bigint; side: Side; amount: bigint; face: Uint8Array } & WithProgram,
 ): Promise<Instruction> {
@@ -265,7 +269,10 @@ export async function placeBet(
   );
 }
 
-/** Signed by the house authority, which also pays the position rent; HouseLimits caps the amount. */
+/**
+ * Signed by the house authority; the house vault pays the stake and the position rent, and
+ * HouseLimits caps the stake.
+ */
 export async function houseFill(i: { house: SignerLike; roundId: bigint; amount: bigint } & WithProgram): Promise<Instruction> {
   const p = i.programId ?? PROGRAM_ID;
   const house = addressOf(i.house);
@@ -343,10 +350,15 @@ export async function closeEmptyRound(i: { roundId: bigint; admin: Address } & W
 
 /**
  * Permissionless: closes a claimed position of a Final round once POSITION_CLOSE_DELAY_SECS have
- * passed since its exit_end; the rent goes to `owner`, the wallet stored in the position.
+ * passed since its exit_end. Its lamports (the rent) go back into the vault of `owner`, the
+ * wallet stored in the position, as available balance.
  */
 export async function closePosition(i: { roundId: bigint; owner: Address } & WithProgram): Promise<Instruction> {
   const p = i.programId ?? PROGRAM_ID;
   const round = await roundAddress(i.roundId, p);
-  return build(p, [ro(round), rw(await positionAddress(round, i.owner, p)), rw(i.owner)], data(IX.closePosition));
+  return build(
+    p,
+    [rw(await configAddress(p)), ro(round), rw(await positionAddress(round, i.owner, p)), rw(await vaultAddress(i.owner, p))],
+    data(IX.closePosition),
+  );
 }

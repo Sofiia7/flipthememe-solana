@@ -24,7 +24,6 @@ const HOUSE = address('11111111111111111111111111111114');
 const TREASURY = address('11111111111111111111111111111115');
 const ATTESTOR = address('11111111111111111111111111111116');
 const VAULT_RENT = 939_800n; // 185 bytes x 5080 lamports
-const RESERVE = 250_000_000n;
 
 describe('command line', () => {
   test('flags with values', () => {
@@ -102,19 +101,18 @@ describe('split-roles plan', () => {
     treasury: TREASURY,
     oldVault: vault(2n * SOL),
     newVault: null,
-    newHouseLamports: 0n,
     amount: null,
     vaultRent: VAULT_RENT,
-    rentReserve: RESERVE,
     feeReserve: 50_000_000n,
   };
 
-  test('from the single-key setup: every amount explicit, Config last', () => {
+  test('from the single-key setup: every amount explicit, Config last, nothing extra for the house wallet', () => {
     const plan = planRoleSplit(base);
     assert.deepEqual(plan, {
       steps: [
         { kind: 'withdraw', vaultOwner: KEEPER, lamports: 2n * SOL },
-        { kind: 'transfer', from: KEEPER, to: HOUSE, lamports: 2n * SOL + VAULT_RENT + RESERVE, deposit: 2n * SOL, vaultRent: VAULT_RENT, rentTopUp: RESERVE },
+        // Position rent now comes out of the house vault: the wallet gets the vault's rent only.
+        { kind: 'transfer', from: KEEPER, to: HOUSE, lamports: 2n * SOL + VAULT_RENT, deposit: 2n * SOL, vaultRent: VAULT_RENT },
         { kind: 'open-vault', owner: HOUSE, rent: VAULT_RENT },
         { kind: 'deposit', owner: HOUSE, lamports: 2n * SOL },
         { kind: 'update-config', priceAuthority: PRICE, houseAuthority: HOUSE, treasury: TREASURY },
@@ -124,8 +122,8 @@ describe('split-roles plan', () => {
     });
   });
 
-  test('part of the money, an existing vault and a funded house wallet: only what is missing moves', () => {
-    const plan = planRoleSplit({ ...base, amount: SOL / 2n, newVault: vault(0n), newHouseLamports: RESERVE + 1n });
+  test('part of the money into an existing vault: only the deposit moves', () => {
+    const plan = planRoleSplit({ ...base, amount: SOL / 2n, newVault: vault(0n) });
     assert.deepEqual(
       plan.steps.map((s) => [s.kind, 'lamports' in s ? s.lamports : null]),
       [
@@ -151,7 +149,7 @@ describe('split-roles plan', () => {
     assert.match(planRoleSplit({ ...base, amount: 3n * SOL }).errors.join(), /exceeds the 2000000000 lamports free/);
     assert.match(planRoleSplit({ ...base, config: makeConfig(KEEPER, { admin: PRICE }) }).errors.join(), /Config admin is/);
     assert.match(planRoleSplit({ ...base, config: makeConfig(KEEPER, { houseAuthority: PRICE }) }).errors.join(), /move its vault by hand/);
-    assert.match(planRoleSplit({ ...base, keeperLamports: RESERVE }).errors.join(), /keeper wallet holds/);
+    assert.match(planRoleSplit({ ...base, keeperLamports: VAULT_RENT }).errors.join(), /keeper wallet holds/);
     assert.match(planRoleSplit({ ...base, oldVault: vault(2n * SOL, SOL / 10n) }).warnings.join(), /100000000 lamports are still locked/);
   });
 });

@@ -29,6 +29,7 @@ import {
 import type { Address, Instruction, KeyPairSigner, Signature } from '@solana/kit';
 import { NO_ATTESTOR, sendAttested, type AttestorClient } from './attest.ts';
 import {
+  POSITION_ACCOUNT_SIZE,
   cachedRoundAddress,
   describeError,
   fetchPositions,
@@ -81,8 +82,8 @@ type Due = { priority: number; id: bigint; lane: string; stepKey: string; run: (
 /** A new round opens only while the current pool has an observation at most this old. */
 const SAMPLER_FRESH_MS = 15_000;
 const LOW_BALANCE_LAMPORTS = 200_000_000n;
-/** The house wallet pays the rent of every house position until close_position returns it. */
-const LOW_HOUSE_WALLET_LAMPORTS = 20_000_000n;
+/** The position rent is read from the RPC and kept this long (it changes only with the cluster's rent). */
+export const POSITION_RENT_TTL_MS = 60 * 60_000;
 
 type Failure = { count: number; retryAtMs: number };
 
@@ -133,6 +134,8 @@ export class Scheduler {
   private claimBatch = CLAIM_BATCH_START;
   private pausedUntilMs = 0;
   private nextPositionsAtMs = 0;
+  /** Rent of a position account: the house vault pays it on top of the stake at every fill. */
+  private positionRent: { lamports: bigint; atMs: number } | null = null;
 
   constructor(deps: SchedulerDeps) {
     this.rpc = deps.rpc;
@@ -178,9 +181,6 @@ export class Scheduler {
     const me = this.signer.address;
     if (snap.keeperLamports < LOW_BALANCE_LAMPORTS) {
       this.warn('balance', { event: 'keeper_balance_low', lamports: snap.keeperLamports });
-    }
-    if (this.houseSigner.address !== me && snap.houseLamports < LOW_HOUSE_WALLET_LAMPORTS) {
-      this.warn('house-balance', { event: 'house_wallet_low', house: this.houseSigner.address, lamports: snap.houseLamports });
     }
     this.reconcileHouse(snap, nowMs);
 
@@ -279,6 +279,7 @@ export class Scheduler {
       inFlight: [...this.inFlight.keys()],
       backlog: this.backlog.size,
       claimBatch: this.claimBatch,
+      positionRent: this.positionRent?.lamports ?? null,
       chainClockOffsetMs: this.clock.offsetMs,
     };
   }
@@ -495,6 +496,14 @@ export class Scheduler {
     await this.act(roundId, 'create', [ix], { opensAt: new Date(Number(opensAt) * 1000).toISOString(), pool: pool.pool, maxBank });
   }
 
+  private async positionRentLamports(nowMs: number): Promise<bigint> {
+    if (this.positionRent === null || nowMs - this.positionRent.atMs > POSITION_RENT_TTL_MS) {
+      const lamports = await this.rpc.getMinimumBalanceForRentExemption(BigInt(POSITION_ACCOUNT_SIZE)).send();
+      this.positionRent = { lamports, atMs: nowMs };
+    }
+    return this.positionRent.lamports;
+  }
+
   private async fill(round: RoundAccount, snap: Snapshot): Promise<void> {
     const now = Date.now();
     const limits = snap.houseLimits;
@@ -504,6 +513,9 @@ export class Scheduler {
       return;
     }
     const room = chainRoom(limits, round.houseAmount, this.chainNowSecs(now));
+    // The program takes the house position's rent from the house vault on top of the stake.
+    const rent = await this.positionRentLamports(now);
+    const available = snap.houseVault?.available ?? 0n;
     const plan = houseFillAmount({
       rawUp: round.rawUp,
       rawDown: round.rawDown,
@@ -513,7 +525,7 @@ export class Scheduler {
       remainingBudget: remainingBudget(this.state.state.house, this.cfg.houseDailyBudget, now),
       chainRoundRoom: room.round,
       chainDailyRoom: room.daily,
-      vaultAvailable: snap.houseVault?.available ?? 0n,
+      vaultAvailable: available > rent ? available - rent : 0n,
     });
     if (plan.kind === 'skip') {
       if (!this.fillSkipLogged.has(round.id)) {
