@@ -1,36 +1,75 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { PROGRAM_ID } from '@flipthememe/client';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS, explorer } from '../config';
 import { chainNowSec } from '../chain/useChainClock';
-import { formatDuration, formatSol, shortAddress, sol } from '../lib/format';
+import { useSessions } from '../chain/useSessions';
+import { formatDateTime, formatDuration, formatSol, shortAddress, sol } from '../lib/format';
 import { useNow } from '../lib/usePolling';
-import { sessionStatusOf, useApp } from '../state/AppProvider';
-import { C, T } from '../theme';
+import { useApp } from '../state/AppProvider';
+import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink, KV, Pill } from '../ui/common';
+import { isChecking, type GuardedAction } from '../wallet/pendingTx';
+import { revocableSigners, sessionRows, withDeviceSession, type SessionRow } from '../wallet/sessionList';
+import { NETWORK_FEE } from '../wallet/topUpPlan';
 
-const STATUS_TEXT = {
-  none: 'No session yet',
-  active: 'Active',
-  expired: 'Expired',
-  revoked: 'Revoked',
-  'used-up': 'Limit used up',
-} as const;
+const STATUS_PILL: Record<SessionRow['status'], { text: string; color: string }> = {
+  active: { text: 'ACTIVE', color: C.up },
+  'used-up': { text: 'LIMIT USED', color: C.gold },
+  expired: { text: 'EXPIRED', color: C.dim },
+  revoked: { text: 'REVOKED', color: C.danger },
+};
+
+/** Old sessions stay on chain for good; the list shows the most relevant ones. */
+const MAX_SESSION_ROWS = 8;
 
 export function WalletScreen() {
-  const { wallet, my, myReady, sessionKey, sessionKeyError, offsetSec, arena } = useApp();
+  const { wallet, my, myReady, sessionKey, sessionKeyError, offsetSec, arena, rpc, pending, betting } = useApp();
   const nowMs = useNow(1_000);
   const nowSec = chainNowSec(offsetSec, nowMs);
   const owner = wallet.owner;
   const busy = wallet.busy !== null;
   const [copied, setCopied] = useState(false);
+  /** Signers the revoke in flight covers (its buttons spin). */
+  const [revoking, setRevoking] = useState<readonly string[]>([]);
+
+  const sessions = useSessions(rpc, owner);
+  const result = wallet.result;
+  const refreshSessions = sessions.refresh;
+  // A finished or settled action may have started or revoked sessions.
+  useEffect(() => {
+    if (result) refreshSessions();
+  }, [result, refreshSessions]);
 
   const minStake = arena.config?.minStake ?? 10_000_000n;
-  const status = sessionStatusOf(my.session, nowSec, minStake);
   const available = my.vault?.available ?? 0n;
   const locked = my.vault?.locked ?? 0n;
-  const result = wallet.result;
+  const checking = (action: GuardedAction, target?: string) => isChecking(wallet.pendingTx, action, target);
+
+  const deviceKey = sessionKey?.address ?? null;
+  const rows = useMemo(() => {
+    // This phone's own session is read every few seconds; the full list less often.
+    const fresh = my.sessionAddress && my.session ? { address: my.sessionAddress, account: my.session } : null;
+    return sessionRows(withDeviceSession(sessions.list ?? [], fresh), { deviceKey, nowSec, minStake });
+  }, [sessions.list, my.sessionAddress, my.session, deviceKey, nowSec, minStake]);
+  const shownRows = rows.slice(0, MAX_SESSION_ROWS);
+  const allSigners = revocableSigners(rows);
+  const revokeChecking = checking('revoke');
+  const revoke = (signers: readonly string[]) => {
+    setRevoking(signers);
+    void wallet.revokeSessions(signers);
+  };
+
+  const keyLamports = my.keyLamports;
+  const betBusy =
+    pending !== null ||
+    betting.bet.phase === 'signing' ||
+    betting.bet.phase === 'sending' ||
+    betting.bet.phase === 'confirming' ||
+    betting.claiming !== null;
+  const sweepChecking = checking('sweep');
+  const canSweep = keyLamports !== null && keyLamports > NETWORK_FEE;
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
@@ -79,69 +118,90 @@ export function WalletScreen() {
             <KV k="Locked in rounds" v={myReady ? sol(locked) : '...'} tone="gold" />
             <Text style={T.dim}>Winnings and refunds land here after each round. Only available SOL can be withdrawn.</Text>
             <Text style={styles.sub}>TOP UP & PLAY</Text>
-            <View style={styles.row}>
-              {TOP_UP_AMOUNTS.map((a) => (
-                <Btn
-                  key={a.toString()}
-                  small
-                  title={`${formatSol(a)} SOL`}
-                  busy={wallet.busy === 'topup'}
-                  disabled={busy || !sessionKey}
-                  onPress={() => void wallet.topUpAndPlay(a)}
-                  style={styles.flex}
-                />
-              ))}
-            </View>
+            {checking('topup') ? (
+              <Btn small title="CHECKING TOP UP" busy onPress={() => undefined} />
+            ) : (
+              <View style={styles.row}>
+                {TOP_UP_AMOUNTS.map((a) => (
+                  <Btn
+                    key={a.toString()}
+                    small
+                    title={`${formatSol(a)} SOL`}
+                    busy={wallet.busy === 'topup'}
+                    disabled={busy || !sessionKey}
+                    onPress={() => void wallet.topUpAndPlay(a)}
+                    style={styles.flex}
+                  />
+                ))}
+              </View>
+            )}
             <Text style={T.dim}>
               One approval: deposit, a 24 h session for this phone with a limit equal to the top up (max 0.1 SOL per bet), and{' '}
               {formatSol(SESSION_RULES.gasTopUp)} SOL for the session key's fees when it is low.
             </Text>
             <Btn
               kind="ghost"
-              title={`WITHDRAW ALL AVAILABLE (${formatSol(available)} SOL)`}
-              busy={wallet.busy === 'withdraw'}
+              title={checking('withdraw') ? 'CHECKING WITHDRAW' : `WITHDRAW ALL AVAILABLE (${formatSol(available)} SOL)`}
+              busy={wallet.busy === 'withdraw' || checking('withdraw')}
               disabled={busy || available <= 0n}
               onPress={() => void wallet.withdrawAll(available)}
             />
           </View>
 
           <View style={T.panel}>
-            <Text style={T.label}>PLAY SESSION ON THIS PHONE</Text>
-            <KV k="Status" v={myReady ? STATUS_TEXT[status] : '...'} tone={status === 'active' ? 'up' : 'gold'} />
-            {my.session ? (
-              <>
-                <KV
-                  k="Expires in"
-                  v={status === 'active' || status === 'used-up' ? formatDuration(Number(my.session.expiry) - nowSec) : '-'}
-                />
-                <KV k="Spent of limit" v={`${formatSol(my.session.spent)} / ${formatSol(my.session.sessionCap)} SOL`} />
-                <KV k="Max per bet" v={sol(my.session.maxPerBet)} />
-              </>
+            <Text style={T.label}>PLAY SESSIONS</Text>
+            {shownRows.map((row) => (
+              <SessionLine
+                key={row.address}
+                row={row}
+                checking={isChecking(wallet.pendingTx, 'revoke', row.signer)}
+                spinning={wallet.busy === 'revoke' && revoking.includes(row.signer)}
+                disabled={busy || revokeChecking}
+                onRevoke={() => revoke([row.signer])}
+              />
+            ))}
+            {rows.length === 0 ? (
+              <Text style={T.subtle}>{sessions.list === null && !sessions.error ? 'Loading sessions...' : 'No sessions yet.'}</Text>
             ) : null}
-            <KV k="Session key fees (gas)" v={my.keyLamports !== null ? sol(my.keyLamports, { maxDecimals: 5 }) : '...'} />
+            {rows.length > shownRows.length ? <Text style={T.dim}>+{rows.length - shownRows.length} older</Text> : null}
+            {sessions.error ? <Text style={styles.warn}>Session list: {sessions.error}</Text> : null}
+            {allSigners.length > 1 ? (
+              <Btn
+                kind="danger"
+                small
+                title={revokeChecking ? 'CHECKING' : `REVOKE ALL (${allSigners.length})`}
+                busy={revokeChecking || (wallet.busy === 'revoke' && revoking.length > 1)}
+                disabled={busy}
+                onPress={() => revoke(allSigners)}
+              />
+            ) : null}
+            {rows.length > 0 && !rows.some((r) => r.mine) ? <Text style={T.dim}>No session on this phone yet.</Text> : null}
+            <Text style={T.dim}>A session lets one phone bet from your game balance. It can never withdraw.</Text>
+          </View>
+
+          <View style={T.panel}>
+            <Text style={T.label}>DEVICE KEY (THIS PHONE)</Text>
+            <KV k="SOL on the key" v={keyLamports !== null ? sol(keyLamports, { maxDecimals: 5 }) : '...'} />
+            <Text style={T.dim}>Pays bet fees and position rent. Not part of the game balance.</Text>
+            <Btn
+              kind="ghost"
+              small
+              title={sweepChecking ? 'CHECKING' : 'RETURN TO WALLET'}
+              busy={wallet.busy === 'sweep' || sweepChecking}
+              disabled={busy || betBusy || !canSweep || !sessionKey}
+              onPress={() => void wallet.returnKeyFunds()}
+            />
+            {betBusy && canSweep ? <Text style={T.dim}>Waiting for your bet to land.</Text> : null}
             {sessionKey ? (
               <View style={styles.row}>
                 <Text style={T.dim}>Key {shortAddress(sessionKey.address)}</Text>
                 <ExtLink label="Key on Explorer" url={explorer.address(sessionKey.address)} />
-                {my.sessionAddress && my.session ? <ExtLink label="Session account" url={explorer.address(my.sessionAddress)} /> : null}
               </View>
             ) : (
               <Text style={[T.dim, sessionKeyError ? { color: C.danger } : null]}>
                 {sessionKeyError ? `Session key unavailable: ${sessionKeyError}` : 'Loading the session key...'}
               </Text>
             )}
-            <Text style={T.dim}>
-              The session key lives in this phone's secure storage. It can only place bets within the limit; it cannot withdraw or change
-              limits.
-            </Text>
-            <Btn
-              kind="danger"
-              small
-              title="REVOKE SESSION"
-              busy={wallet.busy === 'revoke'}
-              disabled={busy || !my.session || my.session.revoked}
-              onPress={() => void wallet.revoke()}
-            />
           </View>
 
           <View style={T.panel}>
@@ -155,7 +215,7 @@ export function WalletScreen() {
 
       {result && result.action !== 'connect' ? (
         <View style={styles.result}>
-          <Banner tone={result.ok ? 'ok' : 'error'} text={result.message} />
+          <Banner tone={result.ok ? 'ok' : result.checking ? 'info' : 'error'} text={result.message} />
           {result.signature ? <ExtLink label="View transaction on Explorer" url={explorer.tx(result.signature)} /> : null}
         </View>
       ) : null}
@@ -168,12 +228,59 @@ export function WalletScreen() {
   );
 }
 
+/** One session: which device, how long, how much; REVOKE while it can still bet. */
+function SessionLine({
+  row,
+  checking,
+  spinning,
+  disabled,
+  onRevoke,
+}: {
+  row: SessionRow;
+  checking: boolean;
+  spinning: boolean;
+  disabled: boolean;
+  onRevoke: () => void;
+}) {
+  const pill = STATUS_PILL[row.status];
+  const when = row.revocable
+    ? `${formatDuration(row.secondsLeft)} left`
+    : `${row.secondsLeft > 0 ? 'until' : 'expired'} ${formatDateTime(row.expiry)}`;
+  return (
+    <View style={[styles.session, row.mine && styles.sessionMine]}>
+      <View style={styles.between}>
+        <Text style={styles.device} numberOfLines={1}>
+          {row.mine ? 'THIS PHONE' : `OTHER DEVICE ${shortAddress(row.signer)}`}
+        </Text>
+        <Pill text={pill.text} color={pill.color} />
+      </View>
+      <Text style={styles.meta}>
+        {when} · max {formatSol(row.maxPerBet)} per bet
+      </Text>
+      <View style={styles.between}>
+        <Text style={styles.meta}>
+          spent {formatSol(row.spent)} / {formatSol(row.budget)} SOL
+        </Text>
+        {row.revocable ? (
+          <Btn kind="danger" small title={checking ? 'CHECKING' : 'REVOKE'} busy={checking || spinning} disabled={disabled} onPress={onRevoke} />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   page: { padding: 16, gap: 12, paddingBottom: 28 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   address: { color: C.white, fontFamily: 'monospace', fontSize: 14, fontWeight: '800' },
   row: { flexDirection: 'row', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  between: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   flex: { flex: 1 },
   sub: { color: C.label, fontSize: 10, fontWeight: '900', marginTop: 6 },
   result: { gap: 6 },
+  session: { borderWidth: 1, borderColor: C.borderSoft, backgroundColor: C.panelDeep, padding: 8, gap: 3 },
+  sessionMine: { borderColor: C.accent },
+  device: { color: C.white, fontSize: 12, fontWeight: '900', fontFamily: MONO, flexShrink: 1 },
+  meta: { color: C.subtle, fontSize: 11, fontFamily: MONO },
+  warn: { color: C.warn, fontSize: 10 },
 });

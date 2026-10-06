@@ -9,7 +9,8 @@ import {
 } from '@solana/kit';
 import { PROGRAM_ERRORS, TransactionFailed, programErrorName, type ProgramErrorName } from '@flipthememe/client';
 
-export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'claim' | 'airdrop' | 'connect';
+/** `sweep` returns the SOL on the device key to the wallet. */
+export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'sweep' | 'claim' | 'airdrop' | 'connect';
 
 function stringify(value: unknown): string {
   try {
@@ -166,9 +167,11 @@ export function humanError(error: unknown, action: TxAction): string {
     hasCode(error, SOLANA_ERROR__TRANSACTION_ERROR__ACCOUNT_NOT_FOUND) ||
     hasCode(error, SOLANA_ERROR__TRANSACTION_ERROR__INSUFFICIENT_FUNDS_FOR_FEE) ||
     hasCode(error, SOLANA_ERROR__TRANSACTION_ERROR__INSUFFICIENT_FUNDS_FOR_RENT) ||
-    /no record of a prior credit|insufficient lamports|insufficient funds/i.test(text)
+    // "InsufficientFundsForFee/Rent" is how a signature status reports it.
+    /no record of a prior credit|insufficient lamports|insufficient ?funds/i.test(text)
   ) {
     if (action === 'bet' || action === 'claim') return 'The session key is out of devnet SOL for fees - Top up & play refills it.';
+    if (action === 'sweep') return 'The device key balance just changed - try again.';
     return 'Not enough devnet SOL in the wallet - use Airdrop or faucet.solana.com.';
   }
   if (hasCode(error, SOLANA_ERROR__TRANSACTION_ERROR__BLOCKHASH_NOT_FOUND) || /blockhash expired/i.test(text)) {

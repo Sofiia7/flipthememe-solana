@@ -5,6 +5,7 @@ import { chainNowSec } from '../chain/useChainClock';
 import { formatSol } from '../lib/format';
 import { sessionStatusOf, useApp } from '../state/AppProvider';
 import { C, MONO } from '../theme';
+import { isChecking } from '../wallet/pendingTx';
 import { ACCOUNT_SPACE, topUpPlan } from '../wallet/topUpPlan';
 import { ExtLink } from './common';
 import { NeonButton } from './NeonButton';
@@ -64,6 +65,9 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
 
   const walletLamports = myReady ? my.walletLamports : null;
   const busy = wallet.busy !== null;
+  // A sent top up or renew with no answer yet: its button waits for the chain instead of paying again.
+  const topUpChecking = isChecking(wallet.pendingTx, 'topup');
+  const renewChecking = isChecking(wallet.pendingTx, 'renew');
   const available = my.vault?.available ?? 0n;
   const minStake = arena.config?.minStake ?? 10_000_000n;
   const status = sessionStatusOf(my.session, chainNowSec(offsetSec, Date.now()), minStake);
@@ -109,11 +113,15 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
         {canRenew ? (
           <>
             <NeonButton
-              title={`PLAY WITH MY ${formatSol(available)} SOL`}
-              subtitle={`no deposit${renewPlan.total > renewPlan.networkFee ? ` · ${solUp(renewPlan.total)} SOL for fees` : ''}`}
+              title={renewChecking ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
+              subtitle={
+                renewChecking
+                  ? 'waiting for devnet'
+                  : `no deposit${renewPlan.total > renewPlan.networkFee ? ` · ${solUp(renewPlan.total)} SOL for fees` : ''}`
+              }
               kind="gold"
               big
-              busy={wallet.busy === 'renew'}
+              busy={wallet.busy === 'renew' || renewChecking}
               disabled={busy}
               onPress={() => {
                 setStarted(true);
@@ -154,10 +162,11 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
           Wallet: {walletLamports !== null ? `${formatSol(walletLamports)} SOL` : '...'} <Text style={styles.devnet}>devnet</Text>
         </Text>
         <NeonButton
-          title={`APPROVE ${solUp(plan.total)} SOL`}
+          title={topUpChecking ? 'CHECKING...' : `APPROVE ${solUp(plan.total)} SOL`}
+          subtitle={topUpChecking ? 'waiting for devnet' : undefined}
           kind={canRenew ? 'purple' : 'gold'}
           big={!canRenew}
-          busy={wallet.busy === 'topup'}
+          busy={wallet.busy === 'topup' || topUpChecking}
           disabled={busy}
           onPress={() => {
             setStarted(true);
@@ -177,7 +186,9 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
           </Pressable>
           <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
         </View>
-        {result ? <Text style={[styles.result, { color: result.ok ? C.neonGreen : C.danger }]}>{result.message}</Text> : null}
+        {result ? (
+          <Text style={[styles.result, { color: result.ok ? C.neonGreen : result.checking ? C.neonYellow : C.danger }]}>{result.message}</Text>
+        ) : null}
       </View>
     </Modal>
   );

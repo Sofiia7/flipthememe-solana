@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
 import * as Haptics from 'expo-haptics';
 import { getSignatureFromTransaction, type Address, type Instruction, type Signature } from '@solana/kit';
-import { TransactionFailed, claim, placeBet, refundExpired, sendAndConfirm, signLocally, type Side } from '@flipthememe/client';
+import { claim, placeBet, refundExpired, sendAndConfirm, signLocally, type Side } from '@flipthememe/client';
 import type { SolanaRpc } from '../chain/rpc';
 import { observeSend } from '../chain/sendPhase';
+import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
 import { humanError } from '../lib/errors';
 import { clearPendingBet, savePendingBet, type PendingBet } from './pendingBet';
 import type { SessionKey } from './sessionKey';
@@ -21,14 +22,6 @@ export type BetState = {
 };
 
 const IDLE: BetState = { phase: 'idle', roundId: null, side: null, amount: null, signature: null, error: null, at: 0 };
-
-/** True when the transaction can no longer land, so a stored pending bet can be dropped. */
-function definitelyFailed(error: unknown): boolean {
-  if (error instanceof TransactionFailed) return error.detail !== 'timeout';
-  const text = error instanceof Error ? error.message : String(error);
-  // A dropped connection may have delivered the transaction; keep it pending until the round closes.
-  return !/network request failed|failed to fetch|abort/i.test(text);
-}
 
 export function useBetting(input: {
   rpc: SolanaRpc;
@@ -52,27 +45,49 @@ export function useBetting(input: {
       busy.current = true;
       setBet({ phase: 'signing', roundId, side, amount, signature: null, error: null, at: Date.now() });
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-      let saved = false;
+      // Set once the bet is stored and about to go out: from then on only the chain decides its fate.
+      let sent: PendingBet | null = null;
+      const landed = (signature: string) => {
+        setBet((s) => (s.signature === signature ? { ...s, phase: 'confirmed', at: Date.now() } : s));
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+        onChanged();
+      };
       try {
         const ix = await placeBet({ owner, sessionSigner: sessionKey.signer, roundId, side, amount, face: faceBytes });
         const signed = await signLocally(rpc, sessionKey.signer, [ix]);
         const signature = getSignatureFromTransaction(signed.transaction);
-        const pending: PendingBet = { owner, roundId, side, amount, signature, at: Date.now() };
+        const pending: PendingBet = { owner, roundId, side, amount, signature, at: Date.now(), lastValidBlockHeight: signed.lastValidBlockHeight };
         await savePendingBet(pending).catch(() => undefined);
-        saved = true;
+        sent = pending;
         onPending(pending);
         setBet((s) => ({ ...s, phase: 'sending', signature }));
         const tracked = observeSend(rpc, () => setBet((s) => (s.signature === signature ? { ...s, phase: 'confirming' } : s)));
         await sendAndConfirm(tracked, signed);
-        setBet((s) => (s.signature === signature ? { ...s, phase: 'confirmed', at: Date.now() } : s));
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
-        onChanged();
+        landed(signature);
       } catch (error) {
-        if (saved && definitelyFailed(error)) {
-          await clearPendingBet().catch(() => undefined);
+        let shown: unknown = error;
+        if (sent) {
+          // A timeout or a dropped connection proves nothing: one look at the chain, and without a
+          // clear answer the bet stays pending (AppProvider keeps checking its signature).
+          const tx = sent;
+          const proof = sendErrorProof(error);
+          let check: TxCheck | null = null;
+          if (proof !== 'failed') check = await checkSignature(rpc, tx).catch(() => null);
+          const verdict = settleSendError(proof, check?.verdict ?? null);
+          if (verdict === 'confirmed') {
+            landed(tx.signature);
+            return;
+          }
+          if (verdict === 'pending') {
+            setBet(IDLE);
+            onChanged();
+            return;
+          }
+          await clearPendingBet(tx.signature).catch(() => undefined);
           onPending(null);
+          shown = settledError(tx.signature, verdict, check, error);
         }
-        setBet((s) => ({ ...s, phase: 'failed', error: humanError(error, 'bet'), at: Date.now() }));
+        setBet((s) => ({ ...s, phase: 'failed', error: humanError(shown, 'bet'), at: Date.now() }));
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       } finally {
         busy.current = false;

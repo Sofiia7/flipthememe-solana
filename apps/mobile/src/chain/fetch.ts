@@ -1,16 +1,21 @@
 import { getBase64Encoder, type Address, type Base58EncodedBytes } from '@solana/kit';
 import {
+  OFFSETS,
   PROGRAM_ID,
   decodePosition,
   decodeRound,
+  decodeSession,
   roundAddress,
   type PositionAccount,
   type RoundAccount,
+  type SessionAccount,
 } from '@flipthememe/client';
+import { SESSION_SPACE } from '../wallet/sessionList';
 import type { SolanaRpc } from './rpc';
 
 export type RoundView = { id: bigint; address: Address; account: RoundAccount };
 export type PositionView = { address: Address; account: PositionAccount };
+export type SessionView = { address: Address; account: SessionAccount };
 export type RawAccount = { data: Uint8Array; lamports: bigint };
 
 /** Position = 8 + 32 + 32 + 1 + 8 + 8 + 1 + 1 + 8 + 1 bytes. */
@@ -56,6 +61,33 @@ export async function fetchPositionsBy(rpc: SolanaRpc, offset: number, key: Addr
     }
   }
   return out;
+}
+
+/**
+ * Every Session account of `owner`, on any device: dataSize 138 and the owner at offset 8 (the
+ * authority field; the vault follows at 40, the device signer at 72). Newest expiry first.
+ */
+export async function fetchSessionsOf(rpc: SolanaRpc, owner: Address): Promise<SessionView[]> {
+  const rows = await rpc
+    .getProgramAccounts(PROGRAM_ID, {
+      encoding: 'base64',
+      commitment: 'confirmed',
+      filters: [
+        { dataSize: BigInt(SESSION_SPACE) },
+        { memcmp: { offset: BigInt(OFFSETS.sessionAuthority), bytes: owner as unknown as Base58EncodedBytes, encoding: 'base58' } },
+      ],
+    })
+    .send();
+  const out: SessionView[] = [];
+  for (const row of rows) {
+    try {
+      const account = decodeSession(accountBytes(row.account.data));
+      if (account.authority === owner) out.push({ address: row.pubkey, account });
+    } catch {
+      // Not a Session (wrong discriminator): skip.
+    }
+  }
+  return out.sort((a, b) => (a.account.expiry > b.account.expiry ? -1 : a.account.expiry < b.account.expiry ? 1 : 0));
 }
 
 const roundAddressCache = new Map<bigint, Promise<Address>>();

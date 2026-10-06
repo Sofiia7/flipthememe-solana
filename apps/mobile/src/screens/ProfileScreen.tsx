@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { RoundStatus } from '@flipthememe/client';
 import {
   ACCESSORY_NAMES,
   EYE_NAMES,
@@ -13,7 +12,6 @@ import {
   type Face,
   type FaceField,
 } from '../face/faceModel';
-import { positionResult } from '../chain/phase';
 import { chainNowSec } from '../chain/useChainClock';
 import { formatSol, shortAddress } from '../lib/format';
 import { chatterOn, soundMuted, useBoolStore } from '../lib/prefs';
@@ -21,6 +19,7 @@ import { PixelFace } from '../PixelFace';
 import { useSkrNames } from '../chain/skr';
 import { playSound } from '../sound/sound';
 import { useApp } from '../state/AppProvider';
+import { historyStats } from '../state/history';
 import { C, MONO, T } from '../theme';
 import { Btn, KV } from '../ui/common';
 
@@ -49,33 +48,12 @@ function Toggle({ label, on, onPress }: { label: string; on: boolean; onPress: (
 }
 
 export function ProfileScreen() {
-  const { face, setFace, wallet, my, myReady, offsetSec } = useApp();
+  const { face, setFace, wallet, history, myReady, offsetSec } = useApp();
   const myName = useSkrNames(wallet.owner ? [wallet.owner] : []).get(wallet.owner ?? '') ?? null;
   const muted = useBoolStore(soundMuted);
   const chatter = useBoolStore(chatterOn);
-  const stats = useMemo(() => {
-    const now = chainNowSec(offsetSec);
-    let wins = 0;
-    let losses = 0;
-    let refunds = 0;
-    let open = 0;
-    let staked = 0n;
-    let returned = 0n;
-    for (const p of my.positions) {
-      if (!p.round) continue;
-      if (p.round.account.status !== RoundStatus.Final) {
-        open++;
-        continue;
-      }
-      const r = positionResult(p.account, p.round.account, now);
-      if (r.kind === 'won') wins++;
-      else if (r.kind === 'lost') losses++;
-      else refunds++;
-      staked += p.account.stake;
-      returned += r.payout ?? 0n;
-    }
-    return { rounds: my.positions.length, wins, losses, refunds, open, net: returned - staked };
-  }, [my.positions, offsetSec]);
+  // Chain rows plus finished rounds kept on the phone after their accounts closed.
+  const stats = useMemo(() => historyStats(history, chainNowSec(offsetSec)), [history, offsetSec]);
 
   return (
     <ScrollView contentContainerStyle={styles.page}>

@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { lamports, type Address, type Instruction, type Signature } from '@solana/kit';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSignatureFromTransaction, lamports, type Address, type Instruction, type Signature, type Transaction } from '@solana/kit';
 import { transact, useMobileWallet, type KitMobileWallet } from '@wallet-ui/react-native-kit';
 import {
   compileForWallet,
@@ -8,6 +9,7 @@ import {
   openVault,
   revokeSession,
   sendAndConfirm,
+  signLocally,
   startSession,
   transferSol,
   vaultAddress,
@@ -16,24 +18,54 @@ import {
 import { AIRDROP_LAMPORTS, SESSION_RULES } from '../config';
 import { fetchAccounts } from '../chain/fetch';
 import type { SolanaRpc } from '../chain/rpc';
+import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
 import { humanError, type TxAction } from '../lib/errors';
 import { sol } from '../lib/format';
+import type { SessionKey } from '../session/sessionKey';
+import { createPendingTxStore, type GuardedAction, type PendingTx } from './pendingTx';
+import { MAX_REVOKES_PER_TX } from './sessionList';
+import { NETWORK_FEE } from './topUpPlan';
 import { WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
 
 export type WalletBusy = Exclude<TxAction, 'bet' | 'claim'>;
 
-export type WalletResult = { action: WalletBusy; ok: boolean; message: string; signature?: string; at: number };
+export type WalletResult = {
+  action: WalletBusy;
+  ok: boolean;
+  /** Sent, outcome not known yet: the action's button shows CHECKING until the chain answers. */
+  checking?: boolean;
+  message: string;
+  signature?: string;
+  at: number;
+};
+
+type Outcome = { message: string; signature?: string; checking?: boolean };
+type Signed = { transaction: Transaction; lastValidBlockHeight: bigint };
 
 /** Lamports a Top up transaction needs in the wallet beyond the deposit (rent, fees, margin). */
 const TOP_UP_OVERHEAD = 10_000_000n;
+/** How often a transaction of unknown outcome is looked up again. */
+const CHECK_EVERY_MS = 3_000;
+const CHECKING_TEXT = 'Sent. Checking devnet - no need to tap again.';
+const NONE: PendingTx[] = [];
+
+/** Money transactions of unknown outcome, per wallet, kept across app restarts (pendingTx.ts). */
+const txStore = createPendingTxStore(AsyncStorage);
+
+function settledResult(tx: PendingTx, check: TxCheck): WalletResult {
+  if (check.verdict === 'confirmed') return { action: tx.action, ok: true, message: tx.done, signature: tx.signature, at: Date.now() };
+  const reason = humanError(settledError(tx.signature, check.verdict, check, null), tx.action);
+  return { action: tx.action, ok: false, message: reason, signature: tx.signature, at: Date.now() };
+}
 
 export function useWalletActions(input: {
   rpc: SolanaRpc;
-  sessionKey: Address | null;
+  sessionKey: SessionKey | null;
   chainNowSec: () => number;
   onChanged: () => void;
 }) {
   const { rpc, sessionKey, chainNowSec, onChanged } = input;
+  const keyAddress = sessionKey?.address ?? null;
   const mwa = useMobileWallet();
   const owner = mwa.account?.address ?? null;
   const [busy, setBusy] = useState<WalletBusy | null>(null);
@@ -41,17 +73,52 @@ export function useWalletActions(input: {
   const busyRef = useRef(false);
   const clearResult = useCallback(() => setResult(null), []);
 
+  // Sent money transactions whose outcome is not known yet (their buttons show CHECKING).
+  const [unknown, setUnknown] = useState<{ owner: string | null; list: PendingTx[] }>({ owner: null, list: NONE });
+  useEffect(() => {
+    if (!owner) return undefined;
+    let alive = true;
+    txStore
+      .load(owner)
+      .then((stored) => {
+        if (!alive) return;
+        // Keep anything tracked while the read ran (a settled one is removed after this read, in order).
+        setUnknown((prev) => {
+          const tracked = prev.owner === owner ? prev.list.filter((t) => !stored.some((s) => s.signature === t.signature)) : NONE;
+          return { owner, list: [...stored, ...tracked] };
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [owner]);
+  const pendingTx = unknown.owner !== null && unknown.owner === owner ? unknown.list : NONE;
+  const track = useCallback(
+    (tx: PendingTx) =>
+      setUnknown((prev) => ({
+        owner: tx.owner,
+        list: [...(prev.owner === tx.owner ? prev.list : NONE).filter((t) => t.signature !== tx.signature), tx],
+      })),
+    [],
+  );
+  /** A settled transaction leaves the phone's store and the CHECKING list. */
+  const forget = useCallback(async (tx: PendingTx) => {
+    await txStore.remove(tx.owner, tx.signature).catch(() => undefined);
+    setUnknown((prev) => (prev.owner === tx.owner ? { ...prev, list: prev.list.filter((t) => t.signature !== tx.signature) } : prev));
+  }, []);
+
   const run = useCallback(
-    async (action: WalletBusy, work: () => Promise<{ message: string; signature?: string }>) => {
+    async (action: WalletBusy, work: () => Promise<Outcome>) => {
       if (busyRef.current) return false;
       busyRef.current = true;
       setBusy(action);
       setResult(null);
       try {
         const done = await work();
-        setResult({ action, ok: true, message: done.message, signature: done.signature, at: Date.now() });
+        setResult({ action, ok: !done.checking, checking: done.checking, message: done.message, signature: done.signature, at: Date.now() });
         onChanged();
-        return true;
+        return !done.checking;
       } catch (error) {
         setResult({ action, ok: false, message: humanError(error, action), at: Date.now() });
         return false;
@@ -80,18 +147,105 @@ export function useWalletActions(input: {
    * transaction is compiled after the wallet authorizes, so the blockhash is fresh even when the
    * wallet first asks for a password.
    */
-  const signAndSubmit = useCallback(
-    async (payer: Address, instructions: Instruction[]): Promise<Signature> => {
-      const { signed, lastValidBlockHeight } = await withWallet(walletCtx, async (wallet, account) => {
+  const walletSign = useCallback(
+    (payer: Address, instructions: Instruction[]): Promise<Signed> =>
+      withWallet(walletCtx, async (wallet, account) => {
         if (account.address !== payer) throw new WalletAccountChanged(account.address);
         const compiled = await compileForWallet(rpc, payer, instructions);
         const [transaction] = await wallet.signTransactions({ transactions: [compiled.transaction] });
-        return { signed: transaction, lastValidBlockHeight: compiled.lastValidBlockHeight };
-      });
-      return sendAndConfirm(rpc, { transaction: signed, lastValidBlockHeight });
-    },
+        return { transaction, lastValidBlockHeight: compiled.lastValidBlockHeight };
+      }),
     [rpc, walletCtx],
   );
+
+  /** Claims only: repeating one is harmless (the program refuses a second claim). */
+  const signAndSubmit = useCallback(
+    async (payer: Address, instructions: Instruction[]): Promise<Signature> => sendAndConfirm(rpc, await walletSign(payer, instructions)),
+    [rpc, walletSign],
+  );
+
+  /**
+   * Sends a signed money transaction. Its signature and blockhash expiry are stored first; if
+   * sending ends without proof (timeout, dropped connection, app closed) it stays CHECKING until the
+   * chain shows it confirmed, refused or expired, and nothing new is sent meanwhile.
+   */
+  const submitGuarded = useCallback(
+    async (action: GuardedAction, forOwner: Address, signed: Signed, done: string, targets: string[] = []): Promise<Outcome> => {
+      const signature = getSignatureFromTransaction(signed.transaction);
+      const tx: PendingTx = { action, owner: forOwner, signature, lastValidBlockHeight: signed.lastValidBlockHeight, at: Date.now(), done, targets };
+      await txStore.put(tx).catch(() => undefined);
+      try {
+        await sendAndConfirm(rpc, signed);
+      } catch (error) {
+        const proof = sendErrorProof(error);
+        let check: TxCheck | null = null;
+        if (proof !== 'failed') check = await checkSignature(rpc, tx).catch(() => null);
+        const verdict = settleSendError(proof, check?.verdict ?? null);
+        if (verdict === 'pending') {
+          track(tx);
+          return { message: CHECKING_TEXT, signature, checking: true };
+        }
+        await forget(tx);
+        if (verdict === 'confirmed') return { message: done, signature };
+        throw settledError(signature, verdict, check, error);
+      }
+      await forget(tx);
+      return { message: done, signature };
+    },
+    [rpc, track, forget],
+  );
+
+  /**
+   * Before a new transaction of `action`, an earlier one of unknown outcome is looked up first:
+   * confirmed means it is done (nothing new is sent), refused shows why, not found yet keeps
+   * CHECKING, expired lets the new one go.
+   */
+  const settleEarlier = useCallback(
+    async (forOwner: Address, action: GuardedAction): Promise<Outcome | null> => {
+      const earlier = (await txStore.load(forOwner).catch(() => NONE)).filter((t) => t.action === action);
+      for (const tx of earlier) {
+        const check = await checkSignature(rpc, tx).catch(() => null);
+        if (!check || check.verdict === 'pending') {
+          track(tx);
+          return { message: CHECKING_TEXT, signature: tx.signature, checking: true };
+        }
+        await forget(tx);
+        if (check.verdict === 'confirmed') return { message: tx.done, signature: tx.signature };
+        if (check.verdict === 'failed') throw settledError(tx.signature, 'failed', check, null);
+      }
+      return null;
+    },
+    [rpc, track, forget],
+  );
+
+  // Looks up every CHECKING transaction until the chain answers (also right after a restart).
+  const pendingRef = useRef(pendingTx);
+  pendingRef.current = pendingTx;
+  const hasUnknown = pendingTx.length > 0;
+  useEffect(() => {
+    if (!hasUnknown) return undefined;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      timer = null;
+      for (const tx of pendingRef.current) {
+        // A running action settles its own earlier transactions (settleEarlier).
+        if (busyRef.current) break;
+        const check = await checkSignature(rpc, tx).catch(() => null);
+        if (stopped) return;
+        if (!check || check.verdict === 'pending' || busyRef.current) continue;
+        setResult(settledResult(tx, check));
+        if (check.verdict === 'confirmed') onChanged();
+        await forget(tx);
+      }
+      if (!stopped) timer = setTimeout(tick, CHECK_EVERY_MS);
+    };
+    timer = setTimeout(tick, 0);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hasUnknown, rpc, forget, onChanged]);
 
   const connect = useCallback(
     () =>
@@ -117,9 +271,11 @@ export function useWalletActions(input: {
       run('topup', async () => {
         const payer = owner;
         if (!payer) throw new Error('Connect a wallet first.');
-        if (!sessionKey) throw new Error('The session key is still loading - try again in a second.');
+        if (!keyAddress) throw new Error('The session key is still loading - try again in a second.');
+        const earlier = await settleEarlier(payer, 'topup');
+        if (earlier) return earlier;
         const vaultAddr = await vaultAddress(payer);
-        const [vaultRaw, walletRaw, keyRaw] = await fetchAccounts(rpc, [vaultAddr, payer, sessionKey]);
+        const [vaultRaw, walletRaw, keyRaw] = await fetchAccounts(rpc, [vaultAddr, payer, keyAddress]);
         const needsKeyGas = (keyRaw?.lamports ?? 0n) < SESSION_RULES.gasMin;
         const need = amount + (needsKeyGas ? SESSION_RULES.gasTopUp : 0n) + TOP_UP_OVERHEAD;
         const walletLamports = walletRaw?.lamports ?? 0n;
@@ -143,17 +299,17 @@ export function useWalletActions(input: {
         ixs.push(
           await startSession({
             owner: payer,
-            sessionSigner: sessionKey,
+            sessionSigner: keyAddress,
             expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
             maxPerBet: SESSION_RULES.maxPerBet,
             sessionCap: amount,
           }),
         );
-        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: sessionKey, lamports: SESSION_RULES.gasTopUp }));
-        const signature = await signAndSubmit(payer, ixs);
-        return { message: `Topped up ${sol(amount)}. Bets are one tap for 24 h, up to ${sol(amount)} in total.`, signature };
+        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
+        const signed = await walletSign(payer, ixs);
+        return submitGuarded('topup', payer, signed, `Topped up ${sol(amount)}. Bets are one tap for 24 h, up to ${sol(amount)} in total.`);
       }),
-    [run, owner, sessionKey, rpc, chainNowSec, signAndSubmit],
+    [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
   );
 
   /**
@@ -165,45 +321,77 @@ export function useWalletActions(input: {
       run('renew', async () => {
         const payer = owner;
         if (!payer) throw new Error('Connect a wallet first.');
-        if (!sessionKey) throw new Error('The session key is still loading - try again in a second.');
+        if (!keyAddress) throw new Error('The session key is still loading - try again in a second.');
         if (budget <= 0n) throw new Error('Nothing in the game balance to play with - top up first.');
-        const [keyRaw] = await fetchAccounts(rpc, [sessionKey]);
+        const earlier = await settleEarlier(payer, 'renew');
+        if (earlier) return earlier;
+        const [keyRaw] = await fetchAccounts(rpc, [keyAddress]);
         const needsKeyGas = (keyRaw?.lamports ?? 0n) < SESSION_RULES.gasMin;
         const ixs: Instruction[] = [
           await startSession({
             owner: payer,
-            sessionSigner: sessionKey,
+            sessionSigner: keyAddress,
             expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
             maxPerBet: SESSION_RULES.maxPerBet,
             sessionCap: budget,
           }),
         ];
-        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: sessionKey, lamports: SESSION_RULES.gasTopUp }));
-        const signature = await signAndSubmit(payer, ixs);
-        return { message: `Fast bets are on for 24 h, up to ${sol(budget)} in total.`, signature };
+        if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
+        const signed = await walletSign(payer, ixs);
+        return submitGuarded('renew', payer, signed, `Fast bets are on for 24 h, up to ${sol(budget)} in total.`);
       }),
-    [run, owner, sessionKey, rpc, chainNowSec, signAndSubmit],
+    [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
   );
 
   const withdrawAll = useCallback(
     (available: bigint) =>
       run('withdraw', async () => {
         if (!owner) throw new Error('Connect a wallet first.');
+        const earlier = await settleEarlier(owner, 'withdraw');
+        if (earlier) return earlier;
         if (available <= 0n) throw new Error('Nothing available to withdraw.');
-        const signature = await signAndSubmit(owner, [await withdraw({ owner, amount: available })]);
-        return { message: `Withdrew ${sol(available)} to your wallet.`, signature };
+        const signed = await walletSign(owner, [await withdraw({ owner, amount: available })]);
+        return submitGuarded('withdraw', owner, signed, `Withdrew ${sol(available)} to your wallet.`);
       }),
-    [run, owner, signAndSubmit],
+    [run, owner, settleEarlier, walletSign, submitGuarded],
   );
 
-  const revoke = useCallback(
-    () =>
+  /** Revokes the sessions of these device keys in one wallet approval (any device, this phone included). */
+  const revokeSessions = useCallback(
+    (signers: readonly string[]) =>
       run('revoke', async () => {
-        if (!owner || !sessionKey) throw new Error('Connect a wallet first.');
-        const signature = await signAndSubmit(owner, [await revokeSession({ owner, sessionSigner: sessionKey })]);
-        return { message: 'Session revoked. This phone can no longer bet until you top up again.', signature };
+        if (!owner) throw new Error('Connect a wallet first.');
+        const earlier = await settleEarlier(owner, 'revoke');
+        if (earlier) return earlier;
+        const list = [...new Set(signers)].slice(0, MAX_REVOKES_PER_TX) as Address[];
+        if (list.length === 0) throw new Error('No active session to revoke.');
+        const ixs = await Promise.all(list.map((signer) => revokeSession({ owner, sessionSigner: signer })));
+        const signed = await walletSign(owner, ixs);
+        const mine = keyAddress !== null && list.includes(keyAddress);
+        const done =
+          list.length > 1 ? `${list.length} sessions revoked.` : mine ? 'Session revoked. This phone needs a new approval to bet.' : 'Session revoked.';
+        return submitGuarded('revoke', owner, signed, done, list);
       }),
-    [run, owner, sessionKey, signAndSubmit],
+    [run, owner, keyAddress, settleEarlier, walletSign, submitGuarded],
+  );
+
+  /**
+   * The SOL on this phone's device key (bet fees, position rent) back to the wallet. The key signs
+   * and pays the fee itself, so no wallet popup; it is left empty (the next top up refills it).
+   */
+  const returnKeyFunds = useCallback(
+    () =>
+      run('sweep', async () => {
+        if (!owner || !sessionKey) throw new Error('Connect a wallet first.');
+        const earlier = await settleEarlier(owner, 'sweep');
+        if (earlier) return earlier;
+        const { value } = await rpc.getBalance(sessionKey.address, { commitment: 'confirmed' }).send();
+        const amount = BigInt(value) - NETWORK_FEE;
+        if (amount <= 0n) throw new Error('Nothing on the device key to return.');
+        const signed = await signLocally(rpc, sessionKey.signer, [transferSol({ from: sessionKey.signer, to: owner, lamports: amount })]);
+        return submitGuarded('sweep', owner, signed, `Returned ${sol(amount, { maxDecimals: 5 })} to your wallet.`);
+      }),
+    [run, owner, sessionKey, rpc, settleEarlier, submitGuarded],
   );
 
   const airdrop = useCallback(
@@ -233,12 +421,15 @@ export function useWalletActions(input: {
     busy,
     result,
     clearResult,
+    /** Sent money transactions whose outcome is not known yet (see isChecking in pendingTx.ts). */
+    pendingTx,
     connect,
     disconnect,
     topUpAndPlay,
     renewSession,
     withdrawAll,
-    revoke,
+    revokeSessions,
+    returnKeyFunds,
     airdrop,
     signWithWallet,
   };
