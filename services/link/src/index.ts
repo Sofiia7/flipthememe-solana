@@ -16,6 +16,7 @@
 // on (to /get, then into the app) and the copy invites them to any later round.
 
 import { faucet, type FaucetEnv } from './faucet.ts';
+import { leaderboard, leaderboardPage, type LeaderboardEnv } from './leaderboard.ts';
 import { base58Decode, names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
@@ -220,8 +221,10 @@ export function handle(request: Request): Response {
 }
 
 export default {
-  fetch: (request: Request, env: NamesEnv & FaucetEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
+  fetch: (request: Request, env: NamesEnv & FaucetEnv & LeaderboardEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
     const { pathname } = new URL(request.url);
+    if (pathname === '/v1/leaderboard') return leaderboard(request, env);
+    if (pathname === '/leaderboard') return leaderboardPage();
     if (pathname === '/v1/names') return names(request, env, ctx);
     if (pathname === '/v1/faucet') return faucet(request, env);
     return handle(request);

@@ -8,6 +8,8 @@ A busy memecoin, a shared start, one measured minute of price move. You make the
 
 **Why it is different.**
 
+**Leaderboard.** The app's LEADERS tab and [public ranking](https://sol.flipthememe.com/leaderboard) show the top 200 players by net test SOL over the last seven days. Returns minus stakes include game fees but exclude transaction fees and account rent. House positions never enter the ranking; refunds do not count as wins or losses. A read-only keeper indexer captures confirmed final positions every two minutes, saves them in `/data/leaderboard.json`, and signs snapshots with the keeper key for the link Worker's KV store. Restarts and closing accounts do not erase captured results. Earlier bets whose accounts were already closed before tracking began cannot be recovered by this indexer. The screen shows the tracking start, update time, delayed updates, and the UP/DOWN counts of the keeper's minute-by-minute market sample; those counts are not assumed to be 50/50.
+
 - **Matched 1:1, one payout.** Only the amount both sides cover plays. A win pays 1.96x the matched part, the unmatched surplus comes back without a fee, so betting both sides of a lopsided book only costs the fee. No odds follow the book.
 - **The start price is not the price you tapped at.** It is fixed after entry closes, so nobody calls a price they already see.
 - **Two signatures on every price.** The keeper posts the samples, an independent attestor co-signs them, and every sample stays in the transaction for anyone to compare with the pool's history.

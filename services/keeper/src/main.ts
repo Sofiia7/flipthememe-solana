@@ -29,6 +29,8 @@ import { ObservationPersister, ObservationStore } from './observations.ts';
 import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
 import { FailoverRpc, makeRpc, shortError } from './rpc.ts';
 import { RoundLog } from './roundlog.ts';
+import { Leaderboard } from './leaderboard.ts';
+import { dirname, join } from 'node:path';
 import { PoolRefs, Sampler } from './sampler.ts';
 import { Scheduler } from './scheduler.ts';
 import { PoolSelector, poolChain, type Selection } from './selector.ts';
@@ -231,10 +233,18 @@ async function main(): Promise<void> {
   };
 
   const errors = new LoopErrorLog(log);
+  let leaderboard: Leaderboard | null = null;
+  try {
+    leaderboard = new Leaderboard(join(dirname(cfg.stateFile), 'leaderboard.json'), devnet, signer);
+  } catch (error) {
+    // Preserve a broken ledger for recovery; an optional ranking must never stop settlement.
+    log({ event: 'leaderboard_disabled', error: shortError(error) });
+  }
   // The last scheduler tick that completed, with or without an error: a loop that keeps failing
   // is the error log's business, a loop that stopped completing is the watchdog's.
   let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
+    every('leaderboard', 120_000, 45_000, errors, async () => { await leaderboard?.tick(shadow.summary(Date.now())); }),
     every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),
     // Starts the reads and returns: the 1 s tick does not wait for them (sampler.ts: two in flight per pool).
     every('sampler', 1_000, 0, errors, async () => sampler.tick(samplePools())),

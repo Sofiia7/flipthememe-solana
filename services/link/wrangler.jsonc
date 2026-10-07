@@ -29,5 +29,6 @@
     "FAUCET_LAMPORTS": "200000000"
   },
   "ratelimits": [{ "name": "FAUCET_LIMITER", "namespace_id": "1001", "simple": { "limit": 1, "period": 60 } }],
+  "kv_namespaces": [{ "binding": "LEADERBOARD", "id": "3367232235614637b618960b2e2c81fd" }],
   "observability": { "enabled": true }
 }

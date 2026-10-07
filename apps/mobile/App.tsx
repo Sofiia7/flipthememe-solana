@@ -7,6 +7,7 @@ import { loadPrefs } from './src/lib/prefs';
 import { ArenaScreen } from './src/screens/ArenaScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+import { LeaderboardScreen } from './src/screens/LeaderboardScreen';
 import { WalletScreen } from './src/screens/WalletScreen';
 import { ShareCardHost } from './src/share/ShareCard';
 import { preloadSounds } from './src/sound/sound';
@@ -49,6 +50,7 @@ function Shell() {
         {tab === 'wallet' ? <WalletScreen /> : null}
         {tab === 'history' ? <HistoryScreen /> : null}
         {tab === 'profile' ? <ProfileScreen /> : null}
+        {tab === 'leaders' ? <LeaderboardScreen /> : null}
       </View>
       <TabBar tab={tab} onChange={setTab} bottomInset={insets.bottom} />
       {toasts[0] ? <ResultLayer toast={toasts[0]} onClose={dismissToast} top={insets.top + 8} /> : null}

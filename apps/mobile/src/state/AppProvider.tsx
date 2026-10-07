@@ -29,7 +29,7 @@ import { useAskPermissionAfterFirstBet, useResultReminders } from './useResultRe
 
 export { sessionStatusOf, type SessionStatus } from '../wallet/sessionList';
 
-export type Tab = 'arena' | 'wallet' | 'history' | 'profile';
+export type Tab = 'arena' | 'wallet' | 'history' | 'profile' | 'leaders';
 
 /** One of my rounds turned final while the app was open: drives the win / rekt / refund overlays. */
 export type Toast = {
