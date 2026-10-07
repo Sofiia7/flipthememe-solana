@@ -111,3 +111,14 @@ export function createDue(nowMs: number, rounds: readonly Pick<RoundAccount, 'op
   if (rounds.some((r) => r.opensAt >= boundary)) return null;
   return { opensAt: boundary };
 }
+
+/**
+ * The round that already stands at (or past) the upcoming minute boundary, once it is time to create that
+ * round: createDue stays quiet then, and when this keeper did not create the round, someone else did.
+ */
+export function roundAhead(nowMs: number, rounds: readonly Pick<RoundAccount, 'id' | 'opensAt'>[]): { id: bigint; opensAt: bigint } | null {
+  const boundary = nextBoundarySecs(nowMs);
+  if (nowMs < ms(boundary) - CREATE_LEAD_MS) return null;
+  const found = rounds.find((r) => r.opensAt >= boundary);
+  return found ? { id: found.id, opensAt: found.opensAt } : null;
+}

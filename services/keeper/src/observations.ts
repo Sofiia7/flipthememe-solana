@@ -1,17 +1,42 @@
 /**
  * Recent mainnet price observations per pool (about 15 minutes), and the samples of one
  * strike or exit window as they go into set_strike / settle. The store is written to a JSON file
- * next to the state file (at most every 5 s, and on a graceful shutdown) and read back at start,
- * so a restart inside a window does not throw its samples away.
+ * next to the state file and read back at start, so a restart inside a window does not throw its
+ * samples away. The write is every 5 s from 20 s before a price window until it ends, and once a minute
+ * otherwise (persistEveryMs; the file is about 65 KB per pool), and on a graceful shutdown.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { windowMean, type PriceObservation, type PriceSample } from '@flipthememe/client';
+import { TIMING, windowMean, type PriceObservation, type PriceSample } from '@flipthememe/client';
 import type { Logger } from './log.ts';
 import { writeJsonAtomic } from './state.ts';
 
 export const RETAIN_MS = 15 * 60 * 1000;
-/** At most one write of the observations file per this long. */
+/** At most one write of the observations file per this long while a price window is near or open. */
 export const PERSIST_EVERY_MS = 5_000;
+/** Outside that, one write per this long. */
+export const PERSIST_QUIET_EVERY_MS = 60_000;
+/** The fast pace starts this long before a strike or exit window. */
+export const PERSIST_LEAD_MS = 20_000;
+
+/**
+ * Where the price windows fall in a minute, in seconds from the minute boundary: a round opens on the
+ * boundary, its strike window is entry + pause seconds later and its exit window a move later, so with
+ * rounds every minute both land on the same seconds of every minute (30 to 40).
+ */
+const WINDOW_SECS: readonly (readonly [number, number])[] = [
+  [TIMING.entrySecs + TIMING.pauseSecs, TIMING.entrySecs + TIMING.pauseSecs + TIMING.strikeSecs],
+  [TIMING.entrySecs + TIMING.pauseSecs + TIMING.moveSecs, TIMING.entrySecs + TIMING.pauseSecs + TIMING.moveSecs + TIMING.exitSecs],
+];
+
+/** 5 s in the 20 s before a price window and inside it, otherwise a minute. */
+export function persistEveryMs(nowMs: number): number {
+  const secondOfMinute = (nowMs % 60_000) / 1000;
+  for (const [start, end] of WINDOW_SECS) {
+    const sinceLead = (((secondOfMinute - (start - PERSIST_LEAD_MS / 1000)) % 60) + 60) % 60;
+    if (sinceLead <= end - start + PERSIST_LEAD_MS / 1000) return PERSIST_EVERY_MS;
+  }
+  return PERSIST_QUIET_EVERY_MS;
+}
 export const OBSERVATIONS_VERSION = 1;
 /** 15 minutes of a few pools is a few hundred KB; a file far above that is not ours and is not read. */
 export const MAX_OBSERVATIONS_FILE_BYTES = 4 * 1024 * 1024;
@@ -46,6 +71,14 @@ export class ObservationStore {
       if (merged.length > 0) this.byPool.set(pool, merged);
     }
     this.revision++;
+  }
+
+  /** True when one of the pool's latest observations (the last 30 s or so) has this slot. */
+  hasSlot(pool: string, slot: bigint): boolean {
+    const list = this.byPool.get(pool);
+    if (!list) return false;
+    for (let i = list.length - 1; i >= 0 && i >= list.length - 30; i--) if (list[i]?.slot === slot) return true;
+    return false;
   }
 
   get(pool: string): readonly PriceObservation[] {
@@ -160,21 +193,25 @@ export function parseObservations(raw: unknown, nowMs: number, retainMs: number 
   return { pools, kept, dropped };
 }
 
-/** Keeps the observations file in step with the store: load at start, throttled writes, a final write on shutdown. */
+/**
+ * Keeps the observations file in step with the store: load at start, throttled writes (persistEveryMs, or the
+ * fixed interval given), a final write on shutdown.
+ */
 export class ObservationPersister {
   private readonly store: ObservationStore;
   private readonly path: string;
   private readonly logger: Logger;
-  private readonly everyMs: number;
+  private readonly everyMs: (nowMs: number) => number;
   /** Revision of the store as last written (0: a store that never changed has nothing to write). */
   private savedRevision = 0;
   private savedAtMs = Number.NEGATIVE_INFINITY;
 
-  constructor(opts: { store: ObservationStore; path: string; logger: Logger; everyMs?: number }) {
+  constructor(opts: { store: ObservationStore; path: string; logger: Logger; everyMs?: number | ((nowMs: number) => number) }) {
     this.store = opts.store;
     this.path = opts.path;
     this.logger = opts.logger;
-    this.everyMs = opts.everyMs ?? PERSIST_EVERY_MS;
+    const every = opts.everyMs ?? persistEveryMs;
+    this.everyMs = typeof every === 'number' ? () => every : every;
   }
 
   /** Loads what the file still has that is usable at `nowMs`. A missing file is the normal first start; a bad one is logged and ignored. */
@@ -193,9 +230,9 @@ export class ObservationPersister {
     this.savedRevision = this.store.revision;
   }
 
-  /** Writes when something changed and the last write is at least `everyMs` old. Returns whether it wrote; a failed write throws. */
+  /** Writes when something changed and the last write is old enough for this moment (persistEveryMs). Returns whether it wrote; a failed write throws. */
   maybeSave(nowMs: number): boolean {
-    if (this.store.revision === this.savedRevision || nowMs - this.savedAtMs < this.everyMs) return false;
+    if (this.store.revision === this.savedRevision || nowMs - this.savedAtMs < this.everyMs(nowMs)) return false;
     return this.write(nowMs);
   }
 

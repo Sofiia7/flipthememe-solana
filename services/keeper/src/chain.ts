@@ -39,6 +39,7 @@ import {
   type Signature,
   type TransactionSigner,
 } from '@solana/kit';
+import { redact } from './log.ts';
 import type { SolanaRpc } from './rpc.ts';
 
 /** 8-byte discriminator + Round::INIT_SPACE (programs/flip-the-meme/src/lib.rs). */
@@ -254,7 +255,7 @@ export function describeError(error: unknown): string {
   const cause = (error as { cause?: unknown })?.cause;
   const parts = [error instanceof Error ? error.message : String(error)];
   if (cause instanceof Error && cause.message && !parts[0]?.includes(cause.message)) parts.push(cause.message);
-  const text = parts.join(': ');
+  const text = redact(parts.join(': '));
   return text.length > 300 ? `${text.slice(0, 300)}...` : text;
 }
 

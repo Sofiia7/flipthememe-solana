@@ -41,6 +41,14 @@ test('Position: size, round and claimed offsets', () => {
   const unclaimed = data.slice();
   unclaimed[OFFSETS.positionClaimed] = position.claimed ? 0 : 1;
   assert.equal(decodePosition(unclaimed).claimed, !position.claimed);
+  // The census and the house wallet limit read is_house: the byte right before `claimed` (89).
+  assert.equal(OFFSETS.positionIsHouse, 89);
+  assert.equal(OFFSETS.positionIsHouse + 1, OFFSETS.positionClaimed);
+  assert.equal(data[OFFSETS.positionIsHouse], position.isHouse ? 1 : 0);
+  const otherSide = data.slice();
+  otherSide[OFFSETS.positionIsHouse] = position.isHouse ? 0 : 1;
+  assert.equal(decodePosition(otherSide).isHouse, !position.isHouse);
+  assert.equal(decodePosition(otherSide).claimed, position.claimed);
 });
 
 test('Vault, HouseLimits and OracleConfig sizes', () => {

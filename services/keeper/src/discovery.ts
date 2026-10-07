@@ -6,6 +6,10 @@
  * sorts), and a pool appears in the network-wide `new_pools` list only in its first minutes (on
  * 5 October 2026 a page of 20 spanned 35 s to 3 min). So pools are tracked from there:
  *
+ * 0. the 5-minute trending list (optional, 1 request) only adds its PumpSwap pools to the tracked set.
+ *    It is never a source of ranking numbers: a trending list is "what is rising right now", and a
+ *    round that reads 2.5 minutes of price turns that momentum into UP. Every ranked candidate gets
+ *    its numbers from `pools/multi` (or the top list) like any other tracked pool;
  * 1. `pools/multi` (1 request): current numbers of the current pool and of the tracked pools inside
  *    the entry age window, at most 30 (the 20 best scores, then the least recently refreshed);
  * 2. `dexes/pumpswap/pools` by 24 h transactions, one page per refresh, pages 1 and 2 every 5
@@ -14,6 +18,11 @@
  *    pool seen by the previous refresh. Its PumpSwap pools quoted in wSOL are tracked until they
  *    pass the keep age (180 minutes). The set lives in memory: after a restart pools become
  *    candidates again once they are 10 minutes old, and the fallback ladder covers the gap.
+ *
+ * The client parses a row into a `PoolCandidate`, which keeps only the sum of the 5-minute trades. The
+ * keeper wraps the fetch it hands to the client and notes the `buys` and `sells` of every row it passes
+ * (`attributes.transactions.m5`), so candidates carry both numbers (poolgate.ts: a one-sided flow
+ * scores low) without a change to the client package.
  *
  * A failed request ends the refresh and skips the next 1, 2, 4, then 8 refreshes (exponential
  * back-off; HTTP 429 is the usual cause). Numbers stay usable for 15 minutes, so the selector keeps
@@ -31,7 +40,7 @@ import {
 } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
 import type { Logger } from './log.ts';
-import { scoreOf, type PoolGate } from './poolgate.ts';
+import { scoreOf, type Candidate, type PoolGate } from './poolgate.ts';
 import { shortError } from './rpc.ts';
 
 export const MAX_CALLS_PER_REFRESH = 4;
@@ -47,11 +56,32 @@ export const MAX_SKIPPED_REFRESHES = 8;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 type Tracked = { pool: Address; createdAtMs: number; score: number; refreshedAtMs: number };
-type Numbers = { candidate: PoolCandidate; atMs: number };
+type Numbers = { candidate: Candidate; atMs: number };
+type Flow = { buys: number; sells: number };
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+
+/** The `buys` and `sells` of the last 5 minutes of every row of a GeckoTerminal answer, by pool address. */
+export function flowsOf(body: unknown): Map<Address, Flow> {
+  const out = new Map<Address, Flow>();
+  const rows = isRecord(body) ? body.data : null;
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    const attributes = isRecord(row) ? row.attributes : null;
+    if (!isRecord(attributes) || typeof attributes.address !== 'string') continue;
+    const transactions = isRecord(attributes.transactions) ? attributes.transactions : null;
+    const m5 = transactions && isRecord(transactions.m5) ? transactions.m5 : null;
+    const buys = m5 ? count(m5.buys) : null;
+    const sells = m5 ? count(m5.sells) : null;
+    if (buys !== null && sells !== null) out.set(attributes.address as Address, { buys, sells });
+  }
+  return out;
+}
 
 export type DiscoveryResult = {
   /** Pools with numbers at most 15 minutes old: this refresh's, or the last good ones. */
-  candidates: PoolCandidate[];
+  candidates: Candidate[];
   /** True when this refresh ran and every request succeeded. */
   complete: boolean;
 };
@@ -74,6 +104,8 @@ export class PoolDiscovery {
   private readonly trending: boolean;
   private readonly tracked = new Map<Address, Tracked>();
   private readonly numbers = new Map<Address, Numbers>();
+  /** Buys and sells of the last 5 minutes per pool, noted from the raw answers (see flowsOf). */
+  private readonly flows = new Map<Address, Flow>();
   private newestSeenMs: number | null = null;
   private topPending: number[] = [];
   private topDueAtMs = Number.NEGATIVE_INFINITY;
@@ -92,8 +124,9 @@ export class PoolDiscovery {
     /** `new_pools` pages per refresh at most (default 3; 0 turns tracking of new pools off). */
     newPoolsPages?: number;
     /**
-     * Start every refresh with the 5-minute trending list (default off). When it answers, the refresh
-     * counts as usable even if a later request fails, so a busy shared IP does not freeze rotation.
+     * Start every refresh with the 5-minute trending list (default off). It only adds pools to the
+     * tracked set: the numbers that rank candidates come from `pools/multi` and the top list, never
+     * from the trending rows. It costs one request of the budget.
      */
     trending?: boolean;
   }) {
@@ -101,9 +134,18 @@ export class PoolDiscovery {
     this.logger = opts.logger;
     const base: GeckoTerminalFetch =
       opts.fetchFn ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }));
-    this.fetchFn = (url, init) => {
+    this.fetchFn = async (url, init) => {
       this.requests++;
-      return base(url, init);
+      const res = await base(url, init);
+      return {
+        ok: res.ok,
+        status: res.status,
+        json: async () => {
+          const body = await res.json();
+          for (const [pool, flow] of flowsOf(body)) this.flows.set(pool, flow);
+          return body;
+        },
+      };
     };
     this.maxCalls = opts.maxCalls ?? MAX_CALLS_PER_REFRESH;
     this.newPoolsPages = Math.min(opts.newPoolsPages ?? NEW_POOLS_MAX_PAGES, NEW_POOLS_MAX_PAGES);
@@ -118,16 +160,12 @@ export class PoolDiscovery {
     }
     let budget = this.maxCalls;
     let step = 'pools/multi';
-    let trendingOk = false;
     try {
       if (this.trending && budget > 0) {
         step = 'trending';
         budget--;
-        for (const c of await fetchTrendingPumpSwapPools(this.fetchFn, nowMs)) {
-          this.track(c, nowMs);
-          this.numbers.set(c.pool, { candidate: c, atMs: nowMs });
-        }
-        trendingOk = true;
+        // Tracking only: its numbers are not used for the ranking (see the header).
+        for (const c of await fetchTrendingPumpSwapPools(this.fetchFn, nowMs)) this.track(c, nowMs);
         step = 'pools/multi';
       }
       const ask = this.poolsToRefresh(nowMs, current);
@@ -145,7 +183,7 @@ export class PoolDiscovery {
       if (topPage !== undefined && budget > (this.newPoolsPages > 0 ? 1 : 0)) {
         budget--;
         for (const c of await fetchTopPumpSwapPools(this.fetchFn, topPage, nowMs)) {
-          this.numbers.set(c.pool, { candidate: c, atMs: nowMs });
+          this.numbers.set(c.pool, { candidate: this.withFlow(c), atMs: nowMs });
         }
         this.topPending.shift();
       }
@@ -178,15 +216,20 @@ export class PoolDiscovery {
         skipRefreshes: this.skips,
         keeping: current,
       });
-      if (trendingOk) this.lastOkAtMs = nowMs;
-      return { candidates: this.candidates(nowMs), complete: trendingOk };
+      return { candidates: this.candidates(nowMs), complete: false };
     }
     this.failures = 0;
     this.lastOkAtMs = nowMs;
     return { candidates: this.candidates(nowMs), complete: true };
   }
 
-  /** Adds pools to the tracked set (from a `new_pools` page; also used by the dry-run script). */
+  /** `c` with the buys and sells noted for its pool, when there are any. */
+  private withFlow(c: PoolCandidate): Candidate {
+    const flow = this.flows.get(c.pool);
+    return flow ? { ...c, buys: flow.buys, sells: flow.sells } : c;
+  }
+
+  /** Adds pools to the tracked set (from a `new_pools` page or the trending list; also used by the dry-run script). */
   track(c: PoolCandidate, nowMs: number): void {
     if (this.tracked.has(c.pool) || !(nowMs - c.createdAtMs <= this.gate.keepMaxAgeMs)) return;
     this.tracked.set(c.pool, { pool: c.pool, createdAtMs: c.createdAtMs, score: scoreOf(c, nowMs, this.gate), refreshedAtMs: 0 });
@@ -229,7 +272,7 @@ export class PoolDiscovery {
     const found = new Set<Address>();
     for (const c of got) {
       found.add(c.pool);
-      this.numbers.set(c.pool, { candidate: c, atMs: nowMs });
+      this.numbers.set(c.pool, { candidate: this.withFlow(c), atMs: nowMs });
       const t = this.tracked.get(c.pool);
       if (t) {
         t.score = scoreOf(c, nowMs, this.gate);
@@ -247,7 +290,7 @@ export class PoolDiscovery {
     }
   }
 
-  private candidates(nowMs: number): PoolCandidate[] {
+  private candidates(nowMs: number): Candidate[] {
     return [...this.numbers.values()].filter((n) => nowMs - n.atMs <= STATS_MAX_AGE_MS).map((n) => n.candidate);
   }
 
@@ -257,6 +300,9 @@ export class PoolDiscovery {
     }
     for (const [pool, n] of this.numbers) {
       if (nowMs - n.atMs > STATS_MAX_AGE_MS) this.numbers.delete(pool);
+    }
+    for (const pool of this.flows.keys()) {
+      if (!this.tracked.has(pool) && !this.numbers.has(pool)) this.flows.delete(pool);
     }
   }
 }

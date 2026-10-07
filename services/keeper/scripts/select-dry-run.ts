@@ -10,18 +10,20 @@
  * fresh process knows none that are already 10+ minutes old. Saved `new_pools` pages (for example
  * packages/client/test/fixtures/geckoterminal-new-pools-page1.json) seed that set; without them
  * only the fallback ladder has candidates. `--save DIR` writes the raw GeckoTerminal answers there.
- * MAINNET_RPCS and the POOL_* variables are read as by the keeper.
+ * MAINNET_RPCS, the POOL_* variables and the token check's (TOKEN_CHECK, HOLDER_MAX_PCT) are read as by the
+ * keeper; the token check adds two mainnet reads per candidate that passes the depth gate.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEVNET_PARAMS, fetchNewPumpSwapPools, type GeckoTerminalFetch } from '@flipthememe/client';
-import { DEFAULT_MAINNET_RPCS, loadPoolGate } from '../src/config.ts';
+import { DEFAULT_MAINNET_RPCS, loadPoolGate, loadTokenCheck } from '../src/config.ts';
 import { PoolDiscovery, type DiscoveryResult } from '../src/discovery.ts';
 import { log } from '../src/log.ts';
 import { MINUTE_MS, RUNG_NAMES, rankCandidates } from '../src/poolgate.ts';
 import { FailoverRpc } from '../src/rpc.ts';
 import { PoolRefs } from '../src/sampler.ts';
 import { PoolSelector, poolChain } from '../src/selector.ts';
+import { TokenChecker } from '../src/tokencheck.ts';
 
 const MAX_REQUESTS = 2;
 
@@ -58,9 +60,11 @@ async function main(): Promise<void> {
   let seen: DiscoveryResult = { candidates: [], complete: false };
   const mainnetRpcs = (process.env.MAINNET_RPCS?.split(',') ?? DEFAULT_MAINNET_RPCS).map((u) => u.trim()).filter((u) => u !== '');
   const mainnet = new FailoverRpc(mainnetRpcs, log, { timeoutMs: 5_000 });
+  const tokenCheck = loadTokenCheck(process.env);
+  const tokens = tokenCheck.enabled ? new TokenChecker({ mainnet, holderMaxPct: tokenCheck.holderMaxPct, ttlMs: tokenCheck.ttlMs }) : null;
   const selector = new PoolSelector({
     source: { refresh: async (now, current) => (seen = await discovery.refresh(now, current)) },
-    chain: poolChain(new PoolRefs(mainnet), mainnet),
+    chain: poolChain(new PoolRefs(mainnet), mainnet, tokens),
     gate,
     logger: log,
     override: null,
@@ -75,7 +79,7 @@ async function main(): Promise<void> {
     const c = r.candidate;
     const age = (nowMs - c.createdAtMs) / MINUTE_MS;
     console.log(
-      `  ${RUNG_NAMES[r.rung].padEnd(10)} score ${r.score.toFixed(1).padStart(7)}  tx5m ${String(c.txM5).padStart(4)}  age ${age < 120 ? `${age.toFixed(0)} min` : `${(age / 60).toFixed(1)} h`}  $${Math.round(c.reserveUsd)}  ${c.name}  ${c.pool}`,
+      `  ${RUNG_NAMES[r.rung].padEnd(10)} score ${r.score.toFixed(1).padStart(7)}  tx5m ${String(c.txM5).padStart(4)}${c.buys !== undefined ? ` (${c.buys}b/${c.sells}s${r.oneSided ? ' ONE-SIDED' : ''})` : ''}  age ${age < 120 ? `${age.toFixed(0)} min` : `${(age / 60).toFixed(1)} h`}  $${Math.round(c.reserveUsd)}  ${c.name}  ${c.pool}`,
     );
   }
   const s = selector.current;

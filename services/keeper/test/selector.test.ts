@@ -6,6 +6,7 @@ import type { DiscoveryResult } from '../src/discovery.ts';
 import type { LogFields } from '../src/log.ts';
 import { DEFAULT_GATE, type Rung } from '../src/poolgate.ts';
 import { MAX_DEPTH_CHECKS, PoolSelector, type PoolChain, type Selection } from '../src/selector.ts';
+import type { TokenVerdict } from '../src/tokencheck.ts';
 import { HOUR, MINUTE, NOW, SOL, candidate, testAddress } from './pool-fixtures.ts';
 
 const MIN_BANK = 20_000_000n; // 0.02 SOL, so the depth gate (2500 x min_bank) is 50 SOL
@@ -19,12 +20,21 @@ type Harness = {
   reads: Address[];
   logs: LogFields[];
   changes: (Selection | null)[];
+  /** Pools the token check was asked about, in order. */
+  tokenReads: Address[];
 };
 
 /** Every candidate is 80 SOL deep unless `reserves` says otherwise; unknown pools throw on read. */
 function harness(
   candidates: PoolCandidate[],
-  opts: { initial?: Selection | null; override?: Address | null; reserves?: [number, bigint][]; complete?: boolean } = {},
+  opts: {
+    initial?: Selection | null;
+    override?: Address | null;
+    reserves?: [number, bigint][];
+    complete?: boolean;
+    /** The token check by pool number: a verdict, or an Error that is thrown (the RPC failed). Pools not listed pass. Absent: no token check at all. */
+    tokens?: [number, TokenVerdict | Error][];
+  } = {},
 ): Harness {
   const logs: LogFields[] = [];
   const changes: (Selection | null)[] = [];
@@ -41,7 +51,19 @@ function harness(
       return source.result;
     },
   };
+  const tokenReads: Address[] = [];
+  const verdicts = new Map<Address, TokenVerdict | Error>((opts.tokens ?? []).map(([i, v]) => [testAddress(i), v]));
   const chain: PoolChain = {
+    ...(opts.tokens
+      ? {
+          async tokenCheck(pool: Address): Promise<TokenVerdict> {
+            tokenReads.push(pool);
+            const verdict = verdicts.get(pool) ?? { ok: true, supply: 1_000_000_000_000_000n };
+            if (verdict instanceof Error) throw verdict;
+            return verdict;
+          },
+        }
+      : {}),
     async quoteReserve(pool) {
       reads.push(pool);
       const r = reserves.get(pool);
@@ -62,7 +84,7 @@ function harness(
     initial: opts.initial ?? null,
     onChange: (s) => changes.push(s),
   });
-  return { selector, source, reserves, reads, logs, changes };
+  return { selector, source, reserves, reads, logs, changes, tokenReads };
 }
 
 function selection(i: number, rung: Rung, selectedAtMs: number): Selection {
@@ -305,5 +327,94 @@ describe('PoolSelector: POOL_OVERRIDE', () => {
     assert.equal(h.selector.current?.selectedAtMs, NOW);
     assert.equal(h.changes.length, 1);
     assert.deepEqual(h.logs, [{ event: 'pool_selected_override', pool, baseMint: testAddress(4000), quoteReserve: SHALLOW, belowDepthGate: true }]);
+  });
+});
+
+const REFUSED = (reason: string): TokenVerdict => ({ ok: false, reason });
+
+describe('PoolSelector: token check (authorities, Token-2022 extensions, holders)', () => {
+  test('a refused token is skipped for the next candidate, and the refusal is logged once', async () => {
+    const h = harness([candidate(1, 200, 30 * MINUTE), candidate(2, 120, 30 * MINUTE)], { tokens: [[1, REFUSED('freeze authority is not revoked')]] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+    assert.deepEqual(h.tokenReads, [testAddress(1), testAddress(2)]);
+    const refused = h.logs.filter((l) => l.event === 'pool_rejected_unsafe');
+    assert.deepEqual(refused, [{ event: 'pool_rejected_unsafe', pool: testAddress(1), reason: 'freeze authority is not revoked', current: false }]);
+    // The next minute: asked again (the checker's own cache answers), logged again only after the cache's 30 minutes.
+    h.source.result = { candidates: [candidate(1, 200, 31 * MINUTE), candidate(2, 120, 31 * MINUTE)], complete: true };
+    await h.selector.refresh(NOW + MINUTE);
+    assert.equal(h.logs.filter((l) => l.event === 'pool_rejected_unsafe').length, 1);
+  });
+
+  test('the depth check comes first: a shallow pool costs no token read', async () => {
+    const h = harness([candidate(1, 200, 30 * MINUTE), candidate(2, 120, 30 * MINUTE)], { reserves: [[1, SHALLOW]], tokens: [] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+    assert.deepEqual(h.tokenReads, [testAddress(2)]);
+  });
+
+  test('fail closed: a candidate whose check cannot be read is skipped in this refresh, and no pool is made of it', async () => {
+    const boom = new TypeError('fetch failed');
+    const h = harness([candidate(1, 200, 30 * MINUTE)], { tokens: [[1, boom]] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current, null);
+    assert.equal(last(h)?.event, 'pool_none_qualifies');
+    assert.deepEqual(h.logs.find((l) => l.event === 'token_check_failed'), { event: 'token_check_failed', pool: testAddress(1), error: 'fetch failed', current: false, action: 'skipped' });
+  });
+
+  test('a candidate that could not be checked is skipped for another one that can', async () => {
+    const h = harness([candidate(1, 200, 30 * MINUTE), candidate(2, 120, 30 * MINUTE)], { tokens: [[1, new TypeError('HTTP 429')]] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+  });
+
+  test('the current pool stays when its check cannot be read (an RPC failure changes nothing), and the failure is logged', async () => {
+    const h = harness([candidate(1, 100, 60 * MINUTE), candidate(2, 60, 30 * MINUTE)], {
+      initial: selection(1, 0, NOW - 30 * MINUTE),
+      tokens: [[1, new TypeError('fetch failed')]],
+    });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(1));
+    assert.deepEqual(h.changes, []);
+    assert.deepEqual(h.logs.find((l) => l.event === 'token_check_failed'), { event: 'token_check_failed', pool: testAddress(1), error: 'fetch failed', current: true, action: 'kept' });
+    // The failure line is throttled: another refresh a minute later says nothing new.
+    await h.selector.refresh(NOW + MINUTE);
+    assert.equal(h.logs.filter((l) => l.event === 'token_check_failed').length, 1);
+  });
+
+  test('a current pool that fails the check is replaced at once, even inside its hold; with no replacement it is dropped', async () => {
+    const replaced = harness([candidate(2, 60, 40 * MINUTE)], { initial: selection(1, 0, NOW - MINUTE), tokens: [[1, REFUSED('mint authority is not revoked')]] });
+    await replaced.selector.refresh(NOW);
+    assert.equal(replaced.selector.current?.pool, testAddress(2));
+    assert.equal(last(replaced)?.reason, 'unsafe token: mint authority is not revoked');
+
+    const dropped = harness([], { initial: selection(1, 0, NOW - 30 * MINUTE), tokens: [[1, REFUSED('top holder X has 31.5% of the supply (limit 20%)')]] });
+    await dropped.selector.refresh(NOW);
+    assert.equal(dropped.selector.current, null);
+    assert.deepEqual(dropped.changes, [null]);
+    assert.equal(last(dropped)?.event, 'pool_dropped');
+    assert.equal(last(dropped)?.reason, 'unsafe token: top holder X has 31.5% of the supply (limit 20%)');
+  });
+
+  test('POOL_OVERRIDE is an operator decision: no token check', async () => {
+    const h = harness([], { override: testAddress(9), reserves: [[9, DEEP]], tokens: [[9, REFUSED('mint authority is not revoked')]] });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(9));
+    assert.deepEqual(h.tokenReads, []);
+  });
+
+  test('without a token checker (TOKEN_CHECK=off) nothing is asked', async () => {
+    const h = harness([candidate(1, 200, 30 * MINUTE)]);
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(1));
+    assert.deepEqual(h.tokenReads, []);
+  });
+
+  test('a selected pool logs the split of its trades when GeckoTerminal gave it', async () => {
+    const balanced = { ...candidate(1, 100, 30 * MINUTE), buys: 52, sells: 48 };
+    const h = harness([balanced]);
+    await h.selector.refresh(NOW);
+    assert.equal(last(h)?.event, 'pool_selected');
+    assert.deepEqual([last(h)?.buys, last(h)?.sells, last(h)?.oneSided], [52, 48, false]);
   });
 });

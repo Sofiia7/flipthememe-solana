@@ -32,6 +32,10 @@ services:
       PRICE_KEYPAIR: ${PRICE_KEYPAIR:-}
       HOUSE_KEYPAIR: ${HOUSE_KEYPAIR:-}
       CLOSE_AFTER_SECS: ${CLOSE_AFTER_SECS:-}
+      # House policy (audit of 7 October 2026): pause after a pool switch, per-wallet fills a day, the budget spread over the day.
+      HOUSE_SWITCH_PAUSE_SECS: ${HOUSE_SWITCH_PAUSE_SECS:-}
+      HOUSE_WALLET_DAILY_FILLS: ${HOUSE_WALLET_DAILY_FILLS:-}
+      HOUSE_PACE_DIVISOR: ${HOUSE_PACE_DIVISOR:-}
       POOL_OVERRIDE: ${POOL_OVERRIDE:-}
       # Token choice; empty = the keeper's defaults (deploy/README.md, Configuration).
       POOL_MIN_AGE_MIN: ${POOL_MIN_AGE_MIN:-}
@@ -41,11 +45,22 @@ services:
       POOL_SWITCH_RATIO: ${POOL_SWITCH_RATIO:-}
       POOL_KEEP_MIN_TX_M5: ${POOL_KEEP_MIN_TX_M5:-}
       POOL_KEEP_MAX_AGE_MIN: ${POOL_KEEP_MAX_AGE_MIN:-}
+      # Neutral choice: the one-sided flow gate and the weight of the youth bonus in the score.
+      POOL_MAX_IMBALANCE: ${POOL_MAX_IMBALANCE:-}
+      POOL_YOUTH_WEIGHT: ${POOL_YOUTH_WEIGHT:-}
+      # Token check at selection: mint and freeze authority, Token-2022 extensions, top holder outside the pool.
+      TOKEN_CHECK: ${TOKEN_CHECK:-}
+      HOLDER_MAX_PCT: ${HOLDER_MAX_PCT:-}
+      TOKEN_CHECK_TTL_MIN: ${TOKEN_CHECK_TTL_MIN:-}
+      # Lines kept in shadow.jsonl and rounds.jsonl.
+      SHADOW_MAX_LINES: ${SHADOW_MAX_LINES:-}
+      ROUNDS_MAX_LINES: ${ROUNDS_MAX_LINES:-}
       # pump.fun graduates only (mint ends in "pump"); pools made on PumpSwap directly get drained fast.
       POOL_PUMP_ONLY: ${POOL_PUMP_ONLY:-true}
     volumes:
       # state.json, status.json and observations.json (the last 15 minutes of price observations,
-      # read back at start so a restart inside a price window keeps its samples).
+      # read back at start so a restart inside a price window keeps its samples), shadow.jsonl (the outcome of a
+      # round at every minute) and rounds.jsonl (a line per swept round); scripts/stats.ts reads the last two.
       - ./data:/data
       # The whole folder: keeper.json, plus price.json and house.json after split-roles.ts
       # (then PRICE_KEYPAIR=/secrets/price.json and HOUSE_KEYPAIR=/secrets/house.json in .env).

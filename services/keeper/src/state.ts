@@ -5,7 +5,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { isAddress, type Address } from '@solana/kit';
-import { emptyLedger, type HouseLedger } from './house.ts';
+import { MAX_LEDGER_WALLETS, emptyLedger, type HouseLedger } from './house.ts';
 import { toJson } from './log.ts';
 import { isRung, type Rung } from './poolgate.ts';
 
@@ -14,6 +14,15 @@ export type PersistedPool = { pool: Address; baseMint: Address; name: string; se
 export type KeeperState = { house: HouseLedger; pool: PersistedPool | null };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function parseFills(raw: unknown): Record<string, number> | null {
+  if (!isRecord(raw)) return null;
+  const entries = Object.entries(raw)
+    .filter((e): e is [string, number] => isAddress(e[0]) && typeof e[1] === 'number' && Number.isSafeInteger(e[1]) && e[1] > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, MAX_LEDGER_WALLETS);
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
 
 export function parseState(raw: unknown, nowMs: number): KeeperState {
   const state: KeeperState = { house: emptyLedger(nowMs), pool: null };
@@ -32,6 +41,9 @@ export function parseState(raw: unknown, nowMs: number): KeeperState {
       spent: BigInt(house.spent),
       rounds: house.rounds.filter((r): r is string => typeof r === 'string' && /^\d+$/.test(r)),
     };
+    // Per-wallet fill counts of the day (files written before the wallet limit have none); bad entries are dropped.
+    const fills = parseFills(house.fills);
+    if (fills) state.house.fills = fills;
   }
   const pool = raw.pool;
   if (

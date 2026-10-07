@@ -6,10 +6,11 @@ import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { describeError, TransactionTooLarge, isRateLimited, isTooLarge } from '../src/chain.ts';
-import { DEFAULT_MAINNET_RPCS, loadConfig, loadPoolGate } from '../src/config.ts';
+import { DEFAULT_MAINNET_RPCS, loadConfig, loadPoolGate, loadTokenCheck } from '../src/config.ts';
+import { redact } from '../src/log.ts';
 import { DEFAULT_GATE } from '../src/poolgate.ts';
 import { loadKeypairSigner, loadRoleSigners } from '../src/keypair.ts';
-import { backoffMs } from '../src/rpc.ts';
+import { backoffMs, shortError } from '../src/rpc.ts';
 import { parseState } from '../src/state.ts';
 import { TransactionFailed } from '@flipthememe/client';
 import type { Signature } from '@solana/kit';
@@ -30,6 +31,46 @@ describe('loadConfig', () => {
     assert.equal(cfg.poolOverride, null);
     assert.match(cfg.keypairPath, /\.flipthememe[\\/]keeper\.json$/);
     assert.deepEqual(cfg.poolGate, DEFAULT_GATE);
+    // The October 2026 audit knobs.
+    assert.equal(cfg.houseSwitchPauseSecs, 60);
+    assert.equal(cfg.houseWalletDailyFills, 30);
+    assert.equal(cfg.housePaceDivisor, 4);
+    assert.deepEqual(cfg.tokenCheck, { enabled: true, holderMaxPct: 20, ttlMs: 30 * 60_000 });
+    assert.equal(cfg.shadowFile, join(packageDir, 'shadow.jsonl'));
+    assert.equal(cfg.roundsFile, join(packageDir, 'rounds.jsonl'));
+    assert.equal(cfg.shadowMaxLines, 20_000);
+    assert.equal(cfg.roundsMaxLines, 20_000);
+  });
+
+  test('house pause, wallet limit, pacing, token check and the two logs from the environment', () => {
+    const cfg = loadConfig(
+      {
+        STATE_FILE: '/data/state.json',
+        HOUSE_SWITCH_PAUSE_SECS: '120',
+        HOUSE_WALLET_DAILY_FILLS: '5',
+        HOUSE_PACE_DIVISOR: '0',
+        TOKEN_CHECK: 'off',
+        HOLDER_MAX_PCT: '12.5',
+        TOKEN_CHECK_TTL_MIN: '10',
+        SHADOW_MAX_LINES: '5000',
+        ROUNDS_MAX_LINES: '10',
+      },
+      cwd,
+    );
+    assert.equal(cfg.houseSwitchPauseSecs, 120);
+    assert.equal(cfg.houseWalletDailyFills, 5);
+    assert.equal(cfg.housePaceDivisor, 0);
+    assert.deepEqual(cfg.tokenCheck, { enabled: false, holderMaxPct: 12.5, ttlMs: 600_000 });
+    assert.equal(cfg.shadowFile, join(resolve(cwd, '/data'), 'shadow.jsonl'));
+    assert.equal(cfg.roundsFile, join(resolve(cwd, '/data'), 'rounds.jsonl'));
+    assert.equal(cfg.shadowMaxLines, 5000);
+    assert.equal(cfg.roundsMaxLines, 100, 'a log keeps 100 lines at the least');
+    assert.throws(() => loadConfig({ HOUSE_WALLET_DAILY_FILLS: '1.5' }, cwd), /HOUSE_WALLET_DAILY_FILLS must be a whole number/);
+    assert.throws(() => loadConfig({ HOUSE_SWITCH_PAUSE_SECS: '-1' }, cwd), /HOUSE_SWITCH_PAUSE_SECS/);
+    assert.throws(() => loadTokenCheck({ HOLDER_MAX_PCT: '0' }), /HOLDER_MAX_PCT must be above 0 and at most 100/);
+    assert.throws(() => loadTokenCheck({ HOLDER_MAX_PCT: '101' }), /HOLDER_MAX_PCT/);
+    assert.throws(() => loadTokenCheck({ TOKEN_CHECK: 'maybe' }), /TOKEN_CHECK must be true or false/);
+    assert.equal(loadTokenCheck({ TOKEN_CHECK: 'TRUE' }).enabled, true);
   });
 
   test('env values', () => {
@@ -65,7 +106,11 @@ describe('loadConfig', () => {
       POOL_KEEP_MIN_TX_M5: '10',
       POOL_KEEP_MAX_AGE_MIN: '90',
     });
-    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000, pumpOnly: false });
+    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000, pumpOnly: false, maxImbalance: 0.5, youthWeight: 1 });
+    const neutral = loadPoolGate({ POOL_MAX_IMBALANCE: '0.3', POOL_YOUTH_WEIGHT: '0' });
+    assert.equal(neutral.maxImbalance, 0.3);
+    assert.equal(neutral.youthWeight, 0);
+    assert.throws(() => loadPoolGate({ POOL_MAX_IMBALANCE: '1.5' }), /POOL_MAX_IMBALANCE must be between 0 and 1/);
     assert.deepEqual(loadPoolGate({ POOL_MAX_AGE_MIN: '', POOL_SWITCH_RATIO: ' ' }), DEFAULT_GATE);
     assert.throws(() => loadPoolGate({ POOL_MIN_TX_M5: '50.5' }), /POOL_MIN_TX_M5 must be a whole number/);
     assert.throws(() => loadPoolGate({ POOL_MAX_AGE_MIN: '-5' }), /POOL_MAX_AGE_MIN must be a non-negative number/);
@@ -131,6 +176,12 @@ describe('state file', () => {
     assert.equal(state.pool?.fallback, true);
     assert.equal(state.pool?.rung, 3, 'a file without a rung maps fallback to the any-age rung');
     assert.deepEqual(parseState('nonsense', now), { house: { day: '2026-10-05', spent: 0n, rounds: [] }, pool: null });
+    // Per-wallet fills of the day: a file from before them reads without the field, bad entries are dropped.
+    const wallet = '11111111111111111111111111111114';
+    const withFills = parseState({ house: { day: '2026-10-05', spent: '0', rounds: [], fills: { [wallet]: 3, 'not-an-address': 2, [`${wallet.slice(0, -1)}5`]: -1 } } }, now);
+    assert.deepEqual(withFills.house.fills, { [wallet]: 3 });
+    assert.equal(parseState({ house: { day: '2026-10-05', spent: '0', rounds: [] } }, now).house.fills, undefined);
+    assert.equal(parseState({ house: { day: '2026-10-05', spent: '0', rounds: [], fills: 'x' } }, now).house.fills, undefined);
     assert.equal(parseState({ house: { day: 'x', spent: '1', rounds: [] }, pool: { pool: 'bad' } }, now).pool, null);
   });
 
@@ -215,6 +266,30 @@ describe('error helpers', () => {
     const anchorLog = Object.assign(new Error('x'), { context: { logs: ['Program log: AnchorError occurred. Error Code: AccountNotInitialized. Error Number: 3012.'] } });
     assert.equal(describeError(anchorLog), 'AccountNotInitialized');
     assert.equal(describeError(new Error('boom')), 'boom');
+    // Errors the program added later are known by name too (the table is the client's PROGRAM_ERRORS).
+    const code = (n: number) => new TransactionFailed('sig' as Signature, { InstructionError: [0, { Custom: n }] });
+    assert.equal(describeError(code(6015)), 'Paused');
+    assert.equal(describeError(code(6033)), 'RoundOpensTooFar');
+    assert.equal(describeError(code(6008)), 'InvalidRoundId');
+  });
+
+  test('log text carries no URL and no key: shortError and describeError cut them out', () => {
+    const url = 'https://mainnet.helius-rpc.com/?api-key=0123456789abcdef0123';
+    assert.equal(shortError(new TypeError(`fetch failed: ${url}`)), 'fetch failed: <url>');
+    assert.equal(shortError(new Error(`request to ${url} failed, reason: connect ETIMEDOUT`)), 'request to <url> failed, reason: connect ETIMEDOUT');
+    assert.equal(shortError(new Error('wss://rpc.example.com/ws/KEY123 closed')), '<url> closed');
+    // Only the query is quoted, or a key in a header-like pair: the value goes.
+    assert.equal(redact('bad request ?api-key=abc123&x=1'), 'bad request ?api-key=<redacted>&x=1');
+    assert.equal(redact('token=abc secret=xyz'), 'token=<redacted> secret=<redacted>');
+    assert.equal(redact('authorization: Bearer abc.def-ghi'), 'authorization: Bearer <redacted>');
+    // The HTTP status of a kit error still wins, and plain text stays as it is.
+    assert.equal(shortError(Object.assign(new Error(`HTTP error (429) from ${url}`), { context: { statusCode: 429 } })), 'HTTP 429');
+    assert.equal(shortError('plain text'), 'plain text');
+    assert.equal(shortError(null), 'null');
+    const long = shortError(new Error(`${'x'.repeat(290)} ${url}`));
+    assert.ok(!long.includes('helius') && !long.includes('api-key'), long);
+    assert.equal(describeError(new Error(`getAccountInfo failed for ${url}`)), 'getAccountInfo failed for <url>');
+    assert.equal(describeError(new Error('outer', { cause: new Error(`inner ${url}`) })), 'outer: inner <url>');
   });
 
   test('rate-limit detection', () => {

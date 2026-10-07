@@ -1,14 +1,17 @@
 /**
  * FlipTheMeme keeper (devnet). One process, no HTTP server:
- * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth check),
- * - mainnet price sampling every 1 s,
+ * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth and token checks),
+ * - mainnet price sampling on a fixed 1 s tick (a slow read never holds the next one back),
+ * - shadow rounds: the outcome of the round that would open at every minute boundary, from the same
+ *   observations (shadow.ts; shadow.jsonl and the aggregate in status.json),
  * - round scheduler every 1 s (create, house fill, strike, settle, claim, sweep, close, expire),
  *   with the attestor co-signing prices when ATTEST_URL is set, and on quiet ticks the closing
- *   of paid positions (rent back to their owners),
+ *   of paid positions (rent back to their owners); a line per swept round goes to rounds.jsonl,
  * - devnet clock estimate every 60 s, scan for old unfinished rounds every 10 min,
  * - status.json next to STATE_FILE rewritten every tick,
- * - observations.json next to it: the last 15 minutes of price observations, written at most
- *   every 5 s and on shutdown, loaded at start (a restart inside a price window keeps its samples),
+ * - observations.json next to it: the last 15 minutes of price observations, written every 5 s from
+ *   20 s before a price window until it ends, once a minute otherwise, and on shutdown, loaded at
+ *   start (a restart inside a price window keeps its samples),
  * - a self-watchdog: no completed scheduler tick for 120 s = keeper_stalled and exit 1, so
  *   Docker (restart: unless-stopped) starts the keeper again.
  */
@@ -19,16 +22,20 @@ import { ChainClock, describeError } from './chain.ts';
 import { loadConfig } from './config.ts';
 import { PoolDiscovery } from './discovery.ts';
 import { remainingBudget, rollover } from './house.ts';
+import { JsonlFile } from './jsonl.ts';
 import { loadRoleSigners } from './keypair.ts';
 import { hostOf, log, throttled } from './log.ts';
 import { ObservationPersister, ObservationStore } from './observations.ts';
 import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
 import { FailoverRpc, makeRpc, shortError } from './rpc.ts';
+import { RoundLog } from './roundlog.ts';
 import { PoolRefs, Sampler } from './sampler.ts';
 import { Scheduler } from './scheduler.ts';
 import { PoolSelector, poolChain, type Selection } from './selector.ts';
+import { ShadowBook } from './shadow.ts';
 import { StateStore, writeJsonAtomic } from './state.ts';
 import { LoopErrorLog, STALL_AFTER_MS, watchStall } from './supervise.ts';
+import { TokenChecker } from './tokencheck.ts';
 
 type Loop = { stop(): void; idle(): Promise<void> };
 
@@ -78,6 +85,9 @@ async function main(): Promise<void> {
   const persister = new ObservationPersister({ store, path: cfg.observationsFile, logger: log });
   const refs = new PoolRefs(mainnet);
   const sampler = new Sampler({ refs, mainnet, store, logger: log });
+  const shadow = new ShadowBook({ store, logger: log, file: new JsonlFile(cfg.shadowFile, cfg.shadowMaxLines) });
+  const roundLog = new RoundLog({ file: new JsonlFile(cfg.roundsFile, cfg.roundsMaxLines), logger: log });
+  const tokens = cfg.tokenCheck.enabled ? new TokenChecker({ mainnet, holderMaxPct: cfg.tokenCheck.holderMaxPct, ttlMs: cfg.tokenCheck.ttlMs }) : null;
   const clock = new ChainClock();
 
   log({
@@ -94,8 +104,14 @@ async function main(): Promise<void> {
     stateFile: cfg.stateFile,
     statusFile: cfg.statusFile,
     observationsFile: cfg.observationsFile,
+    shadowFile: cfg.shadowFile,
+    roundsFile: cfg.roundsFile,
     houseRoundCap: cfg.houseRoundCap,
     houseDailyBudget: cfg.houseDailyBudget,
+    houseSwitchPauseSecs: cfg.houseSwitchPauseSecs,
+    houseWalletDailyFills: cfg.houseWalletDailyFills,
+    housePaceDivisor: cfg.housePaceDivisor,
+    tokenCheck: cfg.tokenCheck.enabled ? { holderMaxPct: cfg.tokenCheck.holderMaxPct, ttlMin: cfg.tokenCheck.ttlMs / MINUTE_MS } : false,
     poolOverride: cfg.poolOverride,
     poolGate: {
       ageMin: [cfg.poolGate.minAgeMs / MINUTE_MS, cfg.poolGate.maxAgeMs / MINUTE_MS],
@@ -104,11 +120,14 @@ async function main(): Promise<void> {
       switchRatio: cfg.poolGate.switchRatio,
       keepMinTxM5: cfg.poolGate.keepMinTxM5,
       keepMaxAgeMin: cfg.poolGate.keepMaxAgeMs / MINUTE_MS,
+      maxImbalance: cfg.poolGate.maxImbalance,
+      youthWeight: cfg.poolGate.youthWeight,
     },
   });
 
   // Before anything samples: what the last run saw in the last 15 minutes, if it is still usable.
   persister.restore(Date.now());
+  shadow.restore(Date.now());
 
   let scheduler: Scheduler | null = null;
   const persisted = state.state.pool;
@@ -120,7 +139,7 @@ async function main(): Promise<void> {
   const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: true, newPoolsPages: 1 });
   const selector = new PoolSelector({
     source: discovery,
-    chain: poolChain(refs, mainnet),
+    chain: poolChain(refs, mainnet, tokens),
     gate: cfg.poolGate,
     logger: log,
     override: cfg.poolOverride,
@@ -151,6 +170,7 @@ async function main(): Promise<void> {
     selector,
     store,
     clock,
+    roundLog,
     logger: log,
   });
   const sched = scheduler;
@@ -192,6 +212,8 @@ async function main(): Promise<void> {
         : null,
       discovery: cfg.poolOverride ? null : discovery.status(now),
       sampler: sampler.freshness(now),
+      // The share of UP over the last 200 minutes of rounds that would have opened every minute (shadow.ts).
+      shadow: shadow.summary(now),
       mainnetRpc: mainnet.lastHost,
     });
   };
@@ -199,7 +221,13 @@ async function main(): Promise<void> {
   const samplePools = (): Address[] => {
     const pools = sched.activeRoundPools();
     if (selector.current) pools.push(selector.current.pool);
+    // A pool that was dropped after a shadow round was noted for it stays read until that round is evaluated.
+    pools.push(...shadow.pendingPools());
     return pools;
+  };
+  const shadowPool = () => {
+    const current = selector.current;
+    return current ? { pool: current.pool, baseMint: current.baseMint, name: current.name, rung: RUNG_NAMES[current.rung] } : null;
   };
 
   const errors = new LoopErrorLog(log);
@@ -208,7 +236,9 @@ async function main(): Promise<void> {
   let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
     every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),
-    every('sampler', 1_000, 0, errors, () => sampler.sample(samplePools())),
+    // Starts the reads and returns: the 1 s tick does not wait for them (sampler.ts: two in flight per pool).
+    every('sampler', 1_000, 0, errors, async () => sampler.tick(samplePools())),
+    every('shadow', 1_000, 700, errors, async () => shadow.tick(Date.now(), shadowPool())),
     every('scheduler', 1_000, 300, errors, async () => {
       try {
         await sched.tick(Date.now());
@@ -221,7 +251,7 @@ async function main(): Promise<void> {
       await clock.refresh(devnet);
     }),
     every('backlog', 10 * 60_000, 15_000, errors, () => sched.scanBacklog()),
-    // The persister writes at most every 5 s; looking once a second keeps that pace even when a timer fires early.
+    // The persister decides the pace (5 s around the price windows, a minute otherwise); looking once a second is enough.
     every('observations', 1_000, 600, errors, async () => {
       persister.maybeSave(Date.now());
     }),
@@ -271,6 +301,6 @@ async function main(): Promise<void> {
 process.on('unhandledRejection', (reason) => log({ event: 'unhandled_rejection', error: shortError(reason) }));
 
 main().catch((error: unknown) => {
-  log({ event: 'fatal', error: error instanceof Error ? error.message : String(error) });
+  log({ event: 'fatal', error: shortError(error) });
   process.exit(1);
 });

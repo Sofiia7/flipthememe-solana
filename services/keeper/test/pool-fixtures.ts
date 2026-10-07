@@ -1,5 +1,6 @@
 // Shared helpers for the pool selection tests (not a test file itself).
 import type { PoolCandidate } from '@flipthememe/client';
+import type { Candidate } from '../src/poolgate.ts';
 import { getAddressDecoder, type Address } from '@solana/kit';
 
 export const NOW = Date.parse('2026-10-05T12:00:00Z');
@@ -27,4 +28,9 @@ export function candidate(i: number, txM5: number, ageMs: number, nowMs: number 
     txM5,
     volumeH1Usd: 10_000,
   };
+}
+
+/** `c` with its 5-minute trades split into `buys` and `sells` (txM5 becomes their sum), as discovery.ts passes them on. */
+export function withFlow(c: PoolCandidate, buys: number, sells: number): Candidate {
+  return { ...c, txM5: buys + sells, buys, sells };
 }

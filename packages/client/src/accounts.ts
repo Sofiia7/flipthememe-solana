@@ -231,6 +231,8 @@ export function isAccount(name: keyof typeof ACCOUNT, data: Uint8Array): boolean
 export const OFFSETS = {
   positionRound: 8,
   positionAuthority: 8 + 32,
+  /** round, authority, side, stake and face come first: `is_house` is the byte after them (89). */
+  positionIsHouse: 8 + 32 + 32 + 1 + 8 + 8,
   /** round, authority, side, stake, face, is_house come first. */
   positionClaimed: 8 + 32 + 32 + 1 + 8 + 8 + 1,
   sessionAuthority: 8,

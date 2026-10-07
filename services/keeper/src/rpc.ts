@@ -5,7 +5,7 @@ import {
   type RpcTransport,
   type SolanaRpcApi,
 } from '@solana/kit';
-import { hostOf, type Logger } from './log.ts';
+import { hostOf, redact, type Logger } from './log.ts';
 
 export type SolanaRpc = Rpc<SolanaRpcApi>;
 
@@ -81,9 +81,14 @@ export class FailoverRpc {
   }
 }
 
+/**
+ * A short description of an error for the log: the HTTP status when there is one, else the message
+ * with every URL and key in it removed (redact) and cut to 300 characters. The cut comes last, so a
+ * URL cannot be left half way through it.
+ */
 export function shortError(error: unknown): string {
-  const ctx = (error as { context?: { statusCode?: number } }).context;
+  const ctx = (error as { context?: { statusCode?: number } } | null)?.context;
   if (ctx && typeof ctx.statusCode === 'number') return `HTTP ${ctx.statusCode}`;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = redact(error instanceof Error ? error.message : String(error));
   return message.length > 300 ? `${message.slice(0, 300)}...` : message;
 }

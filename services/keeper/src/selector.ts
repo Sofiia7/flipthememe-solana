@@ -8,7 +8,12 @@
  * 2. otherwise it stays for its hold (10 minutes), and after that while it passes the keep gate
  *    (20+ trades in 5 minutes, at most 180 minutes old on the fresh rung) unless a deep enough
  *    candidate is clearly better: a lower rung of the ladder, or the same rung with 1.5x the score;
- * 3. a new pool is the best deep enough candidate: fresh first (10-120 minutes old, 50+ trades in
+ * 3. a pool must also pass the token check (tokencheck.ts: mint and freeze authority revoked, no dangerous
+ *    Token-2022 extension, no outside holder above HOLDER_MAX_PCT of the supply), asked after the depth
+ *    check and remembered 30 minutes per mint. A candidate that fails is skipped; one whose check could not be
+ *    read (RPC error) is skipped for this refresh too (fail closed), while the current pool then stays as it is.
+ *    A current pool that fails it is replaced like a shallow one;
+ * 3b. a new pool is the best deep enough candidate: fresh first (10-120 minutes old, 50+ trades in
  *    5 minutes, best score), else the fallback ladder (up to 6 h old, up to 24 h, then the most
  *    active pool of any age). The rung is logged and kept in the state file;
  * 4. after a failed or skipped discovery refresh the current pool is not rotated (its depth still
@@ -16,10 +21,10 @@
  *
  * Rounds take the pool selected when they are created; rounds in flight keep theirs.
  */
-import { DEPTH_K, quoteReserveLamports, type PoolCandidate } from '@flipthememe/client';
+import { DEPTH_K, quoteReserveLamports } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
 import type { DiscoveryResult } from './discovery.ts';
-import type { Logger } from './log.ts';
+import { throttled, type Logger } from './log.ts';
 import {
   MINUTE_MS,
   RUNG_NAMES,
@@ -27,12 +32,14 @@ import {
   keepFailure,
   rankCandidates,
   scoreOf,
+  type Candidate,
   type PoolGate,
   type Ranked,
   type Rung,
 } from './poolgate.ts';
 import { shortError, type FailoverRpc } from './rpc.ts';
 import type { PoolRefs } from './sampler.ts';
+import { TOKEN_CACHE_TTL_MS, type TokenChecker, type TokenVerdict } from './tokencheck.ts';
 
 /** Depth checks of candidates per refresh (2 mainnet reads each, the first one cached). */
 export const MAX_DEPTH_CHECKS = 6;
@@ -55,10 +62,20 @@ export type PoolChain = {
   /** wSOL in the quote vault, lamports; throws when the account is not a wSOL PumpSwap pool. */
   quoteReserve(pool: Address): Promise<bigint>;
   baseMint(pool: Address): Promise<Address>;
+  /** The token's safety verdict (tokencheck.ts); throws when the RPC fails. Absent: no token check. */
+  tokenCheck?(pool: Address): Promise<TokenVerdict>;
 };
 
-export function poolChain(refs: PoolRefs, mainnet: FailoverRpc): PoolChain {
+export function poolChain(refs: PoolRefs, mainnet: FailoverRpc, tokens: TokenChecker | null = null): PoolChain {
   return {
+    ...(tokens
+      ? {
+          async tokenCheck(pool: Address): Promise<TokenVerdict> {
+            const ref = await refs.get(pool);
+            return tokens.check(ref.baseMint, ref.baseVault);
+          },
+        }
+      : {}),
     async quoteReserve(pool) {
       const ref = await refs.get(pool);
       return mainnet.call('quoteReserve', (rpc) => quoteReserveLamports(rpc, ref));
@@ -82,6 +99,10 @@ export class PoolSelector {
   private readonly override: Address | null;
   private readonly minBank: () => bigint;
   private readonly onChange: (s: Selection | null) => void;
+  /** Why a pool failed the token check, by pool (the latest verdict; only what the selector saw). */
+  private readonly unsafe = new Map<Address, string>();
+  private readonly warnUnsafe: (key: string, fields: Parameters<Logger>[0]) => void;
+  private readonly warnUnreadable: (key: string, fields: Parameters<Logger>[0]) => void;
 
   constructor(opts: {
     source: CandidateSource;
@@ -102,6 +123,9 @@ export class PoolSelector {
     this.minBank = opts.minBank;
     this.current = opts.initial;
     this.onChange = opts.onChange;
+    // A refused token is looked at again after the cache's 30 minutes; an unreadable check every 5 minutes at most.
+    this.warnUnsafe = throttled(opts.logger, TOKEN_CACHE_TTL_MS);
+    this.warnUnreadable = throttled(opts.logger, 5 * 60_000);
   }
 
   /** Minimum quote reserve for a pool to qualify: K x min_bank (50 SOL at the devnet params). */
@@ -126,7 +150,7 @@ export class PoolSelector {
           if (checks >= MAX_DEPTH_CHECKS) return undefined;
           checks++;
         }
-        depth.set(pool, await this.reserveIfDeep(pool));
+        depth.set(pool, await this.qualify(pool, pool === current?.pool));
       }
       const reserve = depth.get(pool);
       return typeof reserve === 'bigint' ? reserve : null;
@@ -153,7 +177,7 @@ export class PoolSelector {
         }
         reason = failure ?? 'unlisted';
       } else {
-        reason = `quote reserve below ${this.minReserve()} lamports or unreadable`;
+        reason = this.unsafe.get(current.pool) ?? `quote reserve below ${this.minReserve()} lamports or unreadable`;
       }
     } else {
       reason = 'no pool yet';
@@ -185,7 +209,7 @@ export class PoolSelector {
   }
 
   private select(r: Ranked, reserve: bigint, nowMs: number, reason: string): void {
-    const c: PoolCandidate = r.candidate;
+    const c: Candidate = r.candidate;
     const fallback = r.rung > 0;
     const facts = {
       rung: RUNG_NAMES[r.rung],
@@ -196,6 +220,8 @@ export class PoolSelector {
       ageMin: round1((nowMs - c.createdAtMs) / MINUTE_MS),
       score: round1(r.score),
       quoteReserve: reserve,
+      // The split of the 5-minute trades, when GeckoTerminal gave it (and whether it was lopsided).
+      ...(c.buys !== undefined && c.sells !== undefined ? { buys: c.buys, sells: c.sells, oneSided: r.oneSided } : {}),
     };
     if (this.current && this.current.pool === c.pool) {
       const rungChanged = this.current.rung !== r.rung;
@@ -210,6 +236,29 @@ export class PoolSelector {
     this.current = { pool: c.pool, baseMint: c.baseMint, name: c.name, selectedAtMs: nowMs, rung: r.rung, fallback, quoteReserve: reserve, reserveAtMs: Date.now() };
     this.logger({ event: fallback ? 'pool_selected_fallback' : 'pool_selected', ...facts, baseMint: c.baseMint, previous });
     this.onChange(this.current);
+  }
+
+  /**
+   * The quote reserve when the pool is deep enough and its token passes the token check; null when it is too
+   * shallow or the token is refused; 'unreadable' when a read failed. A token check that could not be read
+   * counts as a pass for the current pool (it is not changed because an RPC failed) and as 'unreadable' for any
+   * other candidate (fail closed: it is skipped in this refresh).
+   */
+  private async qualify(pool: Address, isCurrent: boolean): Promise<bigint | null | 'unreadable'> {
+    this.unsafe.delete(pool);
+    const reserve = await this.reserveIfDeep(pool);
+    if (typeof reserve !== 'bigint' || !this.chain.tokenCheck) return reserve;
+    try {
+      const verdict = await this.chain.tokenCheck(pool);
+      if (verdict.ok) return reserve;
+      const reason = `unsafe token: ${verdict.reason}`;
+      this.unsafe.set(pool, reason);
+      this.warnUnsafe(`unsafe:${pool}`, { event: 'pool_rejected_unsafe', pool, reason: verdict.reason, current: isCurrent });
+      return null;
+    } catch (error) {
+      this.warnUnreadable(`unreadable:${pool}`, { event: 'token_check_failed', pool, error: shortError(error), current: isCurrent, action: isCurrent ? 'kept' : 'skipped' });
+      return isCurrent ? reserve : 'unreadable';
+    }
   }
 
   /** The quote reserve in lamports when the pool is a wSOL PumpSwap pool deep enough, null when too shallow, 'unreadable' when the read fails. */

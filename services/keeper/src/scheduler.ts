@@ -44,13 +44,26 @@ import {
 } from './chain.ts';
 import { PositionCloser } from './closer.ts';
 import type { KeeperConfig } from './config.ts';
-import { chainRoom, houseFillAmount, recordFill, remainingBudget, rollover, utcDay } from './house.ts';
+import { AnotherKeeperGuard } from './guard.ts';
+import {
+  chainRoom,
+  houseFillAmount,
+  matchedWallet,
+  recordFill,
+  recordWalletFill,
+  remainingBudget,
+  rollover,
+  roundsLeftToday,
+  utcDay,
+  walletFills,
+} from './house.ts';
 import { throttled, type LogFields, type Logger } from './log.ts';
 import { windowSamples, type ObservationStore } from './observations.ts';
+import { RoundLog, roundRow } from './roundlog.ts';
 import type { SolanaRpc } from './rpc.ts';
 import type { PoolSelector } from './selector.ts';
 import type { StateStore } from './state.ts';
-import { createDue, nextStep, type StepKind } from './steps.ts';
+import { createDue, nextStep, roundAhead, type StepKind } from './steps.ts';
 
 /** Rounds read every tick: ids next_round_id - ROUND_WINDOW .. next_round_id. */
 export const ROUND_WINDOW = 6;
@@ -80,6 +93,8 @@ export const CLOSE_UNTIL_SECOND = 33;
 export const CLOSE_INTERVAL_MS = 10_000;
 
 type Due = { priority: number; id: bigint; lane: string; stepKey: string; run: () => Promise<void> };
+/** The devnet clock estimate may be this far from the local clock before the keeper warns (strike and exit windows drift with it). */
+export const CLOCK_WARN_MS = 3_000;
 /** A new round opens only while the current pool has an observation at most this old. */
 const SAMPLER_FRESH_MS = 15_000;
 const LOW_BALANCE_LAMPORTS = 200_000_000n;
@@ -129,6 +144,10 @@ export type SchedulerDeps = {
   /** Present when ATTEST_URL is set. */
   attestor?: AttestorClient | null;
   closer?: PositionCloser;
+  /** rounds.jsonl: a line per swept round (humans, wallets, outcome); absent = no such record. */
+  roundLog?: RoundLog | null;
+  /** Detector of a second keeper; the scheduler makes its own when none is given. */
+  guard?: AnotherKeeperGuard;
   cfg: KeeperConfig;
   state: StateStore;
   selector: PoolSelector;
@@ -156,6 +175,17 @@ export class Scheduler {
   private readonly clock: ChainClock;
   private readonly logger: Logger;
   private readonly warn: (key: string, fields: LogFields) => void;
+  private readonly warnClock: (key: string, fields: LogFields) => void;
+  private readonly roundLog: RoundLog | null;
+  readonly guard: AnotherKeeperGuard;
+
+  /** Ids of the rounds this process tried to create: a round at the next boundary that is not one of them is someone else's. */
+  private readonly ownRounds = new Set<bigint>();
+  /** Pool names as the selector had them, for rounds.jsonl (a round only knows its pool address). */
+  private readonly poolNames = new Map<string, string>();
+  /** Rounds whose house fill was refused for the wallet limit (the positions are not read again), and rounds counted against a wallet. */
+  private readonly walletBlocked = new Set<bigint>();
+  private readonly walletRecorded = new Set<bigint>();
 
   private nextIdHint: bigint | null = null;
   private readonly backlog = new Set<bigint>();
@@ -183,6 +213,9 @@ export class Scheduler {
     this.clock = deps.clock;
     this.logger = deps.logger;
     this.warn = throttled(deps.logger, 60_000);
+    this.warnClock = throttled(deps.logger, 10 * 60_000);
+    this.roundLog = deps.roundLog ?? null;
+    this.guard = deps.guard ?? new AnotherKeeperGuard({ logger: deps.logger });
   }
 
   /** Pools of rounds that are not final yet: the sampler keeps observing them. */
@@ -211,6 +244,15 @@ export class Scheduler {
       return;
     }
     const me = this.signer.address;
+    this.noteSelection();
+    if (Math.abs(this.clock.offsetMs) > CLOCK_WARN_MS) {
+      this.warnClock('clock', {
+        event: 'clock_offset_warning',
+        offsetMs: this.clock.offsetMs,
+        limitMs: CLOCK_WARN_MS,
+        hint: 'the devnet clock and this host differ: strike and exit windows drift, the attestor may refuse the samples (slot_out_of_range); check NTP on the host',
+      });
+    }
     // close_empty_round pays the rent of a finished round to config.admin.
     this.closer.admin = config.admin;
     if (snap.keeperLamports < LOW_BALANCE_LAMPORTS) {
@@ -224,10 +266,17 @@ export class Scheduler {
     if (create) {
       if (config.paused) this.warn('paused', { event: 'config_paused', note: 'not creating rounds' });
       else if (config.admin !== me) this.warn('admin', { event: 'keeper_not_admin', admin: config.admin });
-      else {
+      else if (this.guard.paused(nowMs)) {
+        const until = this.guard.pausedUntil();
+        this.warn('another-keeper', { event: 'create_paused_another_keeper', until: until === null ? null : new Date(until).toISOString() });
+      } else {
         const opensAt = create.opensAt;
         due.push({ priority: PRIORITY.create, id: config.nextRoundId, lane: 'create', stepKey: `create:${opensAt}`, run: () => this.create(config, opensAt, nowMs) });
       }
+    } else if (!config.paused && config.admin === me) {
+      // Nothing to create because a round already stands at the boundary: ours (this process made it), or another keeper's.
+      const ahead = roundAhead(nowMs, rounds);
+      if (ahead && !this.ownRounds.has(ahead.id)) this.guard.foreignRound(ahead.opensAt, ahead.id, nowMs);
     }
 
     for (const [id, round] of snap.rounds) {
@@ -315,7 +364,20 @@ export class Scheduler {
       claimBatch: this.claimBatch,
       positionRent: this.positionRent?.lamports ?? null,
       chainClockOffsetMs: this.clock.offsetMs,
+      clockOffsetWarning: Math.abs(this.clock.offsetMs) > CLOCK_WARN_MS,
+      anotherKeeper: { suspected: this.guard.suspected, createPausedUntil: this.guard.pausedUntil() === null ? null : new Date(this.guard.pausedUntil() ?? 0).toISOString() },
     };
+  }
+
+  /** Remembers the current pool's name for rounds.jsonl. */
+  private noteSelection(): void {
+    const selected = this.selector.current;
+    if (!selected) return;
+    this.poolNames.set(selected.pool, selected.name);
+    if (this.poolNames.size > 100) {
+      const oldest = this.poolNames.keys().next().value;
+      if (oldest !== undefined && oldest !== selected.pool) this.poolNames.delete(oldest);
+    }
   }
 
   private houseLimitsStatus(limits: NonNullable<Snapshot['houseLimits']>): LogFields {
@@ -356,6 +418,11 @@ export class Scheduler {
   }
 
   private authorized(kind: StepKind, config: ConfigAccount): boolean {
+    if (kind === 'fill' && config.paused) {
+      // The program refuses house_fill while the arena is paused (Paused, 6015): no point asking.
+      this.warn('house-paused', { event: 'house_fill_paused', note: 'config is paused: no house fills' });
+      return false;
+    }
     if (kind === 'fill' && config.houseAuthority !== this.houseSigner.address) {
       this.warn('house', { event: 'keeper_not_house_authority', houseAuthority: config.houseAuthority, houseKey: this.houseSigner.address });
       return false;
@@ -436,6 +503,7 @@ export class Scheduler {
       case 'claim':
         return this.claimAll(round);
       case 'sweep':
+        await this.recordRound(round);
         return this.act(round.id, 'sweep', [await sweepFees({ roundId: round.id, treasury: config.treasury })]);
       case 'close':
         return this.act(round.id, 'close', [await closeEmptyRound({ roundId: round.id, admin: config.admin })]);
@@ -531,7 +599,18 @@ export class Scheduler {
       roundId,
       args: { tokenMint: pool.baseMint, pool: pool.pool, ...roundTimes(opensAt), maxBank },
     });
-    await this.act(roundId, 'create', [ix], { opensAt: new Date(Number(opensAt) * 1000).toISOString(), pool: pool.pool, maxBank });
+    this.ownRounds.add(roundId);
+    try {
+      await this.act(roundId, 'create', [ix], { opensAt: new Date(Number(opensAt) * 1000).toISOString(), pool: pool.pool, maxBank });
+    } catch (error) {
+      if (describeError(error) === 'InvalidRoundId') {
+        // Another transaction took the id between our read and our send.
+        this.ownRounds.delete(roundId);
+        this.guard.invalidRoundId(opensAt, Date.now());
+      }
+      throw error;
+    }
+    this.guard.created();
   }
 
   private async positionRentLamports(nowMs: number): Promise<bigint> {
@@ -542,6 +621,13 @@ export class Scheduler {
     return this.positionRent.lamports;
   }
 
+  /** The skip line of a fill, once per round (the fill step is asked again every few seconds of its window). */
+  private logFillSkip(round: RoundAccount, reason: string, fields: LogFields = {}): void {
+    if (this.fillSkipLogged.has(round.id)) return;
+    this.fillSkipLogged.add(round.id);
+    this.logger({ round: round.id, step: 'fill', skipped: reason, rawUp: round.rawUp, rawDown: round.rawDown, ...fields });
+  }
+
   private async fill(round: RoundAccount, snap: Snapshot): Promise<void> {
     const now = Date.now();
     const limits = snap.houseLimits;
@@ -550,6 +636,19 @@ export class Scheduler {
       this.warn('house-limits', { event: 'house_limits_missing', hint: 'run scripts/init-house-limits.ts after the program upgrade' });
       return;
     }
+    const paused = snap.config?.paused ?? false;
+    if (paused) {
+      this.logFillSkip(round, 'paused');
+      return;
+    }
+    // A pool that was chosen a moment ago has not shown its flow yet: the house stays out of its first minutes.
+    const selected = this.selector.current;
+    const pauseMs = this.cfg.houseSwitchPauseSecs * 1000;
+    if (pauseMs > 0 && selected && selected.pool === round.pool && now - selected.selectedAtMs < pauseMs) {
+      this.logFillSkip(round, 'pool-switch-pause', { poolSelectedAt: new Date(selected.selectedAtMs).toISOString(), pauseSecs: this.cfg.houseSwitchPauseSecs });
+      return;
+    }
+    if (this.walletBlocked.has(round.id)) return;
     const room = chainRoom(limits, round.houseAmount, this.chainNowSecs(now));
     // The program takes the house position's rent from the house vault on top of the stake.
     const rent = await this.positionRentLamports(now);
@@ -564,28 +663,72 @@ export class Scheduler {
       chainRoundRoom: room.round,
       chainDailyRoom: room.daily,
       vaultAvailable: available > rent ? available - rent : 0n,
+      paused,
+      pace: this.cfg.housePaceDivisor > 0 ? { roundsLeft: roundsLeftToday(now), divisor: this.cfg.housePaceDivisor } : undefined,
     });
     if (plan.kind === 'skip') {
-      if (!this.fillSkipLogged.has(round.id)) {
-        this.fillSkipLogged.add(round.id);
-        const onChain = plan.reason === 'chain-round-cap' || plan.reason === 'chain-daily-cap';
-        this.logger({
-          round: round.id,
-          step: 'fill',
-          skipped: plan.reason,
-          rawUp: round.rawUp,
-          rawDown: round.rawDown,
-          ...(onChain
-            ? { event: 'fill_skipped_onchain_cap', roundCap: limits.roundCap, houseAmount: round.houseAmount, dailyCap: limits.dailyCap, spentToday: room.spentToday }
-            : {}),
-        });
-      }
+      const onChain = plan.reason === 'chain-round-cap' || plan.reason === 'chain-daily-cap';
+      this.logFillSkip(
+        round,
+        plan.reason,
+        onChain ? { event: 'fill_skipped_onchain_cap', roundCap: limits.roundCap, houseAmount: round.houseAmount, dailyCap: limits.dailyCap, spentToday: room.spentToday } : {},
+      );
       return;
     }
+    // At most HOUSE_WALLET_DAILY_FILLS fills per wallet and UTC day: the wallet is the owner of the biggest stake
+    // the fill matches. The positions are read only now, when a fill is really about to go out.
+    let wallet: string | null = null;
+    const limit = this.cfg.houseWalletDailyFills;
+    if (limit > 0) {
+      let positions;
+      try {
+        positions = await fetchPositions(this.rpc, await cachedRoundAddress(round.id));
+      } catch (error) {
+        this.warn('fill-positions', { event: 'fill_positions_failed', round: round.id, error: describeError(error) });
+        throw error;
+      }
+      wallet = matchedWallet(positions, plan.side);
+      if (wallet !== null) {
+        const fills = walletFills(this.state.state.house, wallet, now);
+        if (fills >= limit) {
+          this.walletBlocked.add(round.id);
+          this.logFillSkip(round, 'wallet-limit', { event: 'fill_skipped_wallet_limit', wallet, fillsToday: fills, limit });
+          return;
+        }
+      }
+    }
     const ix = await houseFill({ house: this.houseSigner, roundId: round.id, amount: plan.amount });
-    await this.act(round.id, 'fill', [ix], { amount: plan.amount, side: plan.side === Side.Up ? 'up' : 'down' });
-    this.state.state.house = recordFill(this.state.state.house, round.id, plan.amount, Date.now());
+    await this.act(round.id, 'fill', [ix], {
+      amount: plan.amount,
+      side: plan.side === Side.Up ? 'up' : 'down',
+      ...(plan.paced !== undefined ? { paced: plan.paced } : {}),
+      ...(wallet !== null ? { wallet } : {}),
+    });
+    let ledger = recordFill(this.state.state.house, round.id, plan.amount, Date.now());
+    if (wallet !== null && !this.walletRecorded.has(round.id)) {
+      this.walletRecorded.add(round.id);
+      ledger = recordWalletFill(ledger, wallet, Date.now());
+    }
+    this.state.state.house = ledger;
     this.state.save();
+  }
+
+  /**
+   * One line of rounds.jsonl for a round about to be swept (once per round id): its outcome and prices, and
+   * from its positions how many were real people. A failed read of the positions leaves those two null.
+   */
+  private async recordRound(round: RoundAccount): Promise<void> {
+    const log = this.roundLog;
+    if (!log || log.has(round.id)) return;
+    let positions: Awaited<ReturnType<typeof fetchPositions>> | null = null;
+    if (round.positionCount > 0) {
+      try {
+        positions = await fetchPositions(this.rpc, await cachedRoundAddress(round.id));
+      } catch (error) {
+        this.warn('round-log-positions', { event: 'rounds_log_positions_failed', round: round.id, error: describeError(error) });
+      }
+    }
+    log.add(roundRow(round, this.poolNames.get(round.pool) ?? null, positions, Date.now()));
   }
 
   /**
@@ -666,6 +809,7 @@ export class Scheduler {
   private forgetOld(next: bigint): void {
     const floor = next - BigInt(ROUND_WINDOW * 4);
     for (const id of this.fillSkipLogged) if (id < floor) this.fillSkipLogged.delete(id);
+    for (const set of [this.walletBlocked, this.walletRecorded, this.ownRounds]) for (const id of set) if (id < floor) set.delete(id);
     const now = Date.now();
     for (const [key, until] of this.cooldownUntil) if (until < now) this.cooldownUntil.delete(key);
     for (const [key, f] of this.failures) if (f.retryAtMs < now - 10 * 60_000) this.failures.delete(key);

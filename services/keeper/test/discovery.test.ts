@@ -3,10 +3,13 @@ import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { WSOL_MINT, type GeckoTerminalFetch, type PoolCandidate } from '@flipthememe/client';
 import { address, type Address } from '@solana/kit';
-import { HOT_SLOTS, MAX_CALLS_PER_REFRESH, MAX_SKIPPED_REFRESHES, PoolDiscovery, STATS_MAX_AGE_MS, TOP_REFRESH_MS } from '../src/discovery.ts';
+import { HOT_SLOTS, MAX_CALLS_PER_REFRESH, MAX_SKIPPED_REFRESHES, PoolDiscovery, STATS_MAX_AGE_MS, TOP_REFRESH_MS, flowsOf } from '../src/discovery.ts';
 import type { LogFields } from '../src/log.ts';
 import { DEFAULT_GATE } from '../src/poolgate.ts';
 import { HOUR, MINUTE, NOW, candidate, testAddress } from './pool-fixtures.ts';
+
+/** Buys and sells of the last 5 minutes a pool's row reports (default: every trade a buy, sum = txM5). */
+const flows = new Map<string, { buys: number; sells: number }>();
 
 /** A GeckoTerminal pool row as the API sends it. */
 function row(c: PoolCandidate, dex: string): Record<string, unknown> {
@@ -17,7 +20,7 @@ function row(c: PoolCandidate, dex: string): Record<string, unknown> {
       address: c.pool,
       name: c.name,
       pool_created_at: new Date(c.createdAtMs).toISOString(),
-      transactions: { m5: { buys: c.txM5, sells: 0 } },
+      transactions: { m5: flows.get(c.pool) ?? { buys: c.txM5, sells: 0 } },
       reserve_in_usd: String(c.reserveUsd),
       volume_usd: { h1: String(c.volumeH1Usd) },
     },
@@ -270,22 +273,71 @@ describe('PoolDiscovery: failures', () => {
   });
 });
 
-describe('PoolDiscovery: trending first', () => {
-  test('hottest PumpSwap pools become candidates at once; a later 429 still leaves a usable refresh', async () => {
+describe('PoolDiscovery: trending is for tracking only', () => {
+  test('a trending pool is tracked and gets its numbers from pools/multi, never from the trending row', async () => {
     const gecko = new FakeGecko();
-    const hot = candidate(500, 900, 20 * MINUTE);
+    const hot = candidate(500, 900, 20 * MINUTE); // trending says 900 trades
     gecko.trending = [
       { c: hot, dex: 'pumpswap' },
       { c: candidate(501, 2000, 6 * MINUTE), dex: 'raydium' },
     ];
-    gecko.failUrl = /new_pools/;
+    gecko.numbers.set(hot.pool, { ...hot, txM5: 70 }); // what pools/multi reports for it
     const logs: LogFields[] = [];
     const d = new PoolDiscovery({ gate: DEFAULT_GATE, logger: (f) => logs.push(f), fetchFn: gecko.fetchFn, trending: true, newPoolsPages: 1 });
     const r = await d.refresh(NOW, null);
     assert.ok(gecko.urls[0]?.includes('/trending_pools?duration=5m'), gecko.urls[0]);
+    assert.equal(gecko.kinds()[1], 'multi', 'the pool is asked for right after the trending list');
     assert.equal(r.complete, true);
-    assert.deepEqual(r.candidates.map((c) => c.pool), [hot.pool]);
+    assert.deepEqual(r.candidates.map((c) => [c.pool, c.txM5]), [[hot.pool, 70]]);
+    assert.equal(d.status(NOW).tracked, 1, 'the raydium row is not a PumpSwap pool: not tracked');
+    assert.equal(logs.length, 0);
+  });
+
+  test('when pools/multi fails the trending numbers do not stand in for it: no candidates, an incomplete refresh', async () => {
+    const gecko = new FakeGecko();
+    const hot = candidate(510, 900, 20 * MINUTE);
+    gecko.trending = [{ c: hot, dex: 'pumpswap' }];
+    gecko.failUrl = /pools.multi/;
+    const logs: LogFields[] = [];
+    const d = new PoolDiscovery({ gate: DEFAULT_GATE, logger: (f) => logs.push(f), fetchFn: gecko.fetchFn, trending: true, newPoolsPages: 1 });
+    const r = await d.refresh(NOW, null);
+    assert.equal(r.complete, false);
+    assert.deepEqual(r.candidates, []);
     assert.equal(logs.at(-1)?.event, 'pool_discovery_failed');
+    assert.equal(logs.at(-1)?.request, 'pools/multi');
+  });
+
+  test('candidates carry the buys and sells of their row (read from the raw answer), not only the sum', async () => {
+    const gecko = new FakeGecko();
+    const lopsided = candidate(520, 80, 30 * MINUTE);
+    const plain = candidate(521, 60, 30 * MINUTE);
+    flows.set(lopsided.pool, { buys: 70, sells: 10 });
+    flows.set(plain.pool, { buys: 30, sells: 30 });
+    for (const c of [lopsided, plain]) {
+      gecko.launches.push({ c, dex: 'pumpswap' });
+      gecko.numbers.set(c.pool, c);
+    }
+    const d = new PoolDiscovery({ gate: DEFAULT_GATE, logger: () => undefined, fetchFn: gecko.fetchFn, newPoolsPages: 1 });
+    await d.refresh(NOW, null); // tracks both from new_pools (and asks for numbers only inside the age window: they are 30 minutes old)
+    const r = await d.refresh(NOW + 1_000, null);
+    const byPool = new Map(r.candidates.map((c) => [c.pool, c]));
+    assert.deepEqual([byPool.get(lopsided.pool)?.buys, byPool.get(lopsided.pool)?.sells, byPool.get(lopsided.pool)?.txM5], [70, 10, 80]);
+    assert.deepEqual([byPool.get(plain.pool)?.buys, byPool.get(plain.pool)?.sells], [30, 30]);
+  });
+
+  test('flowsOf: buys and sells per pool address, rows without them skipped', () => {
+    const body = {
+      data: [
+        { attributes: { address: 'A', transactions: { m5: { buys: 3, sells: 4 } } } },
+        { attributes: { address: 'B', transactions: { m5: { buys: -1, sells: 4 } } } },
+        { attributes: { address: 'C', transactions: {} } },
+        { attributes: { transactions: { m5: { buys: 1, sells: 1 } } } },
+        'junk',
+      ],
+    };
+    assert.deepEqual([...flowsOf(body)], [['A', { buys: 3, sells: 4 }]]);
+    assert.equal(flowsOf(null).size, 0);
+    assert.equal(flowsOf({ data: 'x' }).size, 0);
   });
 
   test('off by default: no trending request', async () => {

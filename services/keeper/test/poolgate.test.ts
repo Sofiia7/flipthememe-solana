@@ -5,13 +5,15 @@ import {
   MINUTE_MS,
   RUNG_NAMES,
   beats,
+  imbalanceOf,
+  isOneSided,
   keepFailure,
   keepMaxAgeMs,
   rankCandidates,
   rungOf,
   scoreOf,
 } from '../src/poolgate.ts';
-import { HOUR, NOW, candidate as pool } from './pool-fixtures.ts';
+import { HOUR, NOW, candidate as pool, withFlow } from './pool-fixtures.ts';
 
 const gate = DEFAULT_GATE;
 
@@ -19,7 +21,7 @@ describe('pool gate defaults', () => {
   test('10-120 minutes, 50 trades in 5 minutes, hold 10 minutes, 1.5x, keep at 20 trades and 180 minutes', () => {
     assert.deepEqual(
       { ...DEFAULT_GATE },
-      { minAgeMs: 10 * MINUTE_MS, maxAgeMs: 120 * MINUTE_MS, minTxM5: 50, holdMs: 10 * MINUTE_MS, switchRatio: 1.5, keepMinTxM5: 20, keepMaxAgeMs: 180 * MINUTE_MS, pumpOnly: false },
+      { minAgeMs: 10 * MINUTE_MS, maxAgeMs: 120 * MINUTE_MS, minTxM5: 50, holdMs: 10 * MINUTE_MS, switchRatio: 1.5, keepMinTxM5: 20, keepMaxAgeMs: 180 * MINUTE_MS, pumpOnly: false, maxImbalance: 0.5, youthWeight: 1 },
     );
     assert.deepEqual(RUNG_NAMES, ['fresh', 'within-6h', 'within-24h', 'any-age']);
   });
@@ -69,6 +71,59 @@ describe('scoreOf', () => {
     const old = scoreOf(pool(2, 100, 100 * MINUTE_MS), NOW, gate);
     assert.ok(young > old);
     assert.ok(scoreOf(pool(3, 250, 110 * MINUTE_MS), NOW, gate) > young);
+  });
+});
+
+describe('one-sided flow', () => {
+  test('imbalance is |buys - sells| / txM5; no split or no trades counts as balanced', () => {
+    assert.equal(imbalanceOf(withFlow(pool(1, 0, HOUR), 50, 50)), 0);
+    assert.equal(imbalanceOf(withFlow(pool(1, 0, HOUR), 90, 10)), 0.8);
+    assert.equal(imbalanceOf(withFlow(pool(1, 0, HOUR), 100, 0)), 1);
+    assert.equal(imbalanceOf(withFlow(pool(1, 0, HOUR), 0, 0)), null, 'no trades: nothing to divide by');
+    assert.equal(imbalanceOf(pool(1, 80, HOUR)), null, 'a candidate without the split');
+  });
+
+  test('score = txM5 * (1 - imbalance) * youth bonus; a pool that only buys scores 0', () => {
+    const balanced = withFlow(pool(1, 0, 60 * MINUTE_MS), 40, 40); // 80 trades, bonus 1.5
+    const lopsided = withFlow(pool(2, 0, 60 * MINUTE_MS), 70, 10); // 80 trades, imbalance 0.75
+    assert.equal(scoreOf(balanced, NOW, gate), 120);
+    assert.equal(scoreOf(lopsided, NOW, gate), 30);
+    assert.equal(scoreOf(withFlow(pool(3, 0, 60 * MINUTE_MS), 80, 0), NOW, gate), 0);
+    assert.equal(scoreOf(pool(4, 80, 60 * MINUTE_MS), NOW, gate), 120, 'no split: as before');
+    // The youth bonus can be switched off, the flow penalty stays.
+    const neutral = { ...gate, youthWeight: 0 };
+    assert.equal(scoreOf(balanced, NOW, neutral), 80);
+    assert.equal(scoreOf(lopsided, NOW, neutral), 20);
+  });
+
+  test('soft gate: beyond maxImbalance a pool is one-sided (the limit itself is not)', () => {
+    assert.equal(isOneSided(withFlow(pool(1, 0, HOUR), 75, 25), gate), false, '|75 - 25| = 50 = 0.5 * 100');
+    assert.equal(isOneSided(withFlow(pool(1, 0, HOUR), 76, 24), gate), true);
+    assert.equal(isOneSided(withFlow(pool(1, 0, HOUR), 76, 24), { ...gate, maxImbalance: 0.6 }), false);
+    assert.equal(isOneSided(pool(1, 100, HOUR), gate), false);
+  });
+
+  test('a one-sided pool ranks behind every balanced one while a balanced active pool exists, even a lower rung', () => {
+    const list = [
+      withFlow(pool(1, 0, 30 * MINUTE_MS), 190, 10), // fresh, 200 trades, one-sided
+      withFlow(pool(2, 0, 100 * MINUTE_MS), 30, 30), // fresh, balanced, much quieter
+      withFlow(pool(3, 0, 3 * HOUR), 40, 40), // within-6h, balanced
+      withFlow(pool(4, 0, 4 * HOUR), 70, 10), // within-6h, one-sided
+    ];
+    const ranked = rankCandidates(list, NOW, gate);
+    assert.deepEqual(
+      ranked.map((r) => r.candidate.name + ' ' + RUNG_NAMES[r.rung] + (r.oneSided ? ' one-sided' : '')),
+      ['T2 / SOL fresh', 'T3 / SOL within-6h', 'T1 / SOL fresh one-sided', 'T4 / SOL within-6h one-sided'],
+    );
+  });
+
+  test('with no balanced pool of the entry or fallback rungs the one-sided ones serve as before', () => {
+    const list = [
+      withFlow(pool(1, 0, 30 * MINUTE_MS), 190, 10),
+      withFlow(pool(2, 0, 3 * HOUR), 70, 10),
+      withFlow(pool(3, 0, 30 * HOUR), 5, 5), // any-age rung: balanced, but not an active pool
+    ];
+    assert.deepEqual(rankCandidates(list, NOW, gate).map((r) => r.candidate.name), ['T1 / SOL', 'T2 / SOL', 'T3 / SOL']);
   });
 });
 

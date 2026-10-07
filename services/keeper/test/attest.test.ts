@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { setStrike } from '@flipthememe/client';
 import { generateKeyPairSigner, getBase58Decoder, getPublicKeyFromAddress, verifySignature, type SignatureBytes } from '@solana/kit';
-import { AttestRefused, AttestorClient, TRANSIENT_BACKOFF_MS, refusalBackoffMs, sendAttested, type FetchLike } from '../src/attest.ts';
+import { ATTEST_TIMEOUT_MS, AttestRefused, AttestorClient, PERMANENT_REFUSALS, TRANSIENT_BACKOFF_MS, refusalBackoffMs, sendAttested, type FetchLike } from '../src/attest.ts';
 import { fakeAttestor, reply } from './fake-attestor.ts';
 import { FakeChain } from './fake-chain.ts';
 
@@ -139,6 +139,17 @@ describe('refusalBackoffMs', () => {
     for (const reason of ['price_mismatch', 'slot_out_of_range', 'slot_price_mismatch', 'unpriced', 'samples_withheld', 'strike_too_late', 'unauthorized']) {
       assert.deepEqual([1, 2, 3, 10].map((n) => refusalBackoffMs(reason, n)), [120_000, 120_000, 120_000, 120_000], reason);
     }
+  });
+
+  test('already_signed and too_many_attempts (the attestor remembers what it signed for a round and window) are permanent too', () => {
+    for (const reason of ['already_signed', 'too_many_attempts']) {
+      assert.equal(PERMANENT_REFUSALS.has(reason), true, reason);
+      assert.deepEqual([1, 2, 3, 10].map((n) => refusalBackoffMs(reason, n)), [120_000, 120_000, 120_000, 120_000], reason);
+    }
+  });
+
+  test('one request to the attestor gets 8 s: its devnet reads may take 6 s (3 s on each of two endpoints)', () => {
+    assert.equal(ATTEST_TIMEOUT_MS, 8_000);
   });
 
   test('refusals about the attestor not having caught up yet (round_not_found, window_open) and unknown reasons are transient', () => {

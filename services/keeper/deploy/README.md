@@ -5,7 +5,9 @@ projects too). It only makes outbound connections (devnet RPC, mainnet RPC, Geck
 ports, no DNS, no reverse proxy.
 
 Only one keeper may run at a time. A laptop keeper and the VPS keeper would race for the same round
-ids and keep separate house budgets, so stop one before starting the other.
+ids and keep separate house budgets, so stop one before starting the other. The keeper notices a
+second one (see "A second keeper and clock drift" below) and stops creating rounds for 5 minutes,
+but nothing replaces stopping the other one.
 
 Placeholders used below:
 
@@ -31,7 +33,7 @@ Placeholders used below:
   deploy/Dockerfile
   deploy/docker-compose.yml
   deploy/.env                   optional overrides (see Configuration)
-  deploy/data/                  state.json, status.json, observations.json; owned by uid 1000
+  deploy/data/                  state.json, status.json, observations.json, shadow.jsonl, rounds.jsonl; owned by uid 1000
   deploy/secrets/keeper.json    the keeper key, mode 600, owned by uid 1000
 ```
 
@@ -109,7 +111,9 @@ Over SSH, in `<deploy-dir>/deploy`:
 `status.json` is rewritten every second: last round id, last successful action, keeper SOL balance,
 house vault available, house budget of the UTC day, current pool and its rung, GeckoTerminal
 discovery (tracked pools, candidates, last good refresh, failures), age of the newest price
-observation per pool, devnet clock offset. The container health check fails when it is older than
+observation per pool, devnet clock offset (`clockOffsetWarning` when it is beyond 3 s), `shadow`
+(the share of UP over the last 200 minutes, see "Shadow rounds and statistics") and `anotherKeeper`
+(`suspected`, `createPausedUntil`). The container health check fails when it is older than
 30 s; Docker only marks the container unhealthy for that, the restart comes from the self-watchdog
 below.
 
@@ -138,15 +142,87 @@ and the watchdog script below report.
 ### Observations survive a restart
 
 The price observations of the last 15 minutes (the samples that go into `set_strike` and `settle`)
-are kept in `observations.json` next to `state.json`, in the `data/` volume: written at most every
-5 s while observations arrive, and on a graceful stop (a temp file, then a rename), read back at
-start. Entries older than 15 minutes, stamped in the future or malformed are dropped, a corrupt file
+are kept in `observations.json` next to `state.json`, in the `data/` volume: written every 5 s from
+20 s before a price window until it ends (seconds 10 to 40 of every minute: both windows of every round
+fall on seconds 30 to 40), once a minute otherwise, and on a graceful stop (a temp file, then a rename),
+read back at start. Entries older than 15 minutes, stamped in the future or malformed are dropped, a corrupt file
 is ignored (`observations_restore_failed`), slots and prices are stored as strings. A restart inside
 a strike or exit window therefore keeps the window's samples and the round is priced as usual,
 instead of waiting for `settle_deadline` and a refund. A restart that lasts longer than the window
 still loses it. Log line at start: `observations_restored` (`pools`, `observations`, `dropped`).
-The file is about 65 KB per sampled pool and is rewritten every 5 s (a couple of GB of disk writes
-a day); delete it to start without history.
+The file is about 65 KB per sampled pool. With rounds every minute both windows fall on the same
+seconds, so the keeper writes 7 times a minute (seconds 10, 15, ... 40) instead of 12 times, about
+40 % less disk traffic. The pace follows the clock, not the rounds, so a minute with no round in it
+is written the same way. Delete the file to start without history.
+
+### Sampler
+
+The sampler ticks every second whatever the reads do (`sampler.ts`): each pool may have two reads in
+flight, a read is given up on after 3 s (the failover moves to the next endpoint, a late answer is
+thrown away) and two answers with the same slot are stored once. One hung mainnet answer therefore costs
+one read, not the seconds around it; before, a 5 s hang left a 10 s window with 4 samples and the
+attestor, which wants a share of its own reads, refused the keeper's. The attestor request itself
+(`ATTEST_TIMEOUT_MS`) waits 8 s: the attestor reads devnet with 3 s on each of two endpoints. In a
+log: `sample_failed` (pool, error, at most one per 30 s per pool).
+
+### Shadow rounds and statistics
+
+Two files next to `state.json` give the numbers that the chain forgets (rounds and positions are
+closed a day after they are played):
+
+- `shadow.jsonl`: at every minute boundary the keeper notes the pool it holds and, once the exit window
+  of the round that would have opened there is over (opens_at + 160 s), prices the strike and exit
+  windows from the observations it already has, with the real rounds' own window function (one sample
+  per slot, at most 16, at least 5, a whole-number mean). One line per minute, bets or not: `ts`,
+  `opensAt`, `pool`, `mint`, `name`, `rung`, `strikeMean`, `exitMean`, `strikeSamples`, `exitSamples`
+  and `dir` (`up`, `down`, `tie`, `unpriced`). The same line goes to the log as `shadow_round`. This is
+  the honest share of UP of the pools the arena plays. The last 200 minutes are aggregated in
+  `status.json` (`shadow`: `rounds`, `up`, `down`, `tie`, `unpriced`, `upShare` = up / (up + down)).
+  The file keeps the last `SHADOW_MAX_LINES` lines (20000, about 14 days).
+- `rounds.jsonl`: one line per round when its sweep is due: `id`, `ts`, `opensAt`, `pool`, `name`,
+  `outcome` (`up`, `down`, `refund`, `not_activated`), `refundReason`, `strike`, `exit`, `rawUp`,
+  `rawDown`, `houseAmount`, `humans` (positions that are not the house's), `wallets` (distinct owners),
+  `players` (those wallets, at most 50: the unique wallets of the whole file cannot be added up from
+  counts), `positions`. `humans`, `wallets` and `players` are null when the positions were already
+  closed or could not be read. Bounded by `ROUNDS_MAX_LINES` (20000).
+
+`scripts/stats.ts` reads both (only Node, the one file runs anywhere next to the data):
+
+```
+node services/keeper/scripts/stats.ts --dir <deploy-dir>/deploy/data [--days 7] [--json]
+```
+
+It prints rounds recorded and played (priced), rounds with 1+ and with 2+ people, unique wallets, the
+share of UP among played rounds and among shadow rounds (also by rung). Wallets that smoke tests fund
+from the keeper key are not told apart.
+
+`scripts/census.ts` is the read-only look at the chain itself (no key, no keeper, only devnet reads):
+vault accounts (wallets that ever put SOL in), sessions, rounds and positions still on the chain, human
+and house positions (by the `is_house` byte, `OFFSETS.positionIsHouse` = 89), distinct human wallets and
+rounds with 2+ people:
+
+```
+node services/keeper/scripts/census.ts
+```
+
+`DEVNET_RPC` picks the endpoint (default `https://api.devnet.solana.com`; a dedicated one is kinder
+to it). It is not in the keeper's package.json scripts: run it from the repository root.
+
+### A second keeper and clock drift
+
+Two keepers do no harm to the money, but they race for round ids. The keeper logs
+`another_keeper_suspected` (`sign`: `round_exists`, a round stands at the next boundary that this
+process did not create, or `invalid_round_id`, its create failed with InvalidRoundId; one line per boundary,
+at most one per 30 s) and after three boundaries in a row stops creating rounds for 5 minutes
+(`another_keeper_create_paused`, then `create_paused_another_keeper` while it lasts); strike, settle and
+claims go on. One create of its own resets the count, so a restart never gets near three. Stop the other
+keeper.
+
+`clock_offset_warning` (`offsetMs`, at most one line per 10 minutes) says the devnet clock and this
+host differ by more than 3 s: the windows are cut on the local clock and the attestor judges the slots
+on its own, so a drift that large ends in `slot_out_of_range` refusals. Containers take the time of
+the host (no NTP of their own): fix it on the host. `scripts/watchdog.ts` reports the same condition
+(`clock_offset`).
 
 ### Watchdog script and alerts
 
@@ -199,8 +275,32 @@ Once a minute (`src/poolgate.ts`, `src/discovery.ts`, `src/selector.ts`):
   PumpSwap, at least 50 SOL in the quote vault on chain (K x min_bank), and, with
   `POOL_PUMP_ONLY=true`, a mint that ends in `pump` (pump.fun graduates only; pools made on
   PumpSwap directly get drained fast). The compose file turns the filter on, the code default is
-  off. Score `txM5 * (1 + (120 - age_min) / 120)`: activity, with up to twice the weight for the
-  youngest.
+  off. Score `txM5 * (1 - |buys - sells| / txM5) * (1 + (120 - age_min) / 120)`: activity, with up to
+  twice the weight for the youngest, penalised for one-sided flow (a pool whose trades are all buys
+  scores 0; `POOL_YOUTH_WEIGHT=0` drops the youth bonus). The split comes from the buys and sells of
+  GeckoTerminal's `transactions.m5`, which the keeper reads off the raw rows (the client package only
+  keeps their sum); a candidate without the split counts as balanced.
+- Neutral choice (a one-sided stream is momentum, and a round that reads 2.5 minutes of price turns
+  momentum into UP: 11 of 12 rounds went UP on 6 October). Soft gate: a candidate with
+  `|buys - sells| > POOL_MAX_IMBALANCE * txM5` (0.5) is ranked behind every balanced one while a balanced
+  pool of the fresh or fallback rungs exists; with none, or when the balanced ones fail the depth or
+  token check, it serves as before. The `trending_pools` list is only used to find pools to track,
+  never for ranking: every ranked candidate gets its numbers from `pools/multi` or the top list.
+- Token check (`src/tokencheck.ts`, after the depth gate, cached per mint for 30 minutes, `TOKEN_CHECK=off`
+  switches it off): the mint authority and the freeze authority must be revoked (SPL Mint layout: COption
+  at 0 and at 46 of 82 bytes), the mint must belong to the Token or Token-2022 program, a Token-2022 mint
+  with a TransferFee, TransferHook, PermanentDelegate, NonTransferable or Pausable extension or with a
+  frozen DefaultAccountState is refused (Token-2022 without them is fine: pump.fun mints can be), and the
+  biggest token account that is not the pool's own base vault may hold at most `HOLDER_MAX_PCT` (20) percent
+  of the supply (`getTokenLargestAccounts`). A refused candidate is skipped (`pool_rejected_unsafe`: pool,
+  reason); a current pool that fails is replaced like a shallow one. The mint checks fail closed: when the
+  mint cannot be read (RPC error) the candidate is skipped in this refresh (`token_check_failed`, at most
+  one line per 5 minutes per pool) and the current pool is left as it is. The holder check is best effort:
+  the public mainnet RPCs rate limit `getTokenLargestAccounts` (429) or block it (checked on 2026-10-07:
+  api.mainnet-beta.solana.com answers 429, publicnode answers "Request blocked"), so when the list cannot be
+  read the verdict stands on the mint checks, is marked `holders: 'unchecked'` and is read again after
+  5 minutes. Give `MAINNET_RPCS` a keyed endpoint that serves the method to get the holder check.
+  `POOL_OVERRIDE` skips the check (an operator's decision).
 - The current pool stays at least 10 minutes. After that it is replaced when a deep enough candidate
   scores 1.5x higher, or when it drops below 20 trades in 5 minutes or gets older than 180 minutes.
   Below 50 SOL it is replaced at once, or dropped when no deep enough pool is left: then no new round
@@ -216,13 +316,36 @@ Once a minute (`src/poolgate.ts`, `src/discovery.ts`, `src/selector.ts`):
   `pool_check_failed`.
 - GeckoTerminal (free API, about 30 requests per minute per IP): at most 4 requests per minute.
   It has no creation-time sort for one dex, so the keeper reads `new_pools` (every dex, newest
-  first) every minute and tracks its PumpSwap pools for 180 minutes; `pools/multi` refreshes up to
-  30 of them plus the current pool; the PumpSwap top list (pages 1-2 every 5 minutes) feeds the
-  ladder. A failed request skips the next 1, 2, 4, then 8 minutes (`pool_discovery_failed`), and
-  numbers up to 15 minutes old stay in use meanwhile.
+  first) every minute and tracks its PumpSwap pools for 180 minutes (the 5-minute trending list adds
+  its PumpSwap pools to that set); `pools/multi` refreshes up to 30 of them plus the current pool; the
+  PumpSwap top list (pages 1-2 every 5 minutes) feeds the ladder. A failed request skips the next 1,
+  2, 4, then 8 minutes (`pool_discovery_failed`), the refresh is then not complete (the current pool
+  is not rotated on it), and numbers up to 15 minutes old stay in use meanwhile.
 - The tracked set lives in memory. After a restart pools qualify again once they are 10 minutes
   old, so for the first 10 minutes or so the ladder (or the restored pool, if it still passes)
   plays.
+
+### House policy
+
+The house tops up the smaller side of a lone bet, within the on-chain `HouseLimits` and the keeper's
+own softer limits (`src/house.ts`, `scheduler.ts`):
+
+- No fill while `config.paused`: the program refuses `house_fill` then (Paused, 6015), so the keeper does
+  not ask (`house_fill_paused`, `skipped: paused`).
+- No fill in the first `HOUSE_SWITCH_PAUSE_SECS` (60) after the pool of the round was selected
+  (`skipped: pool-switch-pause`): a pool that was chosen a moment ago has not shown its flow yet. The
+  round gets no match then and refunds.
+- The daily budget is spread over the UTC day: a fill takes at most
+  `remaining / max(1, roundsLeftToday / HOUSE_PACE_DIVISOR)` (divisor 4: one round in four is expected to
+  need a fill; 0 turns the spreading off). With 2 SOL that makes lone stakes last the day (about 200 fills)
+  instead of 40 minutes. The cap never goes below what the round needs to activate (2 x its smaller side
+  reaching min_bank) while the budget, the vault and the chain's caps allow it, and the line of the fill carries
+  `paced` when the cap made it smaller. The player is then matched on part of the stake, the rest comes back.
+- At most `HOUSE_WALLET_DAILY_FILLS` (30) fills per wallet and UTC day (0 = no limit): the wallet is the
+  owner of the biggest human stake on the side the fill matches (the positions are read when a fill is
+  about to go out). Counters live in `state.json` (`house.fills`, reset on a new UTC day, at most 2000 wallets);
+  a fill found on the chain after a restart has no wallet to name and is counted against the day's spend
+  only. Over the limit: `skipped: wallet-limit`, `fill_skipped_wallet_limit` (wallet, fillsToday, limit).
 
 Read-only check of the choice on live data (2 GeckoTerminal requests, mainnet reads, no key, no
 devnet; it does not race the VPS keeper):
@@ -256,9 +379,19 @@ empty value means the keeper's own default):
 | `POOL_SWITCH_RATIO` | `1.5` | after the hold, a candidate needs this many times the current score |
 | `POOL_KEEP_MIN_TX_M5` | `20` | after the hold, fewer trades in 5 minutes replace the current pool |
 | `POOL_KEEP_MAX_AGE_MIN` | `180` | after the hold, an older fresh pool is replaced |
+| `POOL_MAX_IMBALANCE` | `0.5` | one-sided flow gate: `\|buys - sells\| > this * txM5` ranks a candidate behind the balanced ones (0 to 1) |
+| `POOL_YOUTH_WEIGHT` | `1` | weight of the youth bonus in the score; `0` = no bonus |
+| `TOKEN_CHECK` | `true` | token check at selection (authorities, Token-2022 extensions, top holder); `false` / `off` skips it |
+| `HOLDER_MAX_PCT` | `20` | the biggest holder outside the pool may have this percent of the supply (above 0, at most 100) |
+| `TOKEN_CHECK_TTL_MIN` | `30` | minutes a token verdict is kept per mint |
+| `HOUSE_SWITCH_PAUSE_SECS` | `60` | no house fill in rounds of a pool selected less than this long ago; `0` = off |
+| `HOUSE_WALLET_DAILY_FILLS` | `30` | house fills per wallet and UTC day; `0` = no limit |
+| `HOUSE_PACE_DIVISOR` | `4` | spreads the daily budget: a fill takes at most `remaining / max(1, roundsLeftToday / this)`; `0` = no spreading |
+| `SHADOW_MAX_LINES` | `20000` | lines kept in `shadow.jsonl` (at least 100) |
+| `ROUNDS_MAX_LINES` | `20000` | lines kept in `rounds.jsonl` (at least 100) |
 
 `KEEPER_KEYPAIR=/secrets/keeper.json` and `STATE_FILE=/data/state.json` are set by the image
-(`status.json` and `observations.json` go next to the state file). RPC URLs may carry API keys: the
+(`status.json`, `observations.json`, `shadow.jsonl` and `rounds.jsonl` go next to the state file). RPC URLs may carry API keys: the
 keeper logs only their host names.
 
 `TREASURY` is not needed. It is an address that only `scripts/split-roles.ts` reads (to name a new
@@ -323,9 +456,9 @@ A failed step is retried on a later tick, never in a tight loop:
   after a window ended, `round_not_found`, `window_open`, `round_state`, a reason this keeper does
   not know) is asked again after 5 s, 15 s, 60 s, then every 120 s. A refusal about samples that no
   longer change (`price_mismatch`, `slot_out_of_range`, `slot_price_mismatch`, `unpriced`,
-  `samples_withheld`, `strike_too_late`), a wrong `ATTEST_TOKEN` (`unauthorized`) or a transaction
+  `samples_withheld`, `strike_too_late`, `already_signed`, `too_many_attempts`), a wrong `ATTEST_TOKEN` (`unauthorized`) or a transaction
   the attestor will never sign goes straight to every 120 s. An attestor that is down (`attest_failed`,
-  a timeout, 5xx, 429) keeps the 2 s .. 30 s backoff. All of it ends at `settle_deadline`, after
+  a timeout of 8 s per request, 5xx, 429) keeps the 2 s .. 30 s backoff. All of it ends at `settle_deadline`, after
   which the round takes its refund (`refund_expired` needs no attestor).
 - A claim that the program refuses for one position no longer blocks the round: when a batch
   fails with a program error, its positions are claimed one per transaction, the refused one is

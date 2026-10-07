@@ -1,7 +1,7 @@
 // Scheduler wiring against a fake devnet: which instruction each step signs, with which accounts
 // and arguments. The fake chain never applies a transaction, so a second tick sees the same state.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test, type TestContext } from 'node:test';
@@ -9,6 +9,7 @@ import {
   DEPTH_K,
   Outcome,
   PROGRAM_ID,
+  RefundReason,
   RoundStatus,
   Side,
   SYSTEM_PROGRAM_ID,
@@ -27,8 +28,10 @@ import { ChainClock } from '../src/chain.ts';
 import { PositionCloser } from '../src/closer.ts';
 import { loadConfig } from '../src/config.ts';
 import type { LogFields } from '../src/log.ts';
+import { JsonlFile } from '../src/jsonl.ts';
 import { ObservationStore } from '../src/observations.ts';
-import { CLAIM_RETRY_MS, ClaimIncomplete, Scheduler, retryDelayMs } from '../src/scheduler.ts';
+import { RoundLog } from '../src/roundlog.ts';
+import { CLAIM_RETRY_MS, CLOCK_WARN_MS, ClaimIncomplete, Scheduler, retryDelayMs } from '../src/scheduler.ts';
 import type { PoolSelector, Selection } from '../src/selector.ts';
 import { StateStore } from '../src/state.ts';
 import { fakeAttestor } from './fake-attestor.ts';
@@ -53,6 +56,13 @@ type HarnessOptions = {
   attestor?: AttestorClient;
   /** Builds the position closer (default: the scheduler's own, first scan a minute after start). */
   closer?: (chain: FakeChain, signer: KeyPairSigner, logs: LogFields[]) => PositionCloser;
+  /** Environment of loadConfig on top of the test's own (the house budget is not spread over the day here). */
+  env?: Record<string, string>;
+  /** When the selector picked the pool (default: an hour ago, so the house is not in its post-switch pause). */
+  selectedAtMs?: number;
+  roundLog?: RoundLog;
+  /** The keeper's estimate of devnet's clock minus its own, in ms (default 0). */
+  clockOffsetMs?: number;
 };
 
 async function harness(opts: HarnessOptions = {}): Promise<Harness> {
@@ -67,11 +77,11 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   // What the upgrade runbook sets up: on-chain caps as the keeper defaults, no attestor required.
   chain.houseLimits = { roundCap: 50_000_000n, dailyCap: 2n * SOL, day: BigInt(Math.floor(Date.now() / 86_400_000)), spent: 0n, bump: 253 };
   chain.oracle = { attestor: NO_ATTESTOR, required: false, bump: 252 };
-  const cfg = loadConfig({ STATE_FILE: join(dir, 'state.json') }, dir);
+  const cfg = loadConfig({ STATE_FILE: join(dir, 'state.json'), HOUSE_PACE_DIVISOR: '0', ...opts.env }, dir);
   const state = new StateStore(cfg.stateFile, Date.now());
   const store = new ObservationStore();
   const logs: LogFields[] = [];
-  const selection: Selection = { pool: POOL, baseMint: MINT, name: 'TEST / SOL', selectedAtMs: Date.now(), rung: 0, fallback: false, quoteReserve: 400n * SOL, reserveAtMs: Date.now() };
+  const selection: Selection = { pool: POOL, baseMint: MINT, name: 'TEST / SOL', selectedAtMs: opts.selectedAtMs ?? Date.now() - 3_600_000, rung: 0, fallback: false, quoteReserve: 400n * SOL, reserveAtMs: Date.now() };
   const selector = { current: opts.pool === false ? null : selection } as unknown as PoolSelector;
   const scheduler = new Scheduler({
     rpc: chain.rpc(),
@@ -80,11 +90,12 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     houseSigner: opts.houseSigner,
     attestor: opts.attestor,
     closer: opts.closer?.(chain, signer, logs),
+    roundLog: opts.roundLog,
     cfg,
     state,
     selector,
     store,
-    clock: new ChainClock(0),
+    clock: new ChainClock(opts.clockOffsetMs ?? 0),
     logger: (f) => logs.push(f),
   });
   return { chain, scheduler, signer, store, state, logs };
@@ -775,5 +786,324 @@ describe('scheduler: claim falls back to one position per transaction', () => {
     assert.deepEqual(attempts, [1]);
     assert.deepEqual(h.chain.sent.map((tx) => tx.length), [1, 1]);
     assert.equal(h.logs.filter((l) => l.event === 'claim_position_failed').length, 1);
+  });
+});
+
+// ---- the audit of 7 October 2026 -------------------------------------------------------------
+
+/** A position as the program stores it: one per owner and round. */
+async function position(roundId: bigint, authority: Address, side: Side, stake: bigint, isHouse = false): Promise<PositionAccount> {
+  return { round: await roundAddress(roundId), authority, side, stake, face: new Uint8Array(8), isHouse, claimed: false, payout: 0n, bump: 250 };
+}
+
+describe('scheduler: house fills are paused, spread over the day and limited per wallet', () => {
+  const lone = (now: number) => makeRound(9n, BigInt(now - 65), POOL, MINT, { rawUp: 50_000_000n, positionCount: 1 });
+  const now = MINUTE + 30;
+
+  test('config.paused: no house fill is asked for (the program answers Paused), and the log says why', async () => {
+    const h = await harness();
+    if (!h.chain.config) throw new Error('no config');
+    h.chain.config = { ...h.chain.config, paused: true };
+    h.chain.rounds.set(9n, lone(now));
+    await tick(h, now);
+    await tick(h, now + 1);
+    assert.equal(h.chain.sent.length, 0);
+    assert.ok(h.logs.some((l) => l.event === 'house_fill_paused'));
+    // Resumed: the same round gets its fill.
+    h.chain.config = { ...h.chain.config, paused: false };
+    await tick(h, now + 2);
+    assert.equal(only(h).name, 'houseFill');
+  });
+
+  test('a pool picked less than HOUSE_SWITCH_PAUSE_SECS ago gets no house fill; after that it does', async () => {
+    const fresh = await harness({ selectedAtMs: Date.now() - 20_000 });
+    fresh.chain.rounds.set(9n, lone(now));
+    await tick(fresh, now);
+    assert.equal(fresh.chain.sent.length, 0);
+    const skip = fresh.logs.find((l) => l.step === 'fill');
+    assert.equal(skip?.skipped, 'pool-switch-pause');
+    assert.equal(skip?.pauseSecs, 60);
+
+    const settled = await harness({ selectedAtMs: Date.now() - 61_000 });
+    settled.chain.rounds.set(9n, lone(now));
+    await tick(settled, now);
+    assert.equal(only(settled).name, 'houseFill');
+
+    const off = await harness({ selectedAtMs: Date.now() - 1_000, env: { HOUSE_SWITCH_PAUSE_SECS: '0' } });
+    off.chain.rounds.set(9n, lone(now));
+    await tick(off, now);
+    assert.equal(only(off).name, 'houseFill');
+
+    // Only the round's own pool counts: a round of an older pool is not held back by the new one.
+    const otherPool = await harness({ selectedAtMs: Date.now() - 1_000 });
+    otherPool.chain.rounds.set(9n, makeRound(9n, BigInt(now - 65), address('11111111111111111111111111111116'), MINT, { rawUp: 50_000_000n, positionCount: 1 }));
+    await tick(otherPool, now);
+    assert.equal(only(otherPool).name, 'houseFill');
+  });
+
+  test('the daily budget is spread: a lone stake is matched with the paced amount, which the log names', async () => {
+    // 40 mSOL of budget left: spread over the rest of the UTC day the cap is far below it (at most 160 mSOL / 5 rounds
+    // in the last minutes of the day; the floor that activates the round is 10 mSOL).
+    const h = await harness({ env: { HOUSE_PACE_DIVISOR: '4', HOUSE_DAILY_BUDGET_LAMPORTS: '40000000' } });
+    h.chain.rounds.set(9n, lone(now));
+    await tick(h, now);
+    const amount = readU64(only(h).data, 8);
+    assert.ok(amount >= 10_000_000n && amount < 40_000_000n, String(amount));
+    assert.equal(h.logs.find((l) => l.step === 'fill' && typeof l.sig === 'string')?.paced !== undefined, true);
+    assert.equal(h.state.state.house.spent, amount);
+  });
+
+  test('a wallet that already had HOUSE_WALLET_DAILY_FILLS fills today gets none; another wallet is not affected', async () => {
+    const heavy = (await generateKeyPairSigner()).address;
+    const light = (await generateKeyPairSigner()).address;
+    const run = async (owner: Address, fillsToday: number) => {
+      const h = await harness({ env: { HOUSE_WALLET_DAILY_FILLS: '3' } });
+      h.state.state.house = { ...h.state.state.house, fills: { [heavy]: 3, [light]: fillsToday } };
+      h.chain.rounds.set(9n, lone(now));
+      h.chain.positions.set(9n, [await position(9n, owner, Side.Up, 50_000_000n)]);
+      await tick(h, now);
+      await tick(h, now + 9); // after the success cooldown: a skipped round is not read again
+      return h;
+    };
+    const blocked = await run(heavy, 0);
+    assert.equal(blocked.chain.sent.length, 0);
+    assert.deepEqual(blocked.logs.find((l) => l.event === 'fill_skipped_wallet_limit'), {
+      round: 9n,
+      step: 'fill',
+      skipped: 'wallet-limit',
+      rawUp: 50_000_000n,
+      rawDown: 0n,
+      event: 'fill_skipped_wallet_limit',
+      wallet: heavy,
+      fillsToday: 3,
+      limit: 3,
+    });
+    assert.equal(blocked.logs.filter((l) => l.skipped === 'wallet-limit').length, 1, 'logged once per round');
+
+    const open = await run(light, 2);
+    assert.equal(only(open).name, 'houseFill');
+    // The fill counts against the wallet (3 now) and the day's spend.
+    assert.equal(open.state.state.house.fills?.[light], 3);
+    assert.equal(open.state.state.house.fills?.[heavy], 3);
+    assert.equal(open.logs.find((l) => l.step === 'fill' && typeof l.sig === 'string')?.wallet, light);
+  });
+
+  test('the wallet is the owner of the biggest stake on the matched side; HOUSE_WALLET_DAILY_FILLS=0 means no limit', async () => {
+    const big = (await generateKeyPairSigner()).address;
+    const small = (await generateKeyPairSigner()).address;
+    const other = (await generateKeyPairSigner()).address;
+    const h = await harness({ env: { HOUSE_WALLET_DAILY_FILLS: '1' } });
+    h.state.state.house = { ...h.state.state.house, fills: { [small]: 1 } };
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(now - 65), POOL, MINT, { rawUp: 80_000_000n, rawDown: 10_000_000n, positionCount: 3 }));
+    h.chain.positions.set(9n, [
+      await position(9n, small, Side.Up, 30_000_000n),
+      await position(9n, big, Side.Up, 50_000_000n),
+      await position(9n, other, Side.Down, 10_000_000n),
+    ]);
+    await tick(h, now);
+    const ix = only(h);
+    assert.equal(ix.name, 'houseFill'); // 'small' is at its limit, but the fill is for 'big'
+    assert.equal(h.state.state.house.fills?.[big], 1);
+    assert.equal(h.state.state.house.fills?.[small], 1);
+
+    const unlimited = await harness({ env: { HOUSE_WALLET_DAILY_FILLS: '0' } });
+    unlimited.state.state.house = { ...unlimited.state.state.house, fills: { [big]: 500 } };
+    unlimited.chain.rounds.set(9n, lone(now));
+    unlimited.chain.positions.set(9n, [await position(9n, big, Side.Up, 50_000_000n)]);
+    await tick(unlimited, now);
+    assert.equal(only(unlimited).name, 'houseFill');
+    assert.equal(unlimited.state.state.house.fills?.[big], 500, 'no counting either');
+  });
+
+  test('a day starts the counters over', async () => {
+    const wallet = (await generateKeyPairSigner()).address;
+    const h = await harness({ env: { HOUSE_WALLET_DAILY_FILLS: '1' } });
+    // Yesterday's ledger: the wallet was at its limit, but that day is over.
+    h.state.state.house = { day: '2026-01-01', spent: 5n, rounds: ['1'], fills: { [wallet]: 9 } };
+    h.chain.rounds.set(9n, lone(now));
+    h.chain.positions.set(9n, [await position(9n, wallet, Side.Up, 50_000_000n)]);
+    await tick(h, now);
+    assert.equal(only(h).name, 'houseFill');
+    assert.deepEqual(h.state.state.house.fills, { [wallet]: 1 });
+  });
+});
+
+describe('scheduler: rounds.jsonl at the sweep', () => {
+  function roundLogIn(): { log: RoundLog; path: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'ftm-rounds-'));
+    dirs.push(dir);
+    const path = join(dir, 'rounds.jsonl');
+    return { log: new RoundLog({ file: new JsonlFile(path, 1000), logger: () => undefined }), path };
+  }
+
+  test('one line per swept round: outcome, prices, banks, humans, wallets and positions', async () => {
+    const { log, path } = roundLogIn();
+    const h = await harness({ roundLog: log });
+    const [w1, w2, w3] = [await generateKeyPairSigner(), await generateKeyPairSigner(), await generateKeyPairSigner()];
+    const id = 6n;
+    h.chain.rounds.set(
+      id,
+      makeRound(id, BigInt(MINUTE - 300), POOL, MINT, {
+        status: RoundStatus.Final,
+        outcome: Outcome.Up,
+        strikePrice: 1_000n,
+        exitPrice: 1_050n,
+        rawUp: 60_000_000n,
+        rawDown: 60_000_000n,
+        houseAmount: 10_000_000n,
+        positionCount: 4,
+        claimedCount: 4,
+      }),
+    );
+    h.chain.positions.set(id, [
+      await position(id, w1.address, Side.Up, 50_000_000n),
+      await position(id, w2.address, Side.Up, 10_000_000n),
+      await position(id, w3.address, Side.Down, 50_000_000n),
+      await position(id, h.signer.address, Side.Down, 10_000_000n, true),
+    ]);
+    await tick(h, MINUTE + 30);
+    assert.equal(only(h).name, 'sweepFees');
+    await tick(h, MINUTE + 40); // the fake chain never applies the sweep: asked again, written once
+    const rows = readFileSync(path, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+    assert.equal(rows.length, 1);
+    const [row] = rows;
+    assert.deepEqual(
+      { ...row, ts: typeof row?.ts },
+      {
+        id: '6',
+        ts: 'string',
+        opensAt: MINUTE - 300,
+        pool: POOL,
+        name: 'TEST / SOL',
+        outcome: 'up',
+        refundReason: 'none',
+        strike: '1000',
+        exit: '1050',
+        rawUp: '60000000',
+        rawDown: '60000000',
+        houseAmount: '10000000',
+        humans: 3,
+        wallets: 3,
+        players: [w1.address, w2.address, w3.address],
+        positions: 4,
+      },
+    );
+  });
+
+  test('a round whose positions are gone, or that never had any, is written with null humans', async () => {
+    const { log, path } = roundLogIn();
+    const h = await harness({ roundLog: log });
+    h.chain.rounds.set(
+      7n,
+      makeRound(7n, BigInt(MINUTE - 400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Refund, refundReason: RefundReason.Tie, rawUp: 30_000_000n, rawDown: 30_000_000n, positionCount: 0, feesSwept: false, totalPaid: 0n }),
+    );
+    await tick(h, MINUTE + 30);
+    assert.equal(only(h).name, 'sweepFees');
+    const [row] = readFileSync(path, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
+    assert.deepEqual([row?.outcome, row?.refundReason, row?.humans, row?.wallets, row?.players, row?.positions], ['refund', 'tie', null, null, null, 0]);
+  });
+
+  test('no log configured: the sweep goes out as before', async () => {
+    const h = await harness();
+    h.chain.rounds.set(6n, makeRound(6n, BigInt(MINUTE - 300), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.Down, positionCount: 2, claimedCount: 2, rawUp: 1n, rawDown: 1n }));
+    await tick(h, MINUTE + 30);
+    assert.equal(only(h).name, 'sweepFees');
+  });
+});
+
+describe('scheduler: clock drift and a second keeper', () => {
+  test('clock_offset_warning beyond 3 s either way, throttled; nothing within', async () => {
+    assert.equal(CLOCK_WARN_MS, 3_000);
+    for (const offset of [-3_000, 0, 2_999, 3_000]) {
+      const h = await harness({ clockOffsetMs: offset });
+      await tick(h, MINUTE + 10);
+      assert.equal(h.logs.some((l) => l.event === 'clock_offset_warning'), false, `offset ${offset}`);
+      assert.equal(h.scheduler.status().clockOffsetWarning, false);
+    }
+    for (const offset of [-3_001, 4_500]) {
+      const h = await harness({ clockOffsetMs: offset });
+      await tick(h, MINUTE + 10);
+      await tick(h, MINUTE + 11);
+      await tick(h, MINUTE + 12);
+      const warnings = h.logs.filter((l) => l.event === 'clock_offset_warning');
+      assert.equal(warnings.length, 1, 'once, not on every tick');
+      assert.equal(warnings[0]?.offsetMs, offset);
+      assert.equal(warnings[0]?.limitMs, 3_000);
+      assert.equal(h.scheduler.status().clockOffsetWarning, true);
+    }
+  });
+
+  /** A round standing at the next minute boundary, as another keeper would have created it. */
+  const foreign = (h: Harness, id: bigint, opensAt: number) => h.chain.rounds.set(id, makeRound(id, BigInt(opensAt), POOL, MINT));
+  const events = (h: Harness, name: string) => h.logs.filter((l) => l.event === name);
+
+  test('a round at the next boundary that this keeper did not create is another_keeper_suspected; three in a row stop create for 5 minutes', async () => {
+    const h = await harness();
+    if (!h.chain.config) throw new Error('no config');
+    h.chain.config = { ...h.chain.config, nextRoundId: 13n };
+    const at = (minute: number) => MINUTE + 60 * minute + 50; // second 50: create is due for the boundary 10 s ahead
+    // The first minute: nothing standing at the boundary 60 s ahead of the tick yet (before CREATE_LEAD_MS), so no sign.
+    foreign(h, 10n, MINUTE + 60);
+    await tick(h, MINUTE + 20);
+    assert.equal(events(h, 'another_keeper_suspected').length, 0);
+    await tick(h, at(0));
+    await tick(h, at(0) + 1); // the same boundary again: counted once
+    assert.deepEqual(events(h, 'another_keeper_suspected').map((l) => [l.consecutive, l.sign, l.round]), [[1, 'round_exists', 10n]]);
+    assert.equal(h.chain.sent.some((tx) => tx[0]?.name === 'createRound'), false, 'the round stands: nothing to create');
+
+    foreign(h, 11n, MINUTE + 120);
+    await tick(h, at(1));
+    foreign(h, 12n, MINUTE + 180);
+    await tick(h, at(2));
+    assert.equal(events(h, 'another_keeper_create_paused').length, 1);
+    assert.equal(h.scheduler.guard.paused(at(2)), true);
+    assert.equal((h.scheduler.status().anotherKeeper as { suspected: number }).suspected, 3);
+    // One line per boundary (they are a minute apart; the line itself is throttled to one per 30 s).
+    assert.deepEqual(events(h, 'another_keeper_suspected').map((l) => l.consecutive), [1, 2, 3]);
+  });
+
+  test('while create is paused no round is created, even with nothing standing; after 5 minutes it creates again', async () => {
+    const h = await harness();
+    h.store.add(POOL, obs((MINUTE + 50) * 1000 - 300, 1));
+    for (let m = 0; m < 3; m++) h.scheduler.guard.foreignRound(BigInt(MINUTE + 60 * (m + 1)), BigInt(10 + m), (MINUTE + 60 * m + 50) * 1000);
+    assert.equal(h.scheduler.guard.paused((MINUTE + 160) * 1000), true);
+    const at = MINUTE + 3 * 60 + 50; // 10 s before a boundary, inside the pause
+    h.store.add(POOL, obs(at * 1000 - 300, 2));
+    await tick(h, at);
+    assert.equal(h.chain.sent.length, 0);
+    assert.ok(h.logs.some((l) => l.event === 'create_paused_another_keeper'));
+    // The pause began at second 50 of minute 2 and lasts 5 minutes (to MINUTE + 470 s): at second 50 of minute 9 create is due again.
+    const resumeAt = MINUTE + 9 * 60 + 50;
+    h.store.add(POOL, obs(resumeAt * 1000 - 300, 3));
+    await tick(h, resumeAt);
+    assert.equal(only(h).name, 'createRound');
+  });
+
+  test('a round this process created is not a sign of anything', async () => {
+    const h = await harness();
+    const now = MINUTE + 50;
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT));
+    h.store.add(POOL, obs(now * 1000 - 300, 1));
+    await tick(h, now);
+    assert.equal(only(h).name, 'createRound'); // round 10, opens at MINUTE + 60
+    h.chain.rounds.set(10n, makeRound(10n, BigInt(MINUTE + 60), POOL, MINT)); // the chain caught up
+    if (!h.chain.config) throw new Error('no config');
+    h.chain.config = { ...h.chain.config, nextRoundId: 11n };
+    await tick(h, now + 1); // still before the boundary: the round at it is ours
+    await tick(h, now + 2);
+    assert.equal(events(h, 'another_keeper_suspected').length, 0);
+  });
+
+  test('a create that fails with InvalidRoundId is a sign too (another transaction took the id)', async () => {
+    const h = await harness();
+    const now = MINUTE + 50;
+    h.store.add(POOL, obs(now * 1000 - 300, 1));
+    h.chain.failWhen = (ixs) =>
+      ixs[0]?.name === 'createRound' ? Object.assign(new Error('Transaction simulation failed'), { context: { logs: ['Program 5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz failed: custom program error: 0x1778'] } }) : null;
+    await tick(h, now);
+    const suspected = events(h, 'another_keeper_suspected');
+    assert.equal(suspected.length, 1);
+    assert.equal(suspected[0]?.sign, 'invalid_round_id');
+    assert.ok(h.logs.some((l) => l.step === 'create' && l.error === 'InvalidRoundId'));
   });
 });

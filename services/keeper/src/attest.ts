@@ -32,7 +32,11 @@ import type { SolanaRpc } from './rpc.ts';
 
 /** Pubkey::default(): what OracleConfig holds while no attestor is set up. */
 export const NO_ATTESTOR: Address = SYSTEM_PROGRAM_ID;
-export const ATTEST_TIMEOUT_MS = 5_000;
+/**
+ * One request to the attestor. 8 s: the attestor reads devnet with 3 s per endpoint and two endpoints, so a slow
+ * first one and the fallback together take 6 s, which a 5 s timeout turned into a "timeout" and a second request.
+ */
+export const ATTEST_TIMEOUT_MS = 8_000;
 /** Tries per step; the scheduler retries the step itself with backoff until the round's deadline. */
 export const ATTEST_ATTEMPTS = 2;
 export const ATTEST_PAUSE_MS = 500;
@@ -45,7 +49,9 @@ export const ATTEST_PAUSE_MS = 500;
  * yet (too_few_samples), may not know the round yet (round_not_found) or may still think the
  * window is open (window_open). Those retry at 5 s, 15 s, 60 s, then every 120 s. Others are a
  * verdict on samples that no longer change (price_mismatch, slot_out_of_range, slot_price_mismatch,
- * unpriced, samples_withheld, strike_too_late), a wrong ATTEST_TOKEN (unauthorized) or a transaction
+ * unpriced, samples_withheld, strike_too_late), a verdict the attestor has already given for the
+ * round and window (already_signed: a different list of samples was signed before; too_many_attempts:
+ * its ATTEST_MAX_TRIES for the pair are used up), a wrong ATTEST_TOKEN (unauthorized) or a transaction
  * the attestor will never sign (the structural reasons): they go straight to 120 s, and a step is
  * never asked more often than that. A reason this table does not know counts as transient.
  */
@@ -58,6 +64,8 @@ export const PERMANENT_REFUSALS: ReadonlySet<string> = new Set([
   'unpriced',
   'samples_withheld',
   'strike_too_late',
+  'already_signed',
+  'too_many_attempts',
   'unauthorized',
   'bad_transaction',
   'unsupported_version',

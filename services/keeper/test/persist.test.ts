@@ -9,7 +9,16 @@ import { after, describe, test } from 'node:test';
 import type { PriceObservation } from '@flipthememe/client';
 import { loadConfig } from '../src/config.ts';
 import type { LogFields } from '../src/log.ts';
-import { ObservationPersister, ObservationStore, PERSIST_EVERY_MS, RETAIN_MS, parseObservations, windowSamples } from '../src/observations.ts';
+import {
+  ObservationPersister,
+  ObservationStore,
+  PERSIST_EVERY_MS,
+  PERSIST_QUIET_EVERY_MS,
+  RETAIN_MS,
+  parseObservations,
+  persistEveryMs,
+  windowSamples,
+} from '../src/observations.ts';
 
 const dirs: string[] = [];
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -166,7 +175,7 @@ describe('observation persistence', () => {
 describe('ObservationPersister writes', () => {
   test('at most one write per PERSIST_EVERY_MS (5 s), and only when something new arrived', () => {
     assert.equal(PERSIST_EVERY_MS, 5_000);
-    const a = setup();
+    const a = setup(PERSIST_EVERY_MS);
     assert.equal(a.persister.maybeSave(NOW), false); // nothing yet: no file
     assert.equal(existsSync(a.path), false);
 
@@ -178,6 +187,39 @@ describe('ObservationPersister writes', () => {
     assert.equal(a.persister.maybeSave(NOW + 5_000), true);
     assert.equal(JSON.parse(readFileSync(a.path, 'utf8')).pools.p.length, 2);
     assert.equal(a.persister.maybeSave(NOW + 20_000), false); // nothing new since the last write
+  });
+
+  test('every 5 s from 20 s before the price windows (seconds 30-40 of each minute) until they end, otherwise once a minute', () => {
+    const minute = 1_800_000_000_000; // a minute boundary
+    const at = (sec: number) => minute + sec * 1000;
+    assert.equal(PERSIST_QUIET_EVERY_MS, 60_000);
+    for (const sec of [10, 15, 29.5, 30, 35, 39.9, 40]) assert.equal(persistEveryMs(at(sec)), PERSIST_EVERY_MS, `second ${sec}`);
+    for (const sec of [0, 5, 9.9, 40.1, 41, 50, 59.9]) assert.equal(persistEveryMs(at(sec)), PERSIST_QUIET_EVERY_MS, `second ${sec}`);
+    assert.equal(persistEveryMs(at(60 + 20)), PERSIST_EVERY_MS, 'the same in every minute');
+  });
+
+  test('the persister follows that pace: a write per 5 s inside the burst (seconds 10 to 40), one a minute at the slowest outside it', () => {
+    const minute = 1_800_000_000_000;
+    const a = setup();
+    // An observation every second for three minutes, the loop of main.ts asking once a second: when does the file get written?
+    const writes: number[] = [];
+    for (let t = 0; t < 180; t++) {
+      a.store.add('p', { ...obs(0, BigInt(t + 1)), atMs: minute + t * 1000 });
+      if (a.persister.maybeSave(minute + t * 1000)) writes.push(t);
+    }
+    const burst = [10, 15, 20, 25, 30, 35, 40];
+    assert.deepEqual(writes, [0, ...burst, ...burst.map((s) => s + 60), ...burst.map((s) => s + 120)], 'the first write goes at once, then 7 a minute (12 before)');
+  });
+
+  test('outside the burst the file waits a minute from its last write, and the burst ends that wait', () => {
+    const minute = 1_800_000_000_000;
+    const a = setup();
+    a.store.add('p', { ...obs(0, 1n), atMs: minute + 41_000 });
+    assert.equal(a.persister.maybeSave(minute + 41_000), true, 'the first write goes at once, wherever it falls');
+    a.store.add('p', { ...obs(0, 2n), atMs: minute + 45_000 });
+    assert.equal(a.persister.maybeSave(minute + 45_000), false, 'quiet part of the minute: 4 s since the last write');
+    assert.equal(a.persister.maybeSave(minute + 69_000), false, 'second 9 of the next minute: still quiet, 28 s');
+    assert.equal(a.persister.maybeSave(minute + 70_000), true, 'second 10: the burst begins and 5 s are enough');
   });
 
   test('a restored store is not rewritten until a new observation arrives', () => {
