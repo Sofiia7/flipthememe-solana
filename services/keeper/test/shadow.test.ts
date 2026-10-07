@@ -9,7 +9,7 @@ import { roundTimes, windowMean, type PriceObservation } from '@flipthememe/clie
 import { JsonlFile } from '../src/jsonl.ts';
 import type { LogFields } from '../src/log.ts';
 import { ObservationStore, windowSamples } from '../src/observations.ts';
-import { ShadowBook, parseShadowRow, summarize, upShare, type ShadowPool, type ShadowRow } from '../src/shadow.ts';
+import { ShadowBook, directionalBias, parseShadowRow, summarize, upShare, type ShadowPool, type ShadowRow } from '../src/shadow.ts';
 import { testAddress } from './pool-fixtures.ts';
 
 const dirs: string[] = [];
@@ -21,6 +21,17 @@ const current = (pool = POOL, name = 'TEST / SOL'): ShadowPool => ({ pool, baseM
 /** A minute boundary, unix seconds. */
 const B = 1_800_000_000;
 const ms = (secs: number): number => secs * 1000;
+test('observed momentum veto is symmetric, needs ten priced minutes, excludes old, future and other-pool rows', () => {
+  const now = ms(B);
+  const rows = (up: number, down: number) => Array.from({ length: up + down }, (_, i) => ({ pool: POOL, opensAt: B - (i + 1) * 60, dir: i < up ? 'up' as const : 'down' as const }));
+  assert.match(directionalBias(rows(8, 2), POOL, now)!, /8 UP \/ 2 DOWN/);
+  assert.match(directionalBias(rows(2, 8), POOL, now)!, /2 UP \/ 8 DOWN/);
+  assert.equal(directionalBias(rows(7, 3), POOL, now), null);
+  assert.equal(directionalBias(rows(9, 0), POOL, now), null);
+  assert.equal(directionalBias(rows(10, 0), OTHER, now), null);
+  assert.equal(directionalBias(rows(10, 0), POOL, now + 40 * 60_000), null);
+  assert.equal(directionalBias(rows(10, 0), POOL, now - 40 * 60_000), null);
+});
 let slotCounter = 1_000n;
 
 function obs(atSecs: number, price: bigint, slot: bigint = ++slotCounter): PriceObservation {

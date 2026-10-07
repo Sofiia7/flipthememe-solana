@@ -116,6 +116,7 @@ export function loadPoolGate(env: Env): PoolGate {
   const minutes = (name: string, fallbackMs: number) => parseNumber(name, text(env, name), fallbackMs / MINUTE_MS) * MINUTE_MS;
   const count = (name: string, fallback: number) => parseNumber(name, text(env, name), fallback, { integer: true });
   const gate: PoolGate = {
+    neutral: flag(env, 'POOL_NEUTRAL', true),
     minAgeMs: minutes('POOL_MIN_AGE_MIN', DEFAULT_GATE.minAgeMs),
     maxAgeMs: minutes('POOL_MAX_AGE_MIN', DEFAULT_GATE.maxAgeMs),
     minTxM5: count('POOL_MIN_TX_M5', DEFAULT_GATE.minTxM5),
@@ -127,6 +128,10 @@ export function loadPoolGate(env: Env): PoolGate {
     maxImbalance: parseNumber('POOL_MAX_IMBALANCE', text(env, 'POOL_MAX_IMBALANCE'), DEFAULT_GATE.maxImbalance),
     youthWeight: parseNumber('POOL_YOUTH_WEIGHT', text(env, 'POOL_YOUTH_WEIGHT'), DEFAULT_GATE.youthWeight),
   };
+  if (gate.neutral) {
+    gate.youthWeight = 0;
+    if (text(env, 'POOL_MAX_IMBALANCE') === undefined) gate.maxImbalance = 0.3;
+  }
   if (gate.maxAgeMs <= gate.minAgeMs) throw new Error('POOL_MAX_AGE_MIN must be greater than POOL_MIN_AGE_MIN');
   if (gate.keepMaxAgeMs < gate.maxAgeMs) throw new Error('POOL_KEEP_MAX_AGE_MIN must not be below POOL_MAX_AGE_MIN');
   if (gate.keepMinTxM5 > gate.minTxM5) throw new Error('POOL_KEEP_MIN_TX_M5 must not exceed POOL_MIN_TX_M5');

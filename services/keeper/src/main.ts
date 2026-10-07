@@ -124,6 +124,7 @@ async function main(): Promise<void> {
       keepMaxAgeMin: cfg.poolGate.keepMaxAgeMs / MINUTE_MS,
       maxImbalance: cfg.poolGate.maxImbalance,
       youthWeight: cfg.poolGate.youthWeight,
+      neutral: cfg.poolGate.neutral,
     },
   });
 
@@ -137,8 +138,8 @@ async function main(): Promise<void> {
     persisted && !cfg.poolOverride
       ? { ...persisted, quoteReserve: 0n, reserveAtMs: 0 }
       : null;
-  // Trending first (one call finds the hottest fresh pools); one new_pools page keeps the tracked list growing.
-  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: true, newPoolsPages: 1 });
+  // Discover by activity and new listings; trending never seeds production selection.
+  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: false, newPoolsPages: 1 });
   const selector = new PoolSelector({
     source: discovery,
     chain: poolChain(refs, mainnet, tokens),
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
     logger: log,
     override: cfg.poolOverride,
     initial,
+    marketBias: (pool, nowMs) => cfg.poolGate.neutral ? shadow.bias(pool, nowMs) : null,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
     onChange: (s) => {
       state.state.pool = s ? { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback } : null;
@@ -193,6 +195,7 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
+      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, momentumMinMinutes: 10, momentumMaxShare: 0.8 },
       ...sched.status(),
       houseBudget: {
         day: house.day,

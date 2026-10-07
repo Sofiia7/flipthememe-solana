@@ -4,10 +4,10 @@ import type { PoolCandidate } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
 import type { DiscoveryResult } from '../src/discovery.ts';
 import type { LogFields } from '../src/log.ts';
-import { DEFAULT_GATE, type Rung } from '../src/poolgate.ts';
+import { DEFAULT_GATE, type Rung, type PoolGate } from '../src/poolgate.ts';
 import { MAX_DEPTH_CHECKS, PoolSelector, type PoolChain, type Selection } from '../src/selector.ts';
 import type { TokenVerdict } from '../src/tokencheck.ts';
-import { HOUR, MINUTE, NOW, SOL, candidate, testAddress } from './pool-fixtures.ts';
+import { HOUR, MINUTE, NOW, SOL, candidate, testAddress, withFlow } from './pool-fixtures.ts';
 
 const MIN_BANK = 20_000_000n; // 0.02 SOL, so the depth gate (2500 x min_bank) is 50 SOL
 const DEEP = 80n * SOL;
@@ -32,6 +32,8 @@ function harness(
     override?: Address | null;
     reserves?: [number, bigint][];
     complete?: boolean;
+    gate?: PoolGate;
+    marketBias?: (pool: Address, nowMs: number) => string | null;
     /** The token check by pool number: a verdict, or an Error that is thrown (the RPC failed). Pools not listed pass. Absent: no token check at all. */
     tokens?: [number, TokenVerdict | Error][];
   } = {},
@@ -77,7 +79,8 @@ function harness(
   const selector = new PoolSelector({
     source,
     chain,
-    gate: DEFAULT_GATE,
+    gate: opts.gate ?? DEFAULT_GATE,
+    marketBias: opts.marketBias,
     logger: (f) => logs.push(f),
     override: opts.override ?? null,
     minBank: () => MIN_BANK,
@@ -92,6 +95,32 @@ function selection(i: number, rung: Rung, selectedAtMs: number): Selection {
 }
 
 const last = (h: Harness): LogFields | undefined => h.logs[h.logs.length - 1];
+
+describe('neutral selector rejects momentum before the hold and during incomplete discovery', () => {
+  const gate = { ...DEFAULT_GATE, neutral: true, maxImbalance: 0.3, youthWeight: 0 };
+  test('a one-sided current pool is replaced by a balanced mature pool immediately', async () => {
+    const h = harness([withFlow(candidate(1, 0, 30 * MINUTE), 90, 10), withFlow(candidate(2, 0, 48 * HOUR), 50, 50)], { gate, initial: selection(1, 0, NOW - MINUTE), complete: false });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+    assert.match(String(last(h)?.reason), /flow imbalance/);
+  });
+  test('no suitable pool drops the old one; it never falls back to the same rejected pool', async () => {
+    const h = harness([withFlow(candidate(1, 0, 30 * MINUTE), 90, 10)], { gate, initial: selection(1, 0, NOW - MINUTE) });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current, null);
+    assert.equal(last(h)?.event, 'pool_dropped');
+  });
+  test('observed price momentum veto applies to the current pool and new candidates', async () => {
+    const list = [withFlow(candidate(1, 0, 30 * MINUTE), 90, 90), withFlow(candidate(2, 0, 48 * HOUR), 50, 50)];
+    const h = harness(list, { gate, initial: selection(1, 0, NOW - MINUTE), marketBias: (pool) => pool === testAddress(1) ? 'observed momentum' : null });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+    assert.equal(last(h)?.reason, 'observed momentum');
+    const first = harness(list, { gate, marketBias: (pool) => pool === testAddress(1) ? 'observed momentum' : null });
+    await first.selector.refresh(NOW);
+    assert.equal(first.selector.current?.pool, testAddress(2));
+  });
+});
 
 describe('PoolSelector: first choice', () => {
   test('the best fresh pool that is deep enough, logged with its rung', async () => {

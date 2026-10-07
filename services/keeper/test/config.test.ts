@@ -30,7 +30,7 @@ describe('loadConfig', () => {
     assert.equal(cfg.houseDailyBudget, 2_000_000_000n);
     assert.equal(cfg.poolOverride, null);
     assert.match(cfg.keypairPath, /\.flipthememe[\\/]keeper\.json$/);
-    assert.deepEqual(cfg.poolGate, DEFAULT_GATE);
+    assert.deepEqual(cfg.poolGate, { ...DEFAULT_GATE, neutral: true, youthWeight: 0, maxImbalance: 0.3 });
     // The October 2026 audit knobs.
     assert.equal(cfg.houseSwitchPauseSecs, 60);
     assert.equal(cfg.houseWalletDailyFills, 30);
@@ -106,12 +106,12 @@ describe('loadConfig', () => {
       POOL_KEEP_MIN_TX_M5: '10',
       POOL_KEEP_MAX_AGE_MIN: '90',
     });
-    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000, pumpOnly: false, maxImbalance: 0.5, youthWeight: 1 });
+    assert.deepEqual(gate, { minAgeMs: 300_000, maxAgeMs: 3_600_000, minTxM5: 30, holdMs: 450_000, switchRatio: 2, keepMinTxM5: 10, keepMaxAgeMs: 5_400_000, pumpOnly: false, maxImbalance: 0.3, youthWeight: 0, neutral: true });
     const neutral = loadPoolGate({ POOL_MAX_IMBALANCE: '0.3', POOL_YOUTH_WEIGHT: '0' });
     assert.equal(neutral.maxImbalance, 0.3);
     assert.equal(neutral.youthWeight, 0);
     assert.throws(() => loadPoolGate({ POOL_MAX_IMBALANCE: '1.5' }), /POOL_MAX_IMBALANCE must be between 0 and 1/);
-    assert.deepEqual(loadPoolGate({ POOL_MAX_AGE_MIN: '', POOL_SWITCH_RATIO: ' ' }), DEFAULT_GATE);
+    assert.deepEqual(loadPoolGate({ POOL_MAX_AGE_MIN: '', POOL_SWITCH_RATIO: ' ' }), { ...DEFAULT_GATE, neutral: true, youthWeight: 0, maxImbalance: 0.3 });
     assert.throws(() => loadPoolGate({ POOL_MIN_TX_M5: '50.5' }), /POOL_MIN_TX_M5 must be a whole number/);
     assert.throws(() => loadPoolGate({ POOL_MAX_AGE_MIN: '-5' }), /POOL_MAX_AGE_MIN must be a non-negative number/);
     assert.throws(() => loadPoolGate({ POOL_MIN_AGE_MIN: '120' }), /POOL_MAX_AGE_MIN must be greater than POOL_MIN_AGE_MIN/);

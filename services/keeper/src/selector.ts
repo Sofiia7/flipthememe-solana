@@ -91,6 +91,7 @@ export type CandidateSource = { refresh(nowMs: number, current: Address | null):
 const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 export class PoolSelector {
+  private readonly marketBias: (pool: Address, nowMs: number) => string | null;
   current: Selection | null;
   private readonly source: CandidateSource;
   private readonly chain: PoolChain;
@@ -112,10 +113,12 @@ export class PoolSelector {
     override: Address | null;
     minBank: () => bigint;
     initial: Selection | null;
+    marketBias?: (pool: Address, nowMs: number) => string | null;
     /** Every new selection or rung; null when the current pool is dropped. */
     onChange: (s: Selection | null) => void;
   }) {
     this.source = opts.source;
+    this.marketBias = opts.marketBias ?? (() => null);
     this.chain = opts.chain;
     this.gate = opts.gate;
     this.logger = opts.logger;
@@ -145,6 +148,7 @@ export class PoolSelector {
     let checks = 0;
     /** The reserve when deep enough, else null; at most MAX_DEPTH_CHECKS candidates besides the current pool. */
     const deepEnough = async (pool: Address): Promise<bigint | null | undefined> => {
+      if (this.gate.neutral && this.marketBias(pool, nowMs)) { depth.set(pool, null); return null; }
       if (!depth.has(pool)) {
         if (pool !== current?.pool) {
           if (checks >= MAX_DEPTH_CHECKS) return undefined;
@@ -157,7 +161,10 @@ export class PoolSelector {
     };
 
     let reason: string;
-    if (current) {
+    const neutralReject = current && this.gate.neutral ? keepFailure(candidates.find((c) => c.pool === current.pool), current.rung, nowMs, this.gate) ?? this.marketBias(current.pool, nowMs) : null;
+    if (current && neutralReject) {
+      reason = neutralReject;
+    } else if (current) {
       const reserve = await deepEnough(current.pool);
       if (typeof reserve === 'bigint') {
         this.current = { ...current, quoteReserve: reserve, reserveAtMs: Date.now() };
@@ -188,7 +195,8 @@ export class PoolSelector {
       if (deep === undefined) break;
       if (deep !== null) return this.select(r, deep, nowMs, reason);
     }
-    if (current && depth.get(current.pool) === null) {
+    if (current && (neutralReject || depth.get(current.pool) === null)) {
+      // No suitable neutral pool means no new rounds. Active rounds still use their original pools.
       // Read and below the depth gate. Kept, it would get new rounds whose max_bank (reserve / K) is
       // below min_bank: rounds that can never activate. A failed read does not drop it (public RPCs
       // often answer 429): the scheduler checks the depth again on a fresh sample before each round.

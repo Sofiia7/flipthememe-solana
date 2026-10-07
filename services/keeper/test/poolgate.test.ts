@@ -176,6 +176,23 @@ describe('beats', () => {
   });
 });
 
+describe('neutral production ranking', () => {
+  const neutral = { ...DEFAULT_GATE, neutral: true, youthWeight: 0, maxImbalance: 0.3 };
+  test('activity wins across ages; youth and fallback rung give no advantage', () => {
+    const young = withFlow(pool(1, 0, 20 * MINUTE_MS), 40, 40);
+    const mature = withFlow(pool(2, 0, 48 * HOUR), 100, 100);
+    assert.deepEqual(rankCandidates([young, mature], NOW, neutral).map((r) => r.candidate.pool), [mature.pool, young.pool]);
+    assert.equal(scoreOf(young, NOW, { ...neutral, youthWeight: 100 }), 80);
+    assert.equal(beats({ rung: 3, score: 200 }, { rung: 0, score: 80 }, neutral), true);
+  });
+  test('unknown flow, both directions of one-sided flow and quiet pools are refused with no fallback', () => {
+    const list = [pool(1, 300, HOUR), withFlow(pool(2, 0, HOUR), 90, 10), withFlow(pool(3, 0, HOUR), 10, 90), withFlow(pool(4, 0, HOUR), 10, 10)];
+    assert.deepEqual(rankCandidates(list, NOW, neutral), []);
+    assert.match(keepFailure(list[1], 0, NOW, neutral)!, /flow imbalance/);
+    assert.match(keepFailure(list[2], 3, NOW, neutral)!, /flow imbalance/);
+  });
+});
+
 test('pump.fun graduates only when pumpOnly is set', () => {
   const gate = { ...DEFAULT_GATE, pumpOnly: true };
   const plain = pool(1, 100, 20 * MINUTE_MS);

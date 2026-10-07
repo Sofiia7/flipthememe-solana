@@ -1,4 +1,7 @@
 /**
+ * Production enables PoolGate.neutral in loadConfig: rank by balanced activity across all ages,
+ * reject missing flow / one-sided flow / low activity, and apply retention checks before the hold.
+ * The age ladder below is retained only for the explicit POOL_NEUTRAL=false compatibility mode.
  * Which PumpSwap pool the arena plays, as pure functions over GeckoTerminal numbers (the SOL depth
  * gate is on chain, in the selector):
  *
@@ -31,6 +34,8 @@ export const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 
 export type PoolGate = {
+  /** Production selection: no age preference, hard flow/activity checks on entry and retention. */
+  neutral?: boolean;
   /** Entry gate: pool age at least this ... */
   minAgeMs: number;
   /** ... and at most this ... */
@@ -119,7 +124,15 @@ export function isOneSided(c: Candidate, gate: PoolGate): boolean {
 export function scoreOf(c: Candidate, nowMs: number, gate: PoolGate): number {
   const age = Math.max(0, nowMs - c.createdAtMs);
   const bonus = Math.max(0, gate.maxAgeMs - age) / gate.maxAgeMs;
-  return c.txM5 * (1 - (imbalanceOf(c) ?? 0)) * (1 + gate.youthWeight * bonus);
+  return c.txM5 * (1 - (imbalanceOf(c) ?? 0)) * (1 + (gate.neutral ? 0 : gate.youthWeight) * bonus);
+}
+
+export function neutralFailure(c: Candidate | undefined, gate: PoolGate, minimum: number): string | null {
+  if (!c) return 'flow statistics unavailable';
+  const flow = imbalanceOf(c);
+  if (flow === null || !Number.isFinite(c.buys) || !Number.isFinite(c.sells) || c.buys! < 0 || c.sells! < 0 || c.buys! + c.sells! !== c.txM5) return 'flow statistics unavailable';
+  if (c.txM5 < minimum) return `txM5 ${c.txM5} < ${minimum}`;
+  return flow > gate.maxImbalance ? `flow imbalance ${flow.toFixed(3)} > ${gate.maxImbalance}` : null;
 }
 
 /**
@@ -135,10 +148,12 @@ export function rankCandidates(candidates: readonly Candidate[], nowMs: number, 
   for (const candidate of candidates) {
     if (seen.has(candidate.pool)) continue;
     seen.add(candidate.pool);
+    if (gate.neutral && neutralFailure(candidate, gate, gate.minTxM5)) continue;
     const rung = rungOf(candidate, nowMs, gate);
     if (rung !== null) ranked.push({ candidate, rung, score: scoreOf(candidate, nowMs, gate), oneSided: isOneSided(candidate, gate) });
   }
-  ranked.sort((a, b) => a.rung - b.rung || b.score - a.score);
+  ranked.sort((a, b) => gate.neutral ? b.score - a.score || a.candidate.pool.localeCompare(b.candidate.pool) : a.rung - b.rung || b.score - a.score);
+  if (gate.neutral) return ranked;
   if (!ranked.some((r) => !r.oneSided && r.rung < 3)) return ranked;
   return [...ranked.filter((r) => !r.oneSided), ...ranked.filter((r) => r.oneSided)];
 }
@@ -155,6 +170,7 @@ export function keepMaxAgeMs(rung: Rung, gate: PoolGate): number {
  * `stats` are its latest GeckoTerminal numbers; without them the pool counts as unlisted.
  */
 export function keepFailure(stats: Candidate | undefined, rung: Rung, nowMs: number, gate: PoolGate): string | null {
+  if (gate.neutral) return neutralFailure(stats, gate, gate.keepMinTxM5);
   if (!stats) return 'unlisted';
   if (rung === 3) return null;
   if (stats.txM5 < gate.keepMinTxM5) return `txM5 ${stats.txM5} < ${gate.keepMinTxM5}`;
@@ -166,6 +182,6 @@ export function keepFailure(stats: Candidate | undefined, rung: Rung, nowMs: num
 
 /** True when `candidate` should replace a current pool that still passes its keep gate. */
 export function beats(candidate: Pick<Ranked, 'rung' | 'score'>, current: Pick<Ranked, 'rung' | 'score'>, gate: PoolGate): boolean {
-  if (candidate.rung !== current.rung) return candidate.rung < current.rung;
+  if (!gate.neutral && candidate.rung !== current.rung) return candidate.rung < current.rung;
   return candidate.score > current.score && candidate.score >= gate.switchRatio * current.score;
 }
