@@ -320,7 +320,15 @@ export function modalRpc(devnet: Devnet, mode: () => EndpointMode, calls: { n: n
     if (m === 'fail') throw new TypeError('fetch failed');
     if (m === 'hang') {
       await new Promise<never>((_resolve, reject) => {
-        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        // A real pending HTTP request keeps Node alive. AbortSignal.timeout() alone
+        // does not, so the fake must retain a handle until cancellation as well.
+        const pendingRequest = setInterval(() => {}, 60_000);
+        const onAbort = () => {
+          clearInterval(pendingRequest);
+          reject(signal!.reason);
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (signal?.aborted) onAbort();
       });
     }
     const { method, params } = payload as { method: string; params: any[] };
