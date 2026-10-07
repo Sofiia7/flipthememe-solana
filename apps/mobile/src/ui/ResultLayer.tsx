@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, BackHandler, Easing, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, BackHandler, Easing, Image, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Side } from '@flipthememe/client';
@@ -10,14 +10,17 @@ import { chainNowSec } from '../chain/useChainClock';
 import { useSkrNames } from '../chain/skr';
 import { peekTokenInfo } from '../chain/useTokenInfo';
 import { SESSION_RULES } from '../config';
-import { formatCountdown, formatSol } from '../lib/format';
+import { deltaView, formatCountdown, formatSol } from '../lib/format';
 import { useNow } from '../lib/usePolling';
 import { PixelFace } from '../PixelFace';
 import { shareCard } from '../share/ShareCard';
+import { captionSuffix, pickCardCaption, type CaptionInput } from '../share/shareCaption';
 import { playSound } from '../sound/sound';
 import { useApp, type Toast } from '../state/AppProvider';
-import { streakAsOf, streakLabel } from '../state/history';
-import { C, GRAD, MONO } from '../theme';
+import { streakAsOf, streakLabel, type Streak } from '../state/history';
+import { scoreLine } from '../state/rivalScore';
+import { REFUND_MS, WIN_MS, rektCloseDelay } from '../state/resultTiming';
+import { C, FONT_CAP, GRAD, MONO } from '../theme';
 import { PixelConfetti } from './Confetti';
 import { Gradient } from './Gradient';
 import { NeonButton } from './NeonButton';
@@ -30,11 +33,6 @@ export function ResultLayer({ toast, onClose, top }: { toast: Toast; onClose: ()
   return <RefundToast key={toast.id} toast={toast} onClose={onClose} top={top} />;
 }
 
-/** A win stays up to 20 s (a queued result is never stuck behind it); a rekt long enough to read the amount and the run. */
-const WIN_MS = 20_000;
-const REKT_MS = 6_000;
-const REFUND_MS = 4_000;
-
 /** While a result is on screen the Android back button closes it instead of leaving the app. */
 function useBackToClose(onClose: () => void) {
   useEffect(() => {
@@ -46,14 +44,24 @@ function useBackToClose(onClose: () => void) {
   }, [onClose]);
 }
 
-/** The run this result belongs to as a headline ("3 IN A ROW", "LOST 2 IN A ROW"); null under two or of the other kind. */
-function useStreakLabel(toast: Toast, kind: 'win' | 'loss'): string | null {
+/** The run as it stood when this result came in: rounds up to this one only, so a result queued behind another does not count the rounds after it. */
+function useStreak(toast: Toast): Streak {
   const { history } = useApp();
-  return useMemo(() => {
-    // Rounds up to this one only: a result queued behind another must not count the rounds after it.
-    const streak = streakAsOf(history, toast.roundId);
-    return streak.kind === kind ? streakLabel(streak) : null;
-  }, [history, toast.roundId, kind]);
+  return useMemo(() => streakAsOf(history, toast.roundId), [history, toast.roundId]);
+}
+
+/** The run as a headline ("3 IN A ROW", "LOST 2 IN A ROW"); null under two or of the other kind. */
+function runLabel(streak: Streak, kind: 'win' | 'loss'): string | null {
+  return streak.kind === kind ? streakLabel(streak) : null;
+}
+
+/** The score against the friend whose challenge opened the app ("YOU 3 : 1 oxbla"), with the data the share card needs; null without one. */
+function useRivalScore(): { score: { you: number; them: number } | null; name: string | null; line: string | null } {
+  const { challenge, rivalScore } = useApp();
+  const by = challenge?.by ?? null;
+  // Their Seeker ID without the .skr, else the plain word RIVAL.
+  const name = useSkrNames(by ? [by] : []).get(by ?? '')?.replace(/\.skr$/, '') ?? null;
+  return { score: rivalScore, name, line: rivalScore ? scoreLine(rivalScore, name) : null };
 }
 
 /** "x1.96" from the win fee of the round (its own account, else the arena config); null when neither is known. */
@@ -106,7 +114,7 @@ function CountUpSol({ lamports }: { lamports: bigint }) {
  * while chain/repeatBet.ts finds the bet one the arena would accept too; a tap places it with the device
  * key and goes to the arena.
  */
-function RepeatButtons({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+function RepeatButtons({ toast, onClose, onOffer }: { toast: Toast; onClose: () => void; /** Told whenever the offer appears or goes away. */ onOffer?: (shown: boolean) => void }) {
   const { arena, my, myReady, wallet, betting, pending, offsetSec, rpc, setTab } = useApp();
   const rents = useRents(rpc);
   const nowMs = useNow(500);
@@ -135,6 +143,11 @@ function RepeatButtons({ toast, onClose }: { toast: Toast; onClose: () => void }
           stake: toast.stake,
         })
       : null;
+  const shown = offer?.ok === true;
+  useEffect(() => {
+    onOffer?.(shown);
+    return () => onOffer?.(false);
+  }, [shown, onOffer]);
   if (!offer?.ok) return null;
   const arrow = (side: number) => (side === Side.Up ? '▲' : '▼');
   const call = (side: Side) => {
@@ -178,10 +191,17 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   const compact = height < 700;
   const pop = useRef(new Animated.Value(0)).current;
   const [sharing, setSharing] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
   const info = peekTokenInfo(toast.tokenMint);
+  const logo = info?.imageUrl && !logoFailed ? info.imageUrl : null;
   const up = toast.side === Side.Up;
-  const streak = useStreakLabel(toast, 'win');
+  const run = useStreak(toast);
+  const streak = runLabel(run, 'win');
+  const duel = useRivalScore();
   const multiplier = useMultiplier(toast.roundId);
+  // How far the price moved from the start price to the exit: the "why" of the win.
+  const move = useMemo(() => deltaView(toast.strike, toast.exit), [toast.strike, toast.exit]);
+  const moveColor = move?.tone === 'up' ? C.neonGreen : move?.tone === 'down' ? C.neonRed : C.neonYellow;
   useBackToClose(onClose);
 
   useEffect(() => {
@@ -199,9 +219,21 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
 
   const share = () => {
     setSharing(true);
+    // The run and the score against the friend, when there are any, ride on the card and in the message.
+    const caption: CaptionInput = { winStreak: run.kind === 'win' ? run.current : 0, score: duel.score, rivalName: duel.name };
     void shareCard(
-      { kind: 'win', face, side: toast.side, roundId: toast.roundId, symbol: info?.symbol ?? null, imageUrl: info?.imageUrl ?? null, profit: toast.payout - toast.stake, name: myName },
-      toast.shareText,
+      {
+        kind: 'win',
+        face,
+        side: toast.side,
+        roundId: toast.roundId,
+        symbol: info?.symbol ?? null,
+        imageUrl: info?.imageUrl ?? null,
+        profit: toast.payout - toast.stake,
+        name: myName,
+        caption: pickCardCaption(caption),
+      },
+      toast.shareText + captionSuffix(caption),
       'Share your win',
     ).finally(() => setSharing(false));
   };
@@ -222,11 +254,18 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
         <PixelText text="YOU WON" size={titleSize} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
         {streak ? <PixelText text={streak} size={streakSize} color={C.neonPink} glow={C.neonPink} shadow="#3b0a52" /> : null}
         <CountUpSol lamports={toast.payout - toast.stake} />
+        {move ? (
+          <Text style={[styles.move, { color: moveColor, textShadowColor: moveColor }]} maxFontSizeMultiplier={FONT_CAP}>
+            {move.text} {move.arrow}
+          </Text>
+        ) : null}
         <Text style={styles.credit}>
-          {formatSol(toast.payout)} SOL to your balance, stake included ·{' '}
+          +{formatSol(toast.payout)} SOL in your balance ·{' '}
           <Text style={{ color: credited ? C.neonGreen : C.neonYellow }}>{credited ? 'CREDITED' : 'CREDITING...'}</Text>
         </Text>
+        {duel.line ? <Text style={styles.duel}>{duel.line}</Text> : null}
         <View style={styles.metaRow}>
+          {logo ? <Image source={{ uri: logo }} style={styles.coinLogo} onError={() => setLogoFailed(true)} accessibilityIgnoresInvertColors /> : null}
           {multiplier ? <Text style={styles.badge}>{multiplier}</Text> : null}
           <Text style={styles.meta}>
             <Text style={{ color: up ? C.neonGreen : C.neonRed }}>{up ? 'UP ▲' : 'DOWN ▼'}</Text>
@@ -254,16 +293,31 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   );
 }
 
-function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
-  const { face, setTab } = useApp();
+/** NEXT ROUND on a rekt, with the seconds left to bet; its own component so the half-second clock does not redraw the whole overlay. */
+function NextRoundButton({ onPress }: { onPress: () => void }) {
   const next = useNextRoundCountdown();
+  return (
+    <NeonButton
+      title="NEXT ROUND"
+      subtitle={next ? `${next.opens ? 'opens in' : 'bet by'} ${formatCountdown(next.secondsLeft)}` : undefined}
+      kind="gold"
+      big
+      onPress={onPress}
+      style={styles.flex}
+    />
+  );
+}
+
+function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  const { face, setTab, toasts } = useApp();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const compact = height < 700;
   const shake = useRef(new Animated.Value(0)).current;
   const lost = toast.stake - toast.payout;
   // A calm line about the run, not a mocking one.
-  const streak = useStreakLabel(toast, 'loss');
+  const streak = runLabel(useStreak(toast), 'loss');
+  const duel = useRivalScore();
   useBackToClose(onClose);
 
   useEffect(() => {
@@ -274,19 +328,33 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
     ).start();
   }, [shake]);
 
-  // Long enough to read the amount and the run; a tap closes it sooner.
+  // Long enough to read the amount and the run, and held for as long as SAME CALL / FLIP IT is on it (the
+  // offer takes itself away before entry closes); a result waiting behind this one does not wait for an offer.
+  const [offerShown, setOfferShown] = useState(false);
+  const queued = toasts.length > 1;
+  const shownAt = useRef(Date.now());
   useEffect(() => {
-    const t = setTimeout(onClose, REKT_MS);
+    const t = setTimeout(onClose, rektCloseDelay({ elapsedMs: Date.now() - shownAt.current, offerShown, queued }));
     return () => clearTimeout(t);
-  }, [onClose]);
+  }, [offerShown, queued, onClose]);
 
+  const nextRound = () => {
+    setTab('arena');
+    onClose();
+  };
+  // Not a screen-wide tap target: a thumb next to SAME CALL must never close the offer. Close is the X, Back, or NEXT ROUND.
   return (
-    <Pressable
-      style={[styles.full, { paddingTop: insets.top + 24, paddingBottom: Math.max(36, insets.bottom + 16) }]}
-      onPress={onClose}
-      accessibilityLabel="Close"
-    >
+    <View style={[styles.full, { paddingTop: insets.top + 24, paddingBottom: Math.max(36, insets.bottom + 16) }]}>
       <Gradient colors={GRAD.rekt} style={StyleSheet.absoluteFill} />
+      <Pressable
+        onPress={onClose}
+        hitSlop={8}
+        style={[styles.closeX, { top: insets.top + 8 }]}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+      >
+        <Text style={styles.closeXText}>X</Text>
+      </Pressable>
       <View style={[styles.center, compact && styles.centerCompact]}>
         <Animated.View style={[styles.faceRing, { borderColor: C.neonRed, boxShadow: `0 0 18px ${C.neonRed}` }, { transform: [{ translateX: shake }] }]}>
           <PixelFace face={face} size={compact ? 88 : 112} expression="sad" />
@@ -295,24 +363,15 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
         {lost > 0n ? <Text style={[styles.lost, { textShadowColor: C.neonRed }]}>-{formatSol(lost)} SOL</Text> : null}
         <Text style={styles.meta}>ROUND #{toast.roundId.toString()} WENT {toast.label}</Text>
         {streak ? <Text style={styles.calm}>{streak}</Text> : null}
+        {duel.line ? <Text style={styles.duel}>{duel.line}</Text> : null}
       </View>
       <View style={styles.buttons}>
-        <RepeatButtons toast={toast} onClose={onClose} />
+        <RepeatButtons toast={toast} onClose={onClose} onOffer={setOfferShown} />
         <View style={styles.row}>
-          <NeonButton
-            title="NEXT ROUND"
-            subtitle={next ? `${next.opens ? 'opens in' : 'entry closes in'} ${formatCountdown(next.secondsLeft)}` : undefined}
-            kind="gold"
-            big
-            onPress={() => {
-              setTab('arena');
-              onClose();
-            }}
-            style={styles.flex}
-          />
+          <NextRoundButton onPress={nextRound} />
         </View>
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -373,6 +432,24 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
   },
   calm: { color: C.subtle, fontSize: 13, fontWeight: '800', fontFamily: MONO, textAlign: 'center' },
+  // How far the price moved against the start price, right under the amount.
+  move: { fontSize: 24, fontWeight: '900', fontFamily: MONO, textShadowRadius: 10, textShadowOffset: { width: 0, height: 0 } },
+  // The score against the friend of a challenge.
+  duel: { color: C.neonPink, fontSize: 14, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
+  coinLogo: { width: 40, height: 40, borderWidth: 1, borderColor: C.border, backgroundColor: C.panel },
+  closeX: {
+    position: 'absolute',
+    right: 14,
+    zIndex: 2,
+    width: 40,
+    height: 40,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16,13,31,0.6)',
+  },
+  closeXText: { color: C.text, fontSize: 15, fontWeight: '900', fontFamily: MONO },
   credit: { color: C.white, fontSize: 12, fontWeight: '800', fontFamily: MONO, textAlign: 'center', opacity: 0.9 },
   buttons: { gap: 10, paddingHorizontal: 16 },
   row: { flexDirection: 'row', gap: 12 },

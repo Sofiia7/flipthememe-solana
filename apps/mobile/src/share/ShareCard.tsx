@@ -13,7 +13,18 @@ import { Gradient } from '../ui/Gradient';
 import { PixelText } from '../ui/PixelText';
 
 export type ShareCardData =
-  | { kind: 'win'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; profit: bigint; name?: string | null }
+  | {
+      kind: 'win';
+      face: Face;
+      side: number;
+      roundId: bigint;
+      symbol: string | null;
+      imageUrl: string | null;
+      profit: bigint;
+      name?: string | null;
+      /** The run ("3 IN A ROW") and the score against a friend ("YOU 3 : 1 oxbla"), when there are any (share/shareCaption.ts). */
+      caption?: { headline: string | null; sub: string | null } | null;
+    }
   | { kind: 'challenge'; face: Face; side: number; roundId: bigint; symbol: string | null; imageUrl: string | null; name?: string | null }
   /** From outside a bet: no side and no token, just me and the invitation. */
   | { kind: 'invite'; face: Face; roundId: bigint; name?: string | null };
@@ -50,6 +61,8 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
   const sideColor = up ? C.neonGreen : C.neonRed;
   const token = data.kind !== 'invite' && data.symbol ? `$${data.symbol}` : 'THE ARENA TOKEN';
   const frameColor = data.kind === 'win' ? C.neonYellow : data.kind === 'invite' ? C.neonPink : sideColor;
+  // A run or a score adds up to two lines to the win card: the face and the headline give them the room (the card is 450 dp tall).
+  const extra = data.kind === 'win' && !!(data.caption?.headline || data.caption?.sub);
   return (
     <Gradient colors={GRAD.card} style={styles.card}>
       <View style={[styles.frame, { borderColor: frameColor }]} />
@@ -58,14 +71,28 @@ export function ShareCard({ data, onImage }: { data: ShareCardData; onImage?: ()
       </View>
       <View style={styles.faceBox}>
         <View style={[styles.faceRing, { borderColor: frameColor }]}>
-          <PixelFace face={data.face} size={120} expression={data.kind === 'win' ? 'happy' : undefined} />
+          <PixelFace face={data.face} size={extra ? 96 : 120} expression={data.kind === 'win' ? 'happy' : undefined} />
         </View>
         {data.name ? <Text style={styles.nick}>{data.name}</Text> : null}
       </View>
       {data.kind === 'win' ? (
         <View style={styles.center}>
-          <PixelText text="I WON" size={6} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
+          <PixelText text="I WON" size={extra ? 5 : 6} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
           <Text style={[styles.amount, { textShadowColor: C.neonGreen }]}>+{formatSol(data.profit)} SOL</Text>
+          {data.caption?.headline ? (
+            data.caption.headline.endsWith('IN A ROW') ? (
+              <PixelText text={data.caption.headline} size={3} color={C.neonPink} glow={C.neonPink} shadow="#3b0a52" />
+            ) : (
+              <Text style={styles.captionScore} numberOfLines={1}>
+                {data.caption.headline}
+              </Text>
+            )
+          ) : null}
+          {data.caption?.sub ? (
+            <Text style={styles.captionScore} numberOfLines={1}>
+              {data.caption.sub}
+            </Text>
+          ) : null}
           <View style={styles.tokenRow}>
             <Text style={styles.small}>CALLED</Text>
             <Text style={[styles.side, { color: sideColor }]}>{up ? 'UP ▲' : 'DOWN ▼'}</Text>
@@ -234,6 +261,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 14,
     textShadowOffset: { width: 0, height: 0 },
   },
+  captionScore: { color: C.neonPink, fontSize: 15, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
   tokenRow: { flexDirection: 'row', alignItems: 'center', gap: 7, maxWidth: CARD_W - 40 },
   small: { color: C.subtle, fontSize: 13, fontWeight: '900', fontFamily: MONO },
   side: { fontSize: 16, fontWeight: '900', fontFamily: MONO },

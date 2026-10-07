@@ -1,16 +1,54 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import type { TimerView } from '../chain/phase';
 import { formatCountdown, type DeltaView } from '../lib/format';
-import { C, MONO } from '../theme';
+import { C, FONT_CAP, MONO } from '../theme';
+
+/** The system "remove animations" setting; the timer pulse stays off while it is on. */
+function useReduceMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((on) => alive && setReduced(on))
+      .catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduced);
+    return () => {
+      alive = false;
+      subscription.remove();
+    };
+  }, []);
+  return reduced;
+}
+
+/**
+ * A heartbeat of the timer on every second of the last five: it jumps up and settles back, in step with the
+ * tick sound and the haptic tick. Native driver only; nothing moves with reduced motion on.
+ */
+function useBeat(active: boolean, second: number | null): Animated.Value {
+  const scale = useRef(new Animated.Value(1)).current;
+  const reduced = useReduceMotion();
+  useEffect(() => {
+    if (!active || reduced || second === null) {
+      scale.setValue(1);
+      return;
+    }
+    scale.setValue(1.22);
+    const settle = Animated.timing(scale, { toValue: 1, duration: 520, easing: Easing.out(Easing.quad), useNativeDriver: true });
+    settle.start();
+    return () => settle.stop();
+  }, [active, reduced, second, scale]);
+  return scale;
+}
 
 function timerLabel(timer: TimerView): string {
   switch (timer.kind) {
     case 'entry':
-      return `#${timer.roundId} ENTRY CLOSES`;
+      return `#${timer.roundId} BET BY`;
     case 'result':
       return `#${timer.roundId} RESULT IN`;
     case 'confirming':
-      return `#${timer.roundId} SETTLING`;
+      return `#${timer.roundId} RESULT SOON`;
     case 'next':
       return `#${timer.roundId} OPENS IN`;
     default:
@@ -28,29 +66,41 @@ export function ArenaClock({ timer, side }: { timer: TimerView; side: ClockSide 
   const seconds = 'secondsLeft' in timer ? timer.secondsLeft : null;
   const color = timer.kind === 'result' ? C.neonPurple : timer.kind === 'confirming' ? C.neonGreen : C.neonYellow;
   const urgent = timer.kind === 'entry' && seconds !== null && seconds <= 5;
+  // The same whole second the digits and the tick sound show (the timer itself counts in fractions).
+  const beat = useBeat(urgent, seconds !== null ? Math.ceil(seconds) : null);
   const deltaColor =
     side?.kind === 'delta' ? (side.stale ? C.subtle : side.delta.tone === 'up' ? C.neonGreen : side.delta.tone === 'down' ? C.neonRed : C.neonYellow) : C.neonYellow;
   return (
     <View style={styles.row}>
       <View style={styles.block}>
-        <Text style={[styles.label, { color }]} numberOfLines={1}>
+        <Text style={[styles.label, { color }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
           {timerLabel(timer)}
         </Text>
-        <Text style={[styles.clock, { textShadowColor: urgent ? C.neonRed : color }, urgent && { color: C.neonRed }]}>
-          {seconds !== null ? formatCountdown(seconds) : timer.kind === 'confirming' ? '...' : '--:--'}
-        </Text>
+        <Animated.View style={[styles.beat, { transform: [{ scale: beat }] }]}>
+          <Text
+            style={[styles.clock, { textShadowColor: urgent ? C.neonRed : color }, urgent && { color: C.neonRed }]}
+            maxFontSizeMultiplier={FONT_CAP}
+          >
+            {seconds !== null ? formatCountdown(seconds) : timer.kind === 'confirming' ? '...' : '--:--'}
+          </Text>
+        </Animated.View>
       </View>
       {side ? (
         <View style={[styles.block, styles.right]}>
-          <Text style={[styles.label, { color: C.label }]} numberOfLines={1}>
+          <Text style={[styles.label, { color: C.label }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             {side.label}
           </Text>
           {side.kind === 'delta' ? (
-            <Text style={[styles.delta, { color: deltaColor, textShadowColor: deltaColor }]} numberOfLines={1} adjustsFontSizeToFit>
+            <Text
+              style={[styles.delta, { color: deltaColor, textShadowColor: deltaColor }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              maxFontSizeMultiplier={FONT_CAP}
+            >
               {side.delta.text} {side.delta.arrow}
             </Text>
           ) : (
-            <Text style={[styles.note, { textShadowColor: C.neonYellow }]} numberOfLines={1} adjustsFontSizeToFit>
+            <Text style={[styles.note, { textShadowColor: C.neonYellow }]} numberOfLines={1} adjustsFontSizeToFit maxFontSizeMultiplier={FONT_CAP}>
               {side.text}
             </Text>
           )}
@@ -65,6 +115,8 @@ const styles = StyleSheet.create({
   block: { gap: 0, flexShrink: 1 },
   right: { alignItems: 'flex-end', flex: 1 },
   label: { fontSize: 10, fontWeight: '900', letterSpacing: 0.8, fontFamily: MONO },
+  // The pulse grows from the left edge, so the digits never push into the screen margin.
+  beat: { alignSelf: 'flex-start', transformOrigin: 'left center' },
   clock: {
     color: C.white,
     fontSize: 40,

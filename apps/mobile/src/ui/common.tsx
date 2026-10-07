@@ -1,7 +1,8 @@
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { C, MONO, T } from '../theme';
+import { C, FONT_CAP, MONO, T } from '../theme';
+import { PixelText } from './PixelText';
 
-type BtnKind = 'primary' | 'ghost' | 'up' | 'down' | 'danger' | 'gold' | 'friend';
+type BtnKind = 'primary' | 'ghost' | 'up' | 'down' | 'danger' | 'gold';
 
 export function Btn({
   title,
@@ -40,16 +41,25 @@ export function Btn({
     >
       {busy ? <ActivityIndicator size="small" color={palette.ink} /> : null}
       <View style={styles.btnTexts}>
-        <Text style={[styles.btnText, small && styles.btnTextSmall, { color: palette.ink }]} numberOfLines={1}>
+        <Text style={[styles.btnText, small && styles.btnTextSmall, { color: palette.ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.btnSub, { color: palette.ink }]} numberOfLines={1}>
+          <Text style={[styles.btnSub, { color: palette.ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             {subtitle}
           </Text>
         ) : null}
       </View>
     </Pressable>
+  );
+}
+
+/** The headline of the Wallet, History and Profile tabs: the same pixel lettering as the arena brand. */
+export function ScreenTitle({ text }: { text: string }) {
+  return (
+    <View accessibilityRole="header" style={styles.screenTitle}>
+      <PixelText text={text} size={3} color={C.white} shadow={C.accent} />
+    </View>
   );
 }
 
@@ -61,7 +71,6 @@ const BTN: Record<BtnKind, { bg: string; border: string; ink: string }> = {
   danger: { bg: 'transparent', border: C.danger, ink: C.danger },
   gold: { bg: C.gold, border: '#ffd978', ink: '#2a1d00' },
   // Challenges and invites: the pink of the RIVAL tag.
-  friend: { bg: 'rgba(255,79,216,0.08)', border: C.neonPink, ink: C.neonPink },
 };
 
 export function Banner({ tone, text, action }: { tone: 'warn' | 'error' | 'info' | 'ok'; text: string; action?: { label: string; onPress: () => void } }) {
@@ -107,6 +116,7 @@ export function Pill({ text, color = C.accentText, filled = false }: { text: str
 }
 
 const styles = StyleSheet.create({
+  screenTitle: { alignSelf: 'flex-start' },
   btn: {
     borderWidth: 2,
     paddingVertical: 13,
@@ -123,14 +133,14 @@ const styles = StyleSheet.create({
   btnTexts: { alignItems: 'center' },
   btnText: { fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
   btnTextSmall: { fontSize: 11 },
-  btnSub: { fontSize: 10, fontWeight: '700', marginTop: 1, opacity: 0.85 },
+  btnSub: { fontSize: 11, fontWeight: '700', marginTop: 1, opacity: 0.85 },
   // The action sits on the right, so a short note takes one line.
   banner: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, backgroundColor: C.panelDeep, paddingHorizontal: 8, paddingVertical: 6, gap: 10 },
-  bannerText: { flex: 1, fontSize: 11, fontWeight: '700', lineHeight: 15 },
-  bannerAction: { fontSize: 11, fontWeight: '900', textDecorationLine: 'underline' },
+  bannerText: { flex: 1, fontSize: 12, fontWeight: '700', lineHeight: 16 },
+  bannerAction: { fontSize: 12, fontWeight: '900', textDecorationLine: 'underline' },
   kv: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, paddingVertical: 2 },
   kvKey: { color: C.subtle, fontSize: 12, flexShrink: 0 },
   kvValue: { fontFamily: MONO, fontWeight: '800', fontSize: 12, flexShrink: 1, textAlign: 'right' },
   pill: { borderWidth: 1, paddingHorizontal: 6, paddingVertical: 2 },
-  pillText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  pillText: { fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
 });

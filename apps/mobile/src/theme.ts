@@ -13,7 +13,8 @@ export const C = {
   white: '#ffffff',
   text: '#e6e0f1',
   subtle: '#9f9aad',
-  dim: '#736d82',
+  // Quiet text: 5.1:1 on the panels (#1c1830) and 5.7:1 on the background, above the 4.5:1 AA line.
+  dim: '#8f88a3',
   label: '#a89aba',
   up: '#35df6c',
   upBorder: '#84ff9d',
@@ -46,12 +47,16 @@ export const GRAD = {
 
 export const MONO = 'monospace';
 
+/**
+ * Largest system font scale the fixed-height UI (tab bar, timer, X lane, buttons, token line) follows. React 19 has no
+ * Text.defaultProps, so it is passed as maxFontSizeMultiplier on those Text elements; scrolling screens scale freely.
+ */
+export const FONT_CAP = 1.15;
+
 export const T = StyleSheet.create({
-  h1: { color: C.white, fontSize: 24, fontWeight: '900' },
   label: { color: C.label, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
   subtle: { color: C.subtle, fontSize: 11, lineHeight: 16 },
-  dim: { color: C.dim, fontSize: 10, lineHeight: 14 },
-  mono: { color: C.white, fontFamily: MONO, fontWeight: '800' },
+  dim: { color: C.dim, fontSize: 11, lineHeight: 15 },
   panel: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.border, padding: 10, gap: 6 },
   link: { color: C.accentText, fontSize: 11, textDecorationLine: 'underline' },
 });

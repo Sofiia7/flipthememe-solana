@@ -8,9 +8,10 @@ import {
   isSolanaError,
 } from '@solana/kit';
 import { PROGRAM_ERRORS, TransactionFailed, programErrorName, type ProgramErrorName } from '@flipthememe/client';
+import { isFaucetError } from '../wallet/faucet.ts';
 
-/** `sweep` returns the SOL on the device key to the wallet; `close` takes the rent of finished sessions back. */
-export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'close' | 'sweep' | 'claim' | 'airdrop' | 'connect';
+/** `sweep` returns the SOL on the device key to the wallet; `close` takes the rent of finished sessions back; `faucet` asks the project's test SOL faucet. */
+export type TxAction = 'bet' | 'topup' | 'renew' | 'withdraw' | 'revoke' | 'close' | 'sweep' | 'claim' | 'airdrop' | 'connect' | 'faucet';
 
 function stringify(value: unknown): string {
   try {
@@ -118,7 +119,7 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   RoundNotOpen: 'Entry just closed - try the next round.',
   SessionCapExceeded: 'Your one-tap limit is used up - tap Top up & play to renew it.',
   InsufficientAvailable: 'Not enough available balance - top up first.',
-  BankTooLargeForPool: 'The pool is too shallow for a bigger matched bank - try a smaller amount or the other side.',
+  BankTooLargeForPool: 'That side is full - try a smaller amount or the other side.',
   SessionInvalid: 'Your play session expired or was revoked - renew it with Top up & play.',
   InvalidSession: 'The wallet rejected the session settings - try again.',
   InvalidAmount: "That amount is outside this round's limits.",
@@ -130,6 +131,15 @@ const PROGRAM_MESSAGES: Partial<Record<ProgramErrorName, string>> = {
   NotDue: 'Too early for this step - wait a few seconds.',
   SessionStillActive: 'That session can still bet. Revoke it first, then close it.',
 };
+
+/**
+ * What a player reads for every program error that is not theirs to fix: the ones only the operator's
+ * round setup can hit (a round that opens too far ahead, bad round times, house fill limits, the oracle
+ * attestor) and any code this app does not know yet. The code and the name go to the console only.
+ */
+export const PROGRAM_GENERIC = 'Round setup problem, try again.';
+/** Anything else that comes with a raw transaction tail (simulation logs, instruction errors) and no mapped meaning. */
+const FAILED_STEP = 'That step did not go through - try again in a moment.';
 
 /** Raw MWA error fields for the console (adb logcat), where wallet problems are diagnosed. Never part of a player's message. */
 export function walletDetail(error: unknown): string {
@@ -144,6 +154,8 @@ export function walletDetail(error: unknown): string {
 /** One human sentence for a failed action. */
 export function humanError(error: unknown, action: TxAction): string {
   console.warn('[ftm] action failed', action, walletDetail(error), error);
+  // The faucet's own sentence is already written for the player.
+  if (isFaucetError(error)) return error.message;
   const step = asStepError(error);
   if (isWalletDecline(error)) {
     return step && step.step !== 'sign' ? 'The wallet did not connect. Check that it is set to Devnet and try again.' : 'Request declined in the wallet.';
@@ -158,7 +170,7 @@ export function humanError(error: unknown, action: TxAction): string {
   }
 
   const name = programError(error);
-  if (name) return PROGRAM_MESSAGES[name] ?? `The program rejected the transaction (${name}).`;
+  if (name) return PROGRAM_MESSAGES[name] ?? PROGRAM_GENERIC;
 
   const text = errorText(error);
   if (action === 'bet' && /already in use/i.test(text)) return 'You already have a bet in this round - one bet per round.';
@@ -187,7 +199,11 @@ export function humanError(error: unknown, action: TxAction): string {
   }
   if (/abort/i.test(text)) return 'Devnet did not answer in time - check your connection.';
   if (/network request failed|failed to fetch/i.test(text)) return 'No internet connection.';
+  // A program error code this app has no sentence for (a newer program, a framework error): no hex tail, no name.
+  const code = customErrorCode(error);
+  if (code !== null) return code >= 6000 ? PROGRAM_GENERIC : FAILED_STEP;
   if (action === 'airdrop') return 'Airdrop failed. Use the faucet link to get test SOL.';
+  if (/simulation failed|instructionerror|custom program error|error processing instruction/i.test(text)) return FAILED_STEP;
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 160 ? `${message.slice(0, 160)}...` : message || 'Something went wrong.';
 }

@@ -114,7 +114,7 @@ test('pixel art layers are 16 x 16 and paths cover exactly the filled pixels', (
 });
 
 function round(over: Partial<RoundAccount> & { opensAt: bigint }): { id: bigint; account: RoundAccount } {
-  const o = over.opensAt;
+  const { opensAt: o, ...rest } = over;
   const account: RoundAccount = {
     id: 0n,
     tokenMint: '11111111111111111111111111111111' as RoundAccount['tokenMint'],
@@ -147,7 +147,7 @@ function round(over: Partial<RoundAccount> & { opensAt: bigint }): { id: bigint;
     strikeSamples: 0,
     exitSamples: 0,
     bump: 255,
-    ...over,
+    ...rest,
   };
   return { id: account.id, account };
 }

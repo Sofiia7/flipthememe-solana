@@ -291,6 +291,78 @@ export function streakLabel(s: Streak): string | null {
   return null;
 }
 
+/** The local calendar day that contains `nowMs`: [startMs, endMs) in local time, so the day follows the phone's clock and zone. */
+export function dayWindow(nowMs: number): { startMs: number; endMs: number } {
+  const start = new Date(nowMs);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime());
+  // Not +24 h: a day with a clock change is 23 or 25 hours long.
+  end.setDate(end.getDate() + 1);
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+export type DayStats = {
+  /** Calls placed in rounds that opened in the window, rounds still in play included. */
+  calls: number;
+  /** Of the finished ones: rounds won. */
+  won: number;
+  /** Finished rounds (won, lost or refunded). */
+  finished: number;
+  /** Payouts minus stakes over the finished rounds (lamports, may be negative). */
+  net: bigint;
+};
+
+/**
+ * "Today" for the arena header: my calls in rounds that opened inside `window` (see dayWindow), how many
+ * of the finished ones were won and the net of those. Rows without round data are left out.
+ */
+export function todayStats(entries: readonly HistoryEntry[], window: { startMs: number; endMs: number }): DayStats {
+  let calls = 0;
+  let won = 0;
+  let finished = 0;
+  let staked = 0n;
+  let returned = 0n;
+  for (const e of entries) {
+    let opensAt: number;
+    let kind: HistoryRecord['kind'] | null;
+    let stake: bigint;
+    let payout: bigint | null;
+    if (e.kind === 'stored') {
+      opensAt = e.record.opensAt;
+      kind = e.record.kind;
+      stake = e.record.stake;
+      payout = e.record.payout;
+    } else {
+      const round = e.position.round;
+      if (!round) continue;
+      opensAt = Number(round.account.opensAt);
+      stake = e.position.account.stake;
+      kind = finishedKind(e);
+      payout = kind === null ? null : positionResult(e.position.account, round.account, Number(round.account.exitEnd)).payout;
+    }
+    const ms = opensAt * 1000;
+    if (ms < window.startMs || ms >= window.endMs) continue;
+    calls++;
+    if (kind === null) continue;
+    finished++;
+    if (kind === 'won') won++;
+    staked += stake;
+    returned += payout ?? 0n;
+  }
+  return { calls, won, finished, net: returned - staked };
+}
+
+/**
+ * "today: 5 calls · 3 won · +0.0192" for the arena header; null before the first call of the day. The
+ * won count and the net wait for a finished round, so a first call still in play shows only "today: 1 call".
+ */
+export function todayLine(s: DayStats, formatSol: (lamports: bigint, opts?: { sign?: boolean }) => string): string | null {
+  if (s.calls === 0) return null;
+  const parts = [`${s.calls} ${s.calls === 1 ? 'call' : 'calls'}`];
+  if (s.finished > 0) parts.push(`${s.won} won`, formatSol(s.net, { sign: true }));
+  return `today: ${parts.join(' · ')}`;
+}
+
 type StoredRow = Omit<HistoryRecord, 'roundId' | 'stake' | 'accepted' | 'payout' | 'strike' | 'exit'> & {
   roundId: string;
   stake: string;

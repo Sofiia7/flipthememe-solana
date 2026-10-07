@@ -239,7 +239,7 @@ test('the card says who called what, how that round went and where to meet, neve
   assert.equal(roundStateLine(c, upcoming), 'Round #496 opens in 0:12.');
   const open = state({ opensAt: BigInt(now - 18) });
   assert.deepEqual(open, { kind: 'open', secondsLeft: 42 });
-  assert.equal(roundStateLine(c, open), 'Round #496 is open: pick your side, entry closes in 0:42.');
+  assert.equal(roundStateLine(c, open), 'Round #496 is open: pick your side, bet by 0:42.');
   const live = state({ opensAt: BigInt(now - 95), status: RoundStatus.Live, strikePrice: 100n });
   assert.deepEqual(live, { kind: 'live', secondsLeft: 65 });
   assert.equal(roundStateLine(c, live), 'Round #496 is live: result in 1:05.');

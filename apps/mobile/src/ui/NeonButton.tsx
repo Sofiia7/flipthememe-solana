@@ -1,5 +1,5 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { C, GRAD, MONO } from '../theme';
+import { C, FONT_CAP, GRAD, MONO } from '../theme';
 import { Gradient } from './Gradient';
 
 export type NeonKind = 'up' | 'down' | 'gold' | 'purple';
@@ -53,19 +53,22 @@ export function NeonButton({
             numberOfLines={1}
             adjustsFontSizeToFit
             minimumFontScale={0.6}
+            maxFontSizeMultiplier={FONT_CAP}
           >
             {title}
           </Text>
         </View>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: ink }]} numberOfLines={1}>
+          <Text style={[styles.subtitle, { color: ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             {subtitle}
           </Text>
         ) : null}
       </Gradient>
       {badge ? (
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>{badge}</Text>
+          <Text style={styles.badgeText} maxFontSizeMultiplier={FONT_CAP}>
+            {badge}
+          </Text>
         </View>
       ) : null}
     </Pressable>

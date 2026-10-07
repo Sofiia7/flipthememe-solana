@@ -75,3 +75,52 @@ export function splitAtGaps<T>(items: readonly T[], timeOf: (item: T) => number,
   if (current.length > 0) out.push(current);
   return out;
 }
+
+/** Width of a monospace label: every glyph is about 0.6 em wide. Used to keep SVG labels inside the chart. */
+export function monoTextWidth(text: string, fontSize: number): number {
+  return text.length * fontSize * 0.6;
+}
+
+type WindowView = { range: readonly [number, number]; label: string; strong?: boolean } | null | undefined;
+
+/** The props of the price chart that change its drawing: a structural view, so this file stays free of React Native. */
+export type ChartPropsView = {
+  points: readonly unknown[];
+  nowMs: number;
+  strike?: bigint | null;
+  strikeLabel?: string;
+  pairLabel?: string;
+  strikeWindow?: WindowView;
+  exitWindow?: readonly [number, number] | null;
+  cutoffMs?: number | null;
+  stale?: boolean;
+  height?: number;
+  emptyText?: string;
+};
+
+const sameWindow = (a: WindowView, b: WindowView): boolean =>
+  a === b || (!!a && !!b && a.range[0] === b.range[0] && a.range[1] === b.range[1] && a.label === b.label && (a.strong ?? true) === (b.strong ?? true));
+
+const sameRange = (a: readonly [number, number] | null | undefined, b: readonly [number, number] | null | undefined): boolean =>
+  a === b || (!!a && !!b && a[0] === b[0] && a[1] === b[1]);
+
+/**
+ * `React.memo` comparison for the price chart. The arena re-renders every 500 ms and builds fresh window
+ * objects each time, so values are compared, not identities; the clock counts in whole seconds (the chart
+ * slides about 3 px a second, so a half second step is not worth a redraw of the whole SVG).
+ */
+export function chartPropsEqual(a: ChartPropsView, b: ChartPropsView): boolean {
+  return (
+    a.points === b.points &&
+    Math.floor(a.nowMs / 1000) === Math.floor(b.nowMs / 1000) &&
+    a.strike === b.strike &&
+    a.strikeLabel === b.strikeLabel &&
+    a.pairLabel === b.pairLabel &&
+    sameWindow(a.strikeWindow, b.strikeWindow) &&
+    sameRange(a.exitWindow, b.exitWindow) &&
+    (a.cutoffMs ?? null) === (b.cutoffMs ?? null) &&
+    !!a.stale === !!b.stale &&
+    a.height === b.height &&
+    a.emptyText === b.emptyText
+  );
+}

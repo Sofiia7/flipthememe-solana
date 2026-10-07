@@ -107,7 +107,8 @@ test('only a revoked session, or one expired for a short margin, can be closed: 
   const closable = new Set(closableRows(rows, NOW).map((r) => r.signer));
   assert.deepEqual(closable, new Set([addr(22), addr(23), addr(25)]));
   // Every row says the same through isClosable.
-  for (const row of rows) assert.equal(isClosable(row, NOW), closable.has(row.signer), row.signer);
+  // (deepEqual narrows `closable` to a set of addresses, the rows hold plain strings)
+  for (const row of rows) assert.equal(isClosable(row, NOW), closable.has(row.signer as Address), row.signer);
 
   // The margin: 30 s after the expiry second the just-expired one is offered too.
   assert.equal(CLOSE_MARGIN_SECS, 30);

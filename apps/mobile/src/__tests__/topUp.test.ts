@@ -10,6 +10,7 @@ import { SESSION_RULES } from '../config.ts';
 import { ACCOUNT_SPACE, NETWORK_FEE, RENT_FALLBACK, U64_MAX, rentExempt, sessionCapFor, topUpPlan } from '../wallet/topUpPlan.ts';
 import {
   TOP_UP_OVERHEAD,
+  billLines,
   playRoute,
   prepareTopUp,
   topUpBill,
@@ -162,7 +163,7 @@ test('a wallet with too little devnet SOL fails with the friendly sentence befor
   };
   await assert.rejects(
     prepareTopUp(poor),
-    new Error('The wallet has 0.001 SOL on devnet; this top up needs about 0.115 SOL. Use Airdrop 1 devnet SOL first.'),
+    new Error('The wallet has 0.001 SOL on devnet; this top up needs about 0.115 SOL. Get test SOL first.'),
   );
   // The margin is the one the old inline check used: deposit, the key's fees, and 0.01.
   const plan = topUpPlan({ deposit: SOL / 10n, vaultExists: false, sessionExists: false, keyLamports: 0n, rent: null, gasMin: RULES.gasMin, gasTopUp: RULES.gasTopUp });
@@ -178,4 +179,25 @@ test('start_session accepts the new allowance: a positive u64, no upper bound in
   // programs/flip-the-meme: start_session requires session_cap > 0 and place_bet adds each stake with checked_add.
   const cap = sessionCapFor(SOL / 10n, SESSION_RULES);
   assert.ok(cap > 0n && cap <= U64_MAX);
+});
+
+test('the bill is two lines, Deposit and Network & setup, and they add up to what leaves the wallet', () => {
+  const rent = { vault: RENT_FALLBACK.vault, session: RENT_FALLBACK.session };
+  for (const input of [
+    { vaultExists: false, sessionExists: false, keyLamports: null },
+    { vaultExists: true, sessionExists: true, keyLamports: SESSION_RULES.gasMin },
+    { vaultExists: true, sessionExists: false, keyLamports: 0n },
+  ]) {
+    const plan = topUpPlan({ deposit: SOL / 10n, ...input, rent, gasMin: RULES.gasMin, gasTopUp: RULES.gasTopUp });
+    const lines = billLines(plan);
+    assert.deepEqual(
+      lines.map(([label]) => label),
+      ['Deposit', 'Network & setup'],
+    );
+    assert.equal(lines[0][1], SOL / 10n);
+    assert.equal(lines[0][1] + lines[1][1], plan.total);
+  }
+  // A returning wallet with a funded key pays the deposit and the network fee only.
+  const light = topUpPlan({ deposit: SOL / 10n, vaultExists: true, sessionExists: true, keyLamports: SESSION_RULES.gasMin, rent, gasMin: RULES.gasMin, gasTopUp: RULES.gasTopUp });
+  assert.equal(billLines(light)[1][1], NETWORK_FEE);
 });

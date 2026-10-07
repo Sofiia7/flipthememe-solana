@@ -13,13 +13,14 @@ import {
   vaultAddress,
   withdraw,
 } from '@flipthememe/client';
-import { AIRDROP_LAMPORTS, SESSION_RULES } from '../config';
+import { AIRDROP_LAMPORTS, FAUCET_API, FAUCET_TIMEOUT_MS, SESSION_RULES } from '../config';
 import { fetchAccounts } from '../chain/fetch';
 import type { SolanaRpc } from '../chain/rpc';
 import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
 import { humanError, type TxAction } from '../lib/errors';
 import { sol } from '../lib/format';
 import type { SessionKey } from '../session/sessionKey';
+import { FaucetError, isFaucetError, requestFaucet } from './faucet';
 import { createPendingTxStore, type GuardedAction, type PendingTx } from './pendingTx';
 import { MAX_REVOKES_PER_TX } from './sessionList';
 import { closeBatches, closeDoneText, closeNothingText, confirmClosable, type CloseTarget } from './sessionClose';
@@ -37,6 +38,8 @@ export type WalletResult = {
   checking?: boolean;
   message: string;
   signature?: string;
+  /** A failed GET TEST SOL: the faucet cannot help right now, so the other ways (AIRDROP, faucet.solana.com) are shown. */
+  fallbacks?: boolean;
   at: number;
 };
 
@@ -70,6 +73,9 @@ export function useWalletActions(input: {
   const { rpc, sessionKey, chainNowSec, onChanged, betInFlight } = input;
   const keyAddress = sessionKey?.address ?? null;
   const mwa = useMobileWallet();
+  // Read through a ref where only the latest is needed, so the callbacks below keep one identity.
+  const mwaRef = useRef(mwa);
+  mwaRef.current = mwa;
   const owner = mwa.account?.address ?? null;
   const [busy, setBusy] = useState<WalletBusy | null>(null);
   const [result, setResult] = useState<WalletResult | null>(null);
@@ -123,7 +129,7 @@ export function useWalletActions(input: {
         onChanged();
         return !done.checking;
       } catch (error) {
-        setResult({ action, ok: false, message: humanError(error, action), at: Date.now() });
+        setResult({ action, ok: false, message: humanError(error, action), fallbacks: isFaucetError(error) && error.fallbacks, at: Date.now() });
         return false;
       } finally {
         busyRef.current = false;
@@ -261,9 +267,9 @@ export function useWalletActions(input: {
 
   const disconnect = useCallback(async () => {
     setResult(null);
-    await mwa.disconnect();
+    await mwaRef.current.disconnect();
     onChanged();
-  }, [mwa, onChanged]);
+  }, [onChanged]);
 
   /**
    * What a top up reads once the wallet's address is known: its vault, its balance and the device
@@ -480,47 +486,104 @@ export function useWalletActions(input: {
     [run, owner, sessionKey, sweepKey],
   );
 
+  /** Waits until `signature` is confirmed on devnet (so the balance read that follows includes it), up to 45 s. */
+  const waitConfirmed = useCallback(
+    async (signature: Signature, messages: { failed: string; slow: string }) => {
+      const started = Date.now();
+      for (;;) {
+        const { value } = await rpc.getSignatureStatuses([signature]).send();
+        const status = value[0];
+        if (status?.err) throw new Error(messages.failed);
+        if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) return;
+        if (Date.now() - started > 45_000) throw new Error(messages.slow);
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+    },
+    [rpc],
+  );
+
   const airdrop = useCallback(
     () =>
       run('airdrop', async () => {
         if (!owner) throw new Error('Connect a wallet first.');
         const signature = await rpc.requestAirdrop(owner, lamports(AIRDROP_LAMPORTS), { commitment: 'confirmed' }).send();
-        const started = Date.now();
-        for (;;) {
-          const { value } = await rpc.getSignatureStatuses([signature]).send();
-          const status = value[0];
-          if (status?.err) throw new Error('The airdrop transaction failed.');
-          if (status && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) break;
-          if (Date.now() - started > 45_000) throw new Error('Airdrop not confirmed after 45 s - check the balance in a minute.');
-          await new Promise((r) => setTimeout(r, 1_000));
-        }
+        await waitConfirmed(signature, { failed: 'The airdrop transaction failed.', slow: 'Airdrop not confirmed after 45 s - check the balance in a minute.' });
         return { message: `Airdropped ${sol(AIRDROP_LAMPORTS)} of devnet test SOL.`, signature };
       }),
-    [run, owner, rpc],
+    [run, owner, rpc, waitConfirmed],
+  );
+
+  /**
+   * GET TEST SOL: the project's own faucet sends devnet SOL to the connected wallet (wallet/faucet.ts). Like the
+   * airdrop it waits for the confirmation and then refreshes the balances (run does that). A refusal is
+   * thrown as a FaucetError, so the sheet shows its sentence and, when the faucet cannot help, the other ways.
+   */
+  const getTestSol = useCallback(
+    () =>
+      run('faucet', async () => {
+        if (!owner) throw new Error('Connect a wallet first.');
+        const outcome = await requestFaucet(owner, { url: FAUCET_API, timeoutMs: FAUCET_TIMEOUT_MS });
+        if (!outcome.ok) throw new FaucetError(outcome);
+        const message = `Got ${sol(outcome.lamports)} of devnet test SOL.`;
+        if (outcome.signature) {
+          await waitConfirmed(outcome.signature as Signature, {
+            failed: 'The test SOL transfer failed. Try again.',
+            slow: 'Test SOL sent but not confirmed yet - check the balance in a minute.',
+          });
+          return { message, signature: outcome.signature };
+        }
+        // No signature to follow: a short pause, then the balance read that run() starts finds it.
+        await new Promise((r) => setTimeout(r, 2_500));
+        return { message };
+      }),
+    [run, owner, waitConfirmed],
   );
 
   /** Claim through the wallet (used when the device key cannot pay the fee). */
   const signWithWallet = signAndSubmit;
 
-  return {
-    owner,
-    busy,
-    result,
-    clearResult,
-    /** Sent money transactions whose outcome is not known yet (see isChecking in pendingTx.ts). */
-    pendingTx,
-    connect,
-    disconnect,
-    topUpAndPlay,
-    connectAndPlay,
-    renewSession,
-    withdrawAll,
-    revokeSessions,
-    closeSessions,
-    returnKeyFunds,
-    airdrop,
-    signWithWallet,
-  };
+  // One object per change: it goes into the app context, and a new one on every render would redraw every reader of it.
+  return useMemo(
+    () => ({
+      owner,
+      busy,
+      result,
+      clearResult,
+      /** Sent money transactions whose outcome is not known yet (see isChecking in pendingTx.ts). */
+      pendingTx,
+      connect,
+      disconnect,
+      topUpAndPlay,
+      connectAndPlay,
+      renewSession,
+      withdrawAll,
+      revokeSessions,
+      closeSessions,
+      returnKeyFunds,
+      airdrop,
+      getTestSol,
+      signWithWallet,
+    }),
+    [
+      owner,
+      busy,
+      result,
+      clearResult,
+      pendingTx,
+      connect,
+      disconnect,
+      topUpAndPlay,
+      connectAndPlay,
+      renewSession,
+      withdrawAll,
+      revokeSessions,
+      closeSessions,
+      returnKeyFunds,
+      airdrop,
+      getTestSol,
+      signWithWallet,
+    ],
+  );
 }
 
 export type WalletActions = ReturnType<typeof useWalletActions>;

@@ -127,7 +127,7 @@ export function roundStateLine(c: Pick<Challenge, 'round' | 'side'>, state: Chal
     case 'upcoming':
       return `${id} opens in ${formatCountdown(state.secondsLeft)}.`;
     case 'open':
-      return `${id} is open: pick your side, entry closes in ${formatCountdown(state.secondsLeft)}.`;
+      return `${id} is open: pick your side, bet by ${formatCountdown(state.secondsLeft)}.`;
     case 'live':
       return state.secondsLeft > 0 ? `${id} is live: result in ${formatCountdown(state.secondsLeft)}.` : `${id} is settling: result soon.`;
     case 'final': {

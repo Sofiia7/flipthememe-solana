@@ -4,9 +4,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { ago, useChatter, type ChatterItem } from '../chain/useChatter';
-import { C, MONO } from '../theme';
+import { C, FONT_CAP, MONO } from '../theme';
 
-export const CHATTER_LANE_HEIGHT = 50;
+const CHATTER_LANE_HEIGHT = 50;
 /** Each tweet is on screen at least this long before the next one pushes it out. */
 const MIN_SHOW_MS = 4_500;
 /** Then it dims, and stays until the next one comes. */
@@ -86,7 +86,7 @@ export function ChatterLane({ symbol, mint }: { symbol: string | null; mint: str
       {idle ? (
         <View style={styles.idle}>
           <Animated.View style={[styles.dot, { opacity: pulse }]} />
-          <Text style={styles.idleText} numberOfLines={1}>
+          <Text style={styles.idleText} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             X LIVE{symbol ? `  $${symbol.toUpperCase()}` : ''}
           </Text>
         </View>
@@ -102,13 +102,17 @@ export function ChatterLane({ symbol, mint }: { symbol: string | null; mint: str
               style={[styles.bubble, { borderColor: mood.border, backgroundColor: mood.bg }]}
             >
               <View style={styles.head}>
-                <Text style={[styles.tag, { color: mood.border, borderColor: mood.border }]}>{mood.tag}</Text>
-                <Text style={styles.author} numberOfLines={1}>
+                <Text style={[styles.tag, { color: mood.border, borderColor: mood.border }]} maxFontSizeMultiplier={FONT_CAP}>
+                  {mood.tag}
+                </Text>
+                <Text style={styles.author} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
                   @{item.author}
                 </Text>
-                <Text style={styles.time}>{ago(item.createdAt, now)} · X</Text>
+                <Text style={styles.time} maxFontSizeMultiplier={FONT_CAP}>
+                  {ago(item.createdAt, now)} · X
+                </Text>
               </View>
-              <Text style={styles.text} numberOfLines={1}>
+              <Text style={styles.text} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
                 {item.text}
               </Text>
             </Pressable>
@@ -129,11 +133,11 @@ const styles = StyleSheet.create({
   },
   idle: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.neonGreen },
-  idleText: { color: C.dim, fontSize: 10, fontWeight: '900', fontFamily: MONO, letterSpacing: 1 },
+  idleText: { color: C.dim, fontSize: 11, fontWeight: '900', fontFamily: MONO, letterSpacing: 1 },
   slot: { position: 'absolute', left: 10, right: 10, top: 4, bottom: 4 },
   bubble: { flex: 1, borderWidth: 2, paddingHorizontal: 9, paddingVertical: 2, justifyContent: 'center', gap: 1 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  tag: { fontSize: 9, fontWeight: '900', borderWidth: 1, paddingHorizontal: 4 },
+  tag: { fontSize: 10, fontWeight: '900', borderWidth: 1, paddingHorizontal: 4 },
   author: { color: C.white, fontSize: 12, lineHeight: 15, fontWeight: '800', flexShrink: 1 },
   time: { color: '#b9b1cc', fontSize: 10, marginLeft: 'auto' },
   text: { color: '#f1ecfa', fontSize: 12, lineHeight: 16 },

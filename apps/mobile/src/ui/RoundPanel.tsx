@@ -1,13 +1,14 @@
-import { useEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { Side, acceptedStake, isActivated, type PositionAccount } from '@flipthememe/client';
 import type { PositionView, RoundView } from '../chain/fetch';
-import { matchedPerSide, type InFlightStage } from '../chain/phase';
+import type { InFlightStage } from '../chain/phase';
+import { pulseText, roundPulse } from '../chain/roundPulse';
 import { useSkrNames } from '../chain/skr';
 import { faceFromBytes, type Expression } from '../face/faceModel';
 import { formatCountdown, formatSol } from '../lib/format';
 import { HouseFace, PixelFace } from '../PixelFace';
-import { C, MONO } from '../theme';
+import { C, FONT_CAP, MONO } from '../theme';
 
 const MAX_CHIPS = 5;
 
@@ -123,11 +124,11 @@ export function SideColumn({
 const STAGE: Record<InFlightStage, { text: string; color: string }> = {
   fixing: { text: 'LOCKING START', color: C.neonYellow },
   live: { text: 'LIVE', color: C.neonGreen },
-  settling: { text: 'SETTLING', color: C.neonPurple },
+  settling: { text: 'RESULT SOON', color: C.neonPurple },
 };
 
 /** The round I am waiting for: both sides with faces, me highlighted, and whether I am winning right now. */
-export function MyRoundPanel({
+export const MyRoundPanel = memo(function MyRoundPanel({
   round,
   position,
   positions,
@@ -172,36 +173,35 @@ export function MyRoundPanel({
       {stage !== 'fixing' ? <MatchedLine rawUp={a.rawUp} rawDown={a.rawDown} minBank={a.minBank} side={position.account.side} stake={position.account.stake} /> : null}
     </View>
   );
-}
+});
 
 /**
- * Once the house fill window is over the book is final: how much of my stake plays and how much comes back.
- * Nothing to say when all of it plays.
+ * Once the house fill window is over the book is final: how much of my stake plays and how much comes back,
+ * in one line ("0.02 playing · 0.08 back"). Nothing to say when all of it plays.
  */
 function MatchedLine({ rawUp, rawDown, minBank, side, stake }: { rawUp: bigint; rawDown: bigint; minBank: bigint; side: number; stake: bigint }) {
   if (!isActivated(rawUp, rawDown, minBank)) {
-    return <Text style={[styles.matchedLine, { color: C.neonYellow }]}>NO MATCH · YOUR STAKE COMES BACK IN FULL</Text>;
+    return <Text style={[styles.matchedLine, { color: C.neonYellow }]}>NO MATCH - stake back</Text>;
   }
   const accepted = acceptedStake(rawUp, rawDown, side as Side, stake);
   if (accepted === null || accepted >= stake) return null;
   return (
     <Text style={styles.matchedLine}>
-      IN PLAY {formatSol(accepted)} · {formatSol(stake - accepted)} COMES BACK
+      {formatSol(accepted)} playing · {formatSol(stake - accepted)} back
     </Text>
   );
 }
 
-/** Live: winning / losing right now against the strike. The strike countdown itself sits next to the big timer. */
+/** Live: winning / losing right now against the strike. The strike countdown itself sits next to the big timer; RESULT SOON is in the header. */
 function StandingBadge({ stage, standing }: { stage: InFlightStage; standing: 'winning' | 'losing' | 'tie' | null }) {
-  if (stage === 'settling') return <Text style={[styles.note, { color: C.neonPurple }]}>RESULT SOON</Text>;
-  if (stage === 'fixing' || standing === null) return null;
+  if (stage === 'settling' || stage === 'fixing' || standing === null) return null;
   const bg = standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow;
   const text = standing === 'winning' ? 'WINNING NOW ▲' : standing === 'losing' ? 'LOSING NOW ▼' : 'TIE NOW';
   return <Text style={[styles.badge, { backgroundColor: bg }]}>{text}</Text>;
 }
 
-/** Players of the open round, or an invitation when nobody has called it yet. */
-export function OpenRoundPanel({
+/** Players of the open round with "N IN · X SOL" big on top, or an invitation when nobody has called it yet. */
+export const OpenRoundPanel = memo(function OpenRoundPanel({
   round,
   positions,
   me,
@@ -216,7 +216,9 @@ export function OpenRoundPanel({
 }) {
   const ups = positions.filter((p) => p.account.side === Side.Up);
   const downs = positions.filter((p) => p.account.side === Side.Down);
-  const matched = round ? matchedPerSide(round.account) : 0n;
+  const pulse = round
+    ? pulseText(roundPulse({ positions, positionCount: round.account.positionCount, rawUp: round.account.rawUp, rawDown: round.account.rawDown }), formatSol)
+    : null;
   return (
     <View style={[styles.panel, styles.panelOpen]}>
       <View style={styles.head}>
@@ -224,7 +226,11 @@ export function OpenRoundPanel({
           <Text style={styles.title}>{round ? `ROUND #${round.id.toString()} ·` : 'NEXT ROUND ·'}</Text>
           <Text style={[styles.stageText, { color: upcoming ? C.subtle : C.neonYellow }]}>{upcoming || !round ? 'OPENS SOON' : 'OPEN'}</Text>
         </View>
-        {matched > 0n ? <Text style={styles.matched}>matched {formatSol(matched)} / side</Text> : null}
+        {pulse ? (
+          <Text style={styles.pulse} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
+            {pulse}
+          </Text>
+        ) : null}
       </View>
       {positions.length === 0 ? (
         <View style={styles.empty}>
@@ -247,7 +253,7 @@ export function OpenRoundPanel({
       )}
     </View>
   );
-}
+});
 
 /** A compact line for another round of mine still in flight. */
 export function ExtraRoundLine({
@@ -276,7 +282,7 @@ export function ExtraRoundLine({
   );
 }
 
-/** "NEXT #102 · entry closes 0:16": the round the bet buttons play, right above them while my round is in flight; `token` names it when it is another coin than the stage's. */
+/** "NEXT #102 · bet by 0:16": the round the bet buttons play, right above them while my round is in flight; `token` names it when it is another coin than the stage's. */
 export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { roundId: bigint; secondsLeft: number; opens: boolean; token?: string | null }) {
   const urgent = !opens && secondsLeft <= 5;
   return (
@@ -284,7 +290,7 @@ export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { ro
       <Pulse color={urgent ? C.neonRed : C.neonYellow} size={6} />
       <Text style={styles.nextText}>
         NEXT #{roundId.toString()}
-        {token ? <Text style={styles.nextToken}> ${token.toUpperCase()}</Text> : null} · {opens ? 'opens in' : 'entry closes'}{' '}
+        {token ? <Text style={styles.nextToken}> ${token.toUpperCase()}</Text> : null} · {opens ? 'opens in' : 'bet by'}{' '}
         <Text style={[styles.nextClock, urgent && { color: C.neonRed }]}>{formatCountdown(secondsLeft)}</Text>
       </Text>
     </View>
@@ -300,9 +306,18 @@ const styles = StyleSheet.create({
   title: { color: C.white, fontSize: 13, fontWeight: '900', fontFamily: MONO },
   stage: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   stageText: { fontSize: 11, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
-  note: { fontSize: 12, fontWeight: '900', fontFamily: MONO },
   badge: { color: C.bg, fontSize: 12, fontWeight: '900', fontFamily: MONO, paddingHorizontal: 6, paddingVertical: 3 },
-  matched: { color: C.subtle, fontSize: 10, fontFamily: MONO },
+  // Social proof of the open round: big and warm, the one number a newcomer reads first.
+  pulse: {
+    color: C.neonYellow,
+    fontSize: 16,
+    fontWeight: '900',
+    fontFamily: MONO,
+    flexShrink: 0,
+    textShadowColor: C.neonYellow,
+    textShadowRadius: 8,
+    textShadowOffset: { width: 0, height: 0 },
+  },
   sides: { flexDirection: 'row', gap: 8 },
   column: { flex: 1, borderWidth: 1, borderColor: C.borderSoft, backgroundColor: C.panel, padding: 6, gap: 6, minHeight: 84 },
   colHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },

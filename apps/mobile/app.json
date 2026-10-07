@@ -12,6 +12,7 @@
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/adaptive-icon-monochrome.png",
         "backgroundColor": "#0a0b0d"
       },
       "intentFilters": [
@@ -34,6 +35,15 @@
     },
     "plugins": [
       "expo-dev-client",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#100d1f",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200
+        }
+      ],
+      "expo-notifications",
       "./plugins/withReleaseSigning"
     ],
     "extra": {

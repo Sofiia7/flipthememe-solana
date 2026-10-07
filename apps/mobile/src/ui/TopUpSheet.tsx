@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Side } from '@flipthememe/client';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS } from '../config';
 import { useRents } from '../chain/rent';
 import { chainNowSec } from '../chain/useChainClock';
@@ -8,7 +9,7 @@ import { sessionStatusOf, useApp } from '../state/AppProvider';
 import { C, MONO } from '../theme';
 import { isChecking } from '../wallet/pendingTx';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
-import { playRoute, topUpBill } from '../wallet/topUpFlow';
+import { billLines, playRoute, topUpBill, walletNeed } from '../wallet/topUpFlow';
 import { RENT_FALLBACK, topUpPlan } from '../wallet/topUpPlan';
 import { ExtLink } from './common';
 import { NeonButton } from './NeonButton';
@@ -18,22 +19,37 @@ import { PixelText } from './PixelText';
 const solUp = (lamports: bigint) => formatSol(((lamports + 99_999n) / 100_000n) * 100_000n);
 
 /**
- * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with every
- * part of the amount listed before the wallet opens. With money already in the game balance the
- * sheet first offers to renew one-tap bets without a deposit. For a visitor (no wallet connected yet)
- * the same sheet connects and approves in one wallet session: the bill then assumes the worst case
- * (new vault, new session, empty device key) and its total says "up to".
+ * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with the amount
+ * leaving the wallet listed before the wallet opens (the deposit, and the network and setup costs in one
+ * line). With money already in the game balance the sheet first offers to renew one-tap bets without a
+ * deposit. For a visitor (no wallet connected yet) the same sheet connects and approves in one wallet
+ * session: the bill then assumes the worst case (new vault, new session, empty device key) and its total
+ * says "up to". `call` is the side a visitor tapped: it goes in by itself once the approval is through.
+ * A wallet without devnet SOL gets GET TEST SOL (the project's own faucet) first; the AIRDROP and
+ * faucet.solana.com ways appear when that cannot help.
  */
-export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+export function TopUpSheet({
+  visible,
+  onClose,
+  call = null,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  call?: { side: number; text: string } | null;
+}) {
   const { wallet, my, myReady, rpc, arena, offsetSec } = useApp();
   const [amount, setAmount] = useState<bigint>(TOP_UP_AMOUNTS[0]);
   const [started, setStarted] = useState(false);
+  const [faucetTried, setFaucetTried] = useState(false);
+  const [fallbackOpen, setFallbackOpen] = useState(false);
   const rent = useRents(rpc, visible);
 
   const { clearResult } = wallet;
   useEffect(() => {
     if (visible) {
       setStarted(false);
+      setFaucetTried(false);
+      setFallbackOpen(false);
       clearResult();
     }
   }, [visible, clearResult]);
@@ -46,6 +62,12 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
     }
     return undefined;
   }, [result, onClose]);
+  // The faucet cannot help (busy, empty, not answering), or the airdrop failed: the other ways stay in view.
+  const faucetDeadEnd = result?.action === 'faucet' && !result.ok && result.fallbacks === true;
+  const airdropFailed = result?.action === 'airdrop' && !result.ok && !result.checking;
+  useEffect(() => {
+    if (faucetDeadEnd || airdropFailed) setFallbackOpen(true);
+  }, [faucetDeadEnd, airdropFailed]);
 
   const route = playRoute(wallet.owner);
   const connected = route.kind === 'top-up';
@@ -78,18 +100,24 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
     gasMin: SESSION_RULES.gasMin,
     gasTopUp: SESSION_RULES.gasTopUp,
   });
-  const lines: [string, bigint][] = [
-    ['Game balance', plan.deposit],
-    ...(plan.keyFees > 0n ? ([['Bet fees (device key)', plan.keyFees]] as [string, bigint][]) : []),
-    ...(plan.setup > 0n ? ([['New accounts (rent)', plan.setup]] as [string, bigint][]) : []),
-    ['Network fee', plan.networkFee],
-  ];
+  // Two lines: what goes into the game, and what the network and the setup take (device key fees, new accounts, the network fee).
+  const lines = billLines(plan);
   const terms = `One-tap bets up to ${formatSol(SESSION_RULES.maxPerBet)} SOL per bet for 7 days. The device key can never withdraw.`;
+
+  // The wallet is connected and holds less devnet SOL than this top up needs: test SOL comes first.
+  const needsFunds = connected && walletLamports !== null && walletLamports < walletNeed(plan);
+  const showFallbacks = fallbackOpen || (needsFunds && faucetTried);
 
   const approve = () => {
     setStarted(true);
     void (route.kind === 'top-up' ? wallet.topUpAndPlay(amount) : wallet.connectAndPlay(amount));
   };
+  const getTestSol = () => {
+    setStarted(true);
+    setFaucetTried(true);
+    void wallet.getTestSol();
+  };
+  const faucetBusy = wallet.busy === 'faucet';
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={busy ? () => undefined : onClose} statusBarTranslucent>
@@ -101,6 +129,11 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
             <Text style={styles.closeText}>X</Text>
           </Pressable>
         </View>
+        {call ? (
+          <Text style={[styles.call, { color: call.side === Side.Up ? C.neonGreen : C.neonRed }]}>
+            {call.side === Side.Up ? '▲' : '▼'} {call.text} goes in right after
+          </Text>
+        ) : null}
 
         {canRenew ? (
           <>
@@ -155,17 +188,33 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
         ) : (
           <Text style={styles.terms}>Your wallet opens once: it connects and approves in one step. Test SOL only.</Text>
         )}
+        {needsFunds ? (
+          <NeonButton
+            title={faucetBusy ? 'GETTING TEST SOL...' : 'GET TEST SOL'}
+            subtitle="free devnet SOL, one tap"
+            kind="gold"
+            big
+            busy={faucetBusy}
+            disabled={busy}
+            onPress={getTestSol}
+          />
+        ) : null}
         <NeonButton
           title={connected ? (topUpChecking ? 'CHECKING...' : `APPROVE ${solUp(plan.total)} SOL`) : 'CONNECT & APPROVE'}
           subtitle={connected ? (topUpChecking ? 'waiting for devnet' : undefined) : `up to ${solUp(plan.total)} SOL`}
-          kind={canRenew ? 'purple' : 'gold'}
-          big={!canRenew}
+          kind={canRenew || needsFunds ? 'purple' : 'gold'}
+          big={!canRenew && !needsFunds}
           busy={wallet.busy === 'topup' || topUpChecking}
           disabled={busy}
           onPress={approve}
         />
         <View style={styles.links}>
-          {connected ? (
+          {connected && !needsFunds ? (
+            <Pressable disabled={busy} hitSlop={8} onPress={getTestSol}>
+              <Text style={[styles.link, busy && styles.linkOff]}>{faucetBusy ? 'GETTING TEST SOL...' : 'GET TEST SOL'}</Text>
+            </Pressable>
+          ) : null}
+          {showFallbacks && connected ? (
             <Pressable
               disabled={busy}
               hitSlop={8}
@@ -177,7 +226,7 @@ export function TopUpSheet({ visible, onClose }: { visible: boolean; onClose: ()
               <Text style={[styles.link, busy && styles.linkOff]}>{wallet.busy === 'airdrop' ? 'AIRDROPPING...' : 'AIRDROP 1 SOL'}</Text>
             </Pressable>
           ) : null}
-          <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
+          {showFallbacks ? <ExtLink label="faucet.solana.com" url={FAUCET_URL} /> : null}
         </View>
         {result ? (
           <Text style={[styles.result, { color: result.ok ? C.neonGreen : result.checking ? C.neonYellow : C.danger }]}>{result.message}</Text>
@@ -193,6 +242,8 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   close: { width: 30, height: 30, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
   closeText: { color: C.subtle, fontSize: 13, fontWeight: '900', fontFamily: MONO },
+  // The call that was tapped and goes in after the approval.
+  call: { fontSize: 14, fontWeight: '900', fontFamily: MONO },
   or: { color: C.dim, fontSize: 10, fontWeight: '900', fontFamily: MONO, textAlign: 'center', letterSpacing: 2 },
   amounts: { flexDirection: 'row', gap: 8 },
   chip: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 10, alignItems: 'center' },
@@ -209,7 +260,7 @@ const styles = StyleSheet.create({
   terms: { color: C.subtle, fontSize: 11, lineHeight: 15 },
   balance: { color: C.text, fontSize: 13, fontWeight: '800', fontFamily: MONO },
   devnet: { color: C.dim, fontSize: 11 },
-  links: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  links: { flexDirection: 'row', alignItems: 'center', gap: 18, flexWrap: 'wrap' },
   link: { color: C.accentText, fontSize: 12, fontWeight: '900', textDecorationLine: 'underline' },
   linkOff: { opacity: 0.4 },
   result: { fontSize: 12, fontWeight: '800', lineHeight: 17 },

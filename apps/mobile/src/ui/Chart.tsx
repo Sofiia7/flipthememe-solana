@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import type { PricePoint } from '../chain/usePoolPrice';
 import { C, MONO } from '../theme';
-import { areaPath, linePath, splitAtGaps, splitLinesAtLevel } from './chartPath';
+import { areaPath, chartPropsEqual, linePath, monoTextWidth, splitAtGaps, splitLinesAtLevel } from './chartPath';
 
 type Props = {
   points: readonly PricePoint[];
@@ -34,9 +34,19 @@ const PAD_BOTTOM = 16;
 const AHEAD_MAX_MS = 110_000;
 /** Live points further apart than this (app in the background, another tab open) leave a gap in the line. */
 const LIVE_GAP_MS = 15_000;
+/** Every label inside the SVG: 10sp is the smallest size that stays readable on a phone. */
+const LABEL = 10;
+const TAG_H = 15;
+
+/** "Live price of PEPE in SOL" for a screen reader, from the "PEPE / SOL" pair label. */
+function chartDescription(pairLabel: string | undefined, stale: boolean | undefined): string {
+  const ticker = pairLabel?.split(' / ')[0]?.trim();
+  const base = ticker && ticker !== 'TOKEN' ? `Live price of ${ticker} in SOL` : 'Live price of the arena token in SOL';
+  return stale ? `${base}, price is stale` : base;
+}
 
 /** Live mainnet price: the start price as a dashed line with green above and red below, plus the round's windows. */
-export function PriceChart({
+function PriceChartView({
   points,
   nowMs,
   strike,
@@ -93,7 +103,10 @@ export function PriceChart({
     const x0 = Math.max(0, x(range[0]));
     const x1 = Math.min(width, x(range[1]));
     if (x1 <= 0 || x0 >= width || x1 <= x0) return null;
-    const labelRight = x0 + 2 + label.length * 5.6 > width;
+    const textW = monoTextWidth(label, LABEL);
+    const labelRight = x0 + 2 + textW > width;
+    // Anchored to the band's right edge when it would run off the chart, never past the left edge.
+    const labelX = labelRight ? Math.max(textW + 2, x1 - 2) : x0 + 2;
     return (
       <G>
         <Rect x={x0} y={PAD_TOP} width={x1 - x0} height={plotH} fill={color} opacity={strong ? 0.26 : 0.16} />
@@ -103,17 +116,11 @@ export function PriceChart({
             <Line x1={x1} x2={x1} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={color} strokeWidth={1} />
           </>
         ) : null}
-        <SvgText
-          x={labelRight ? x1 - 2 : x0 + 2}
-          y={PAD_TOP - 5}
-          fill={color}
-          fontSize={strong ? 10 : 8}
-          fontWeight="bold"
-          fontFamily={MONO}
-          textAnchor={labelRight ? 'end' : 'start'}
-        >
-          {label}
-        </SvgText>
+        {label ? (
+          <SvgText x={labelX} y={PAD_TOP - 5} fill={color} fontSize={LABEL} fontWeight="bold" fontFamily={MONO} textAnchor={labelRight ? 'end' : 'start'}>
+            {label}
+          </SvgText>
+        ) : null}
       </G>
     );
   };
@@ -122,11 +129,26 @@ export function PriceChart({
   const split = sy !== null ? splitLinesAtLevel(segments, sy) : null;
   const ticks = [-60_000, 0].map((offset) => ({ ms: nowMs + offset, label: offset === 0 ? 'now' : '-1m' }));
   const strikeTag = strikeLabel ?? 'START PRICE';
-  const tagW = strikeTag.length * 6 + 8;
-  const tagY = sy !== null ? (sy - 16 < 2 ? sy + 3 : sy - 16) : 0;
+  const tagW = monoTextWidth(strikeTag, LABEL) + 8;
+  const tagY = sy !== null ? (sy - TAG_H - 3 < 2 ? sy + 3 : sy - TAG_H - 3) : 0;
+  // The BET BY label and the "now" tick share the bottom edge: the tick yields when the two would touch.
+  const cutoffShown = !!cutoffMs && cutoffMs > start && cutoffMs < end;
+  const cutoffText = 'BET BY';
+  const cutoffBox: [number, number] | null = cutoffShown && cutoffMs ? [x(cutoffMs) - 3 - monoTextWidth(cutoffText, LABEL), x(cutoffMs) - 3] : null;
+  const tickHidden = (label: string, atX: number): boolean => {
+    if (!cutoffBox) return false;
+    const half = monoTextWidth(label, LABEL) / 2;
+    return atX + half + 3 > cutoffBox[0] && atX - half - 3 < cutoffBox[1];
+  };
 
   return (
-    <View style={[styles.box, { height }]} onLayout={onLayout}>
+    <View
+      style={[styles.box, { height }]}
+      onLayout={onLayout}
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel={chartDescription(pairLabel, stale)}
+    >
       {width > 0 ? (
         <Svg width={width} height={height}>
           <Defs>
@@ -148,17 +170,17 @@ export function PriceChart({
 
           {band(strikeWindow?.range, C.neonYellow, strikeWindow?.label ?? '', strikeWindow?.strong ?? true)}
           {band(exitWindow, C.neonPurple, 'RESULT', false)}
-          {cutoffMs && cutoffMs > start && cutoffMs < end ? (
+          {cutoffShown && cutoffMs ? (
             <>
               <Line x1={x(cutoffMs)} x2={x(cutoffMs)} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={C.gold} strokeWidth={1} strokeDasharray="3 3" />
-              <SvgText x={x(cutoffMs) - 3} y={height - 4} fill={C.gold} fontSize={8} fontWeight="bold" fontFamily={MONO} textAnchor="end">
-                ENTRY CLOSES
+              <SvgText x={x(cutoffMs) - 3} y={height - 4} fill={C.gold} fontSize={LABEL} fontWeight="bold" fontFamily={MONO} textAnchor="end">
+                {cutoffText}
               </SvgText>
             </>
           ) : null}
           <Line x1={x(nowMs)} x2={x(nowMs)} y1={PAD_TOP} y2={PAD_TOP + plotH} stroke={C.border} strokeWidth={1} />
           {pairLabel ? (
-            <SvgText x={4} y={PAD_TOP - 5} fill={C.subtle} fontSize={8} fontWeight="bold" fontFamily={MONO}>
+            <SvgText x={4} y={PAD_TOP - 5} fill={C.subtle} fontSize={LABEL} fontWeight="bold" fontFamily={MONO}>
               {pairLabel}
             </SvgText>
           ) : null}
@@ -178,8 +200,8 @@ export function PriceChart({
           {sy !== null ? (
             <>
               <Line x1={0} x2={width} y1={sy} y2={sy} stroke={C.white} strokeWidth={1.5} strokeDasharray="6 4" opacity={0.9} />
-              <Rect x={2} y={tagY} width={tagW} height={13} fill={C.bg} opacity={0.85} />
-              <SvgText x={6} y={tagY + 10} fill={C.white} fontSize={9} fontWeight="bold" fontFamily={MONO}>
+              <Rect x={2} y={tagY} width={tagW} height={TAG_H} fill={C.bg} opacity={0.85} />
+              <SvgText x={6} y={tagY + 11} fill={C.white} fontSize={LABEL} fontWeight="bold" fontFamily={MONO}>
                 {strikeTag}
               </SvgText>
             </>
@@ -191,21 +213,14 @@ export function PriceChart({
               <Circle cx={x(last.atMs)} cy={y(Number(last.price))} r={4} fill={dotColor} />
             </>
           ) : null}
-          {ticks.map((t) =>
-            t.ms >= start && t.ms <= end ? (
-              <SvgText
-                key={t.label}
-                x={Math.min(width - 2, Math.max(2, x(t.ms)))}
-                y={height - 4}
-                fill={C.dim}
-                fontSize={8}
-                fontFamily={MONO}
-                textAnchor="middle"
-              >
+          {ticks.map((t) => {
+            const tx = Math.min(width - 2, Math.max(2, x(t.ms)));
+            return t.ms >= start && t.ms <= end && !tickHidden(t.label, tx) ? (
+              <SvgText key={t.label} x={tx} y={height - 4} fill={C.dim} fontSize={LABEL} fontFamily={MONO} textAnchor="middle">
                 {t.label}
               </SvgText>
-            ) : null,
-          )}
+            ) : null;
+          })}
         </Svg>
       ) : null}
       {stale && visible.length >= 2 ? <Text style={styles.stale}>PRICE STALE</Text> : null}
@@ -218,9 +233,12 @@ export function PriceChart({
   );
 }
 
+/** Memoized: the arena renders twice a second; the chart redraws once a second or when its data changes (`chartPropsEqual`). */
+export const PriceChart = memo(PriceChartView, chartPropsEqual);
+
 const styles = StyleSheet.create({
   box: { backgroundColor: C.chart, borderWidth: 1, borderColor: '#3a3350', overflow: 'hidden' },
   empty: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: C.subtle, fontSize: 11, fontWeight: '700' },
-  stale: { position: 'absolute', top: 3, right: 6, color: C.warn, fontSize: 9, fontWeight: '900', fontFamily: MONO },
+  stale: { position: 'absolute', top: 3, right: 6, color: C.warn, fontSize: 10, fontWeight: '900', fontFamily: MONO },
 });

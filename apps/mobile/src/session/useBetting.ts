@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import * as Haptics from 'expo-haptics';
 import { getSignatureFromTransaction, type Address, type Instruction, type Signature } from '@solana/kit';
 import { claim, placeBet, refundExpired, sendAndConfirm, signLocally, type Side } from '@flipthememe/client';
+import { CLAIM_KEY_MIN_LAMPORTS } from '../config';
 import type { SolanaRpc } from '../chain/rpc';
 import { observeSend } from '../chain/sendPhase';
 import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
@@ -114,7 +115,8 @@ export function useBetting(input: {
       setClaimError(null);
       try {
         const ixs = [...(refundFirst ? [await refundExpired({ roundId })] : []), await claim({ roundId, owner: positionOwner })];
-        if (sessionKey && (keyLamports ?? 0n) >= 20_000n) {
+        // The device key pays the fee only when it holds what one more fee needs (config.ts); else the wallet signs.
+        if (sessionKey && (keyLamports ?? 0n) >= CLAIM_KEY_MIN_LAMPORTS) {
           await sendAndConfirm(rpc, await signLocally(rpc, sessionKey.signer, ixs));
         } else if (owner) {
           await signWithWallet(owner, ixs);
@@ -131,7 +133,8 @@ export function useBetting(input: {
     [claiming, rpc, sessionKey, owner, signWithWallet, onChanged],
   );
 
-  return { bet, place, reset, claiming, claimError, claimPosition };
+  // One object per change, so the app context (and everything reading it) does not see a new one on every render.
+  return useMemo(() => ({ bet, place, reset, claiming, claimError, claimPosition }), [bet, place, reset, claiming, claimError, claimPosition]);
 }
 
 export type Betting = ReturnType<typeof useBetting>;

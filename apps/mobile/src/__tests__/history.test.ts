@@ -8,6 +8,7 @@ import {
   HISTORY_CAP,
   accuracyOf,
   createHistoryStore,
+  dayWindow,
   historyEntry,
   historyStats,
   mergeHistory,
@@ -16,6 +17,8 @@ import {
   recordFace,
   recordOf,
   serializeHistory,
+  todayLine,
+  todayStats,
   streakAsOf,
   streakLabel,
   streakOf,
@@ -352,4 +355,63 @@ test('accuracy is wins over decided rounds, none without a decided round', () =>
   // Refunds are not in it: it reads the same fields historyStats returns.
   const stats = historyStats(rows('WLWT'), Number(T0) + 10_000);
   assert.equal(accuracyOf(stats), 2 / 3);
+});
+
+// The arena header's "today" line. Round k opens at T0 + 60 k seconds (see roundAccount).
+const opensMs = (id: bigint) => Number(T0 + id * 60n) * 1000;
+const chainEntry = (p: ChainPosition): HistoryEntry<ChainPosition> => ({ kind: 'chain', key: p.address, roundId: p.round?.id ?? null, position: p });
+const storedEntry = (r: HistoryRecord): HistoryEntry<ChainPosition> => ({ kind: 'stored', key: r.position, roundId: r.roundId, record: r });
+/** Rounds 5 to 20 are inside; round 4 and round 21 are not. */
+const DAY = { startMs: opensMs(5n), endMs: opensMs(21n) };
+
+test('today: calls, wins and net count only rounds that opened inside the day', () => {
+  const entries = [
+    chainEntry(mine(4n)), // opened before the window
+    chainEntry(mine(5n)), // won: +0.096 (0.196 back for 0.1)
+    chainEntry(mine(6n, { position: { side: Side.Down } })), // lost: -0.1
+    chainEntry(mine(20n, { position: { side: Side.Up, stake: SOL / 50n } })), // won 0.02: +0.0192
+    chainEntry(mine(21n)), // the next day starts here
+  ];
+  assert.deepEqual(todayStats(entries, DAY), { calls: 3, won: 2, finished: 3, net: 96_000_000n - 100_000_000n + 19_200_000n });
+});
+
+test('today: a call still in play is a call but not a result; refunds count as finished with their net', () => {
+  const entries = [
+    chainEntry(mine(5n, { round: { status: RoundStatus.Live, outcome: Outcome.Pending } })),
+    chainEntry(mine(6n, { round: { outcome: Outcome.Refund, refundReason: RefundReason.Tie } })),
+  ];
+  assert.deepEqual(todayStats(entries, DAY), { calls: 2, won: 0, finished: 1, net: 0n });
+  // Only the call in play: nothing finished, nothing to net.
+  assert.deepEqual(todayStats([entries[0]], DAY), { calls: 1, won: 0, finished: 0, net: 0n });
+});
+
+test('today: rows kept on the phone count like chain rows; rows without round data are left out', () => {
+  const entries = [storedEntry(kept(7n)), storedEntry(kept(8n, { kind: 'lost', payout: 0n })), chainEntry(mine(9n, { round: null }))];
+  assert.deepEqual(todayStats(entries, DAY), { calls: 2, won: 1, finished: 2, net: 196_000_000n - 100_000_000n - 100_000_000n });
+});
+
+test('today: an empty day is all zeros', () => {
+  assert.deepEqual(todayStats([], DAY), { calls: 0, won: 0, finished: 0, net: 0n });
+});
+
+test('the today line hides at zero calls, shows only the count while nothing has finished, and signs the net', () => {
+  const sol = (l: bigint, o?: { sign?: boolean }) => (o?.sign && l > 0n ? '+' : '') + (Number(l) / 1e9).toString();
+  assert.equal(todayLine({ calls: 0, won: 0, finished: 0, net: 0n }, sol), null);
+  assert.equal(todayLine({ calls: 1, won: 0, finished: 0, net: 0n }, sol), 'today: 1 call');
+  assert.equal(todayLine({ calls: 5, won: 3, finished: 5, net: 19_200_000n }, sol), 'today: 5 calls · 3 won · +0.0192');
+  assert.equal(todayLine({ calls: 2, won: 0, finished: 2, net: -100_000_000n }, sol), 'today: 2 calls · 0 won · -0.1');
+  const dashes = new RegExp('[' + String.fromCharCode(0x2013) + String.fromCharCode(0x2014) + ']');
+  assert.ok(!dashes.test(todayLine({ calls: 2, won: 1, finished: 2, net: 1n }, sol) ?? ''), 'no long dashes');
+});
+
+test('the day window is the local calendar day: midnight to the next midnight', () => {
+  const now = new Date(2026, 9, 7, 15, 30, 12).getTime();
+  const w = dayWindow(now);
+  assert.equal(w.startMs, new Date(2026, 9, 7, 0, 0, 0, 0).getTime());
+  assert.equal(w.endMs, new Date(2026, 9, 8, 0, 0, 0, 0).getTime());
+  assert.ok(w.startMs <= now && now < w.endMs);
+  // The first and last millisecond of the day are inside, the next one is not.
+  assert.equal(dayWindow(w.startMs).startMs, w.startMs);
+  assert.equal(dayWindow(w.endMs - 1).startMs, w.startMs);
+  assert.equal(dayWindow(w.endMs).startMs, w.endMs);
 });

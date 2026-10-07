@@ -16,6 +16,7 @@ import {
   type Challenge,
   type ChallengeRoundState,
 } from '../state/challenge';
+import { scoreLine } from '../state/rivalScore';
 import { C } from '../theme';
 import { RivalTag } from './RoundPanel';
 
@@ -37,7 +38,7 @@ export function ChallengeCard({
   nowSec: number;
   onClose: () => void;
 }) {
-  const { rpc, arena } = useApp();
+  const { rpc, arena, rivalScore } = useApp();
   // The name in a link is whatever its sender typed, so the card shows the inviter's real Seeker ID
   // (looked up for `by`), else their short address; a link without `by` stays A FRIEND.
   const verified = useSkrNames(link.by ? [link.by] : []).get(link.by ?? '') ?? null;
@@ -61,6 +62,8 @@ export function ChallengeCard({
       </View>
       {stateText ? <Text style={[styles.line, { color: stateColor(state) }]}>{stateText}</Text> : null}
       <Text style={[styles.line, { color: met ? C.accentText : C.subtle }]}>{meetLine(challenge, open?.id ?? null, met?.account.side ?? null)}</Text>
+      {/* The personal score against this friend: rounds where we called opposite sides, since the app opened. */}
+      {rivalScore && challenge.by ? <Text style={[styles.line, styles.duel]}>{scoreLine(rivalScore, verified?.replace(/\.skr$/, '') ?? null)}</Text> : null}
     </View>
   );
 }
@@ -71,4 +74,5 @@ const styles = StyleSheet.create({
   headline: { flex: 1, color: C.white, fontSize: 12, fontWeight: '900', lineHeight: 16 },
   ok: { color: C.neonPink, fontSize: 11, fontWeight: '900', textDecorationLine: 'underline' },
   line: { fontSize: 11, fontWeight: '700', lineHeight: 15 },
+  duel: { color: C.neonPink, fontSize: 13, fontWeight: '900', lineHeight: 17 },
 });

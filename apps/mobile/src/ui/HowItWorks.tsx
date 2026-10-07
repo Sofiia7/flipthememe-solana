@@ -57,7 +57,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="30s" color={C.neonYellow} size={12} />
       </Icon>
     ),
-    text: 'The start price is the average price over 10 s, 30 s after entry closes. You call the next minute. Result in about 2 min.',
+    text: 'Start price is fixed 30 s after entry closes. You call the next minute. Result in about 2 min.',
   },
   {
     icon: (
@@ -89,7 +89,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="1" color={C.neonPink} size={16} />
       </Icon>
     ),
-    text: 'One arena, one token: a busy pump.fun coin (its pool age is shown above the chart), so everyone plays the same chart. Price is TOKEN/SOL.',
+    text: 'One arena, one busy token. Everyone plays the same chart.',
   },
   {
     icon: (

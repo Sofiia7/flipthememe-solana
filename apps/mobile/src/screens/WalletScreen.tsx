@@ -9,7 +9,7 @@ import { formatDateTime, formatDuration, formatSol, shortAddress, sol } from '..
 import { useNow } from '../lib/usePolling';
 import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
-import { Banner, Btn, ExtLink, KV, Pill } from '../ui/common';
+import { Banner, Btn, ExtLink, KV, Pill, ScreenTitle } from '../ui/common';
 import { isChecking, type GuardedAction } from '../wallet/pendingTx';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { closeOffer, isClosable } from '../wallet/sessionClose';
@@ -103,7 +103,7 @@ export function WalletScreen() {
 
   return (
     <ScrollView ref={scroll} contentContainerStyle={styles.page}>
-      <Text style={T.h1}>Wallet</Text>
+      <ScreenTitle text="WALLET" />
       {/* What the last action did, right under the title: visible without scrolling. */}
       {result && (result.action !== 'connect' || !result.ok) ? (
         <View style={styles.result}>
@@ -138,7 +138,7 @@ export function WalletScreen() {
           </>
         ) : (
           <>
-            <Text style={T.subtle}>Connect a Mobile Wallet Adapter wallet. Transactions are signed in the wallet and sent to Solana devnet by the app.</Text>
+            <Text style={T.subtle}>Connect your wallet.</Text>
             <Btn title="CONNECT WALLET" busy={wallet.busy === 'connect'} disabled={busy} onPress={() => void wallet.connect()} />
           </>
         )}
@@ -149,8 +149,8 @@ export function WalletScreen() {
           <View style={T.panel}>
             <Text style={T.label}>GAME BALANCE</Text>
             <KV k="Available" v={myReady ? sol(available) : '...'} tone="up" />
-            <KV k="Locked in rounds" v={myReady ? sol(locked) : '...'} tone="gold" />
-            <Text style={T.dim}>Winnings land here. Only available SOL can be withdrawn.</Text>
+            <KV k="In play" v={myReady ? sol(locked) : '...'} tone="gold" />
+            <Text style={T.dim}>Winnings land here.</Text>
             {canRenew ? (
               <Btn
                 title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
@@ -244,15 +244,15 @@ export function WalletScreen() {
                     {offer.later > 0 ? <Text style={T.dim}>{offer.later} more after this batch.</Text> : null}
                   </>
                 ) : null}
-                {offer.targets.length > 0 ? <Text style={T.dim}>A finished session can be closed to get its rent deposit back in your wallet.</Text> : null}
+                {offer.targets.length > 0 ? <Text style={T.dim}>Close a finished session to get its SOL back.</Text> : null}
                 {rows.length > 0 && !rows.some((r) => r.mine) ? <Text style={T.dim}>No session on this phone yet.</Text> : null}
-                <Text style={T.dim}>A session lets one phone place one-tap bets from your game balance. It can never withdraw.</Text>
+                <Text style={T.dim}>Sessions allow one-tap bets. They can never withdraw.</Text>
               </View>
 
               <View style={T.panel}>
                 <Text style={T.label}>DEVICE KEY (THIS PHONE)</Text>
                 <KV k="SOL on the key" v={keyLamports !== null ? sol(keyLamports, { maxDecimals: 5 }) : '...'} />
-                <Text style={T.dim}>Pays the network fee of each bet (0.000005 SOL). Not part of the game balance.</Text>
+                <Text style={T.dim}>Pays bet fees. Not part of your game balance.</Text>
                 <Btn
                   kind="ghost"
                   small
@@ -277,7 +277,7 @@ export function WalletScreen() {
               <View style={T.panel}>
                 <Text style={T.label}>TEST SOL</Text>
                 <Btn kind="ghost" title="AIRDROP 1 TEST SOL" busy={wallet.busy === 'airdrop'} disabled={busy} onPress={() => void wallet.airdrop()} />
-                <Text style={T.dim}>The public devnet faucet is rate limited. If the airdrop fails, use the web faucet with your wallet address.</Text>
+                <Text style={T.dim}>Airdrop failed? Try the web faucet.</Text>
                 <ExtLink label="faucet.solana.com" url={FAUCET_URL} />
               </View>
             </>
@@ -368,5 +368,5 @@ const styles = StyleSheet.create({
   sessionMine: { borderColor: C.accent },
   device: { color: C.white, fontSize: 12, fontWeight: '900', fontFamily: MONO, flexShrink: 1 },
   meta: { color: C.subtle, fontSize: 11, fontFamily: MONO },
-  warn: { color: C.warn, fontSize: 10 },
+  warn: { color: C.warn, fontSize: 11 },
 });

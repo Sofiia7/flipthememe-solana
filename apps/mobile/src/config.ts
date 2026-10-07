@@ -9,7 +9,12 @@ export const MAINNET_RPCS = ['https://api.mainnet-beta.solana.com', 'https://sol
 export const CLUSTER = { id: 'solana:devnet', url: DEVNET_RPC } as const;
 export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com', icon: 'icon-512.png' };
 
+/** The public faucet: the fallback when the project's own test SOL faucet (FAUCET_API) cannot be reached. */
 export const FAUCET_URL = 'https://faucet.solana.com';
+/** The project's own devnet test SOL faucet (services/link): POST {"address"} for one drip per wallet. */
+export const FAUCET_API = 'https://sol.flipthememe.com/v1/faucet';
+/** The faucet is a quick call; a phone on a bad connection gives up after this and shows the fallback ways. */
+export const FAUCET_TIMEOUT_MS = 12_000;
 /** Live X chatter about the arena token (services/chatter, deployed as a Cloudflare Worker). */
 export const CHATTER_URL = 'https://sol.flipthememe.com/v1/chatter';
 
@@ -75,6 +80,16 @@ export const SESSION_RULES = {
   /** Below this the key cannot pay one more fee and keep its own rent-exempt minimum. */
   gasPerBet: 1_000_000n,
 } as const;
+
+/**
+ * A claim the device key pays itself costs the same network fee as a bet and must leave the key above its own
+ * rent-exempt minimum, so the key needs what one more bet needs (SESSION_RULES.gasPerBet). Below it the claim
+ * goes through the wallet instead. (This was a loose 20_000 lamports, far under the rent-exempt minimum.)
+ */
+export const CLAIM_KEY_MIN_LAMPORTS = SESSION_RULES.gasPerBet;
+
+/** A "did your call win?" reminder fires this long after the exit window of the round ends (the keeper settles within seconds). */
+export const RESULT_REMINDER_DELAY_SECS = 15;
 
 /** Bets are refused this long before the program's cutoff, so a tap never races the close. */
 export const ENTRY_GUARD_SECS = 1;

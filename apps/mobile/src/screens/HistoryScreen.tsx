@@ -8,24 +8,24 @@ import { chainNowSec, chainToLocalMs } from '../chain/useChainClock';
 import type { MyPosition } from '../chain/useMyAccount';
 import { useTokenInfo, type TokenInfo } from '../chain/useTokenInfo';
 import { changeMicroPct, formatDateTime, formatMicroPct, formatSol, roundLink, shortAddress, sol } from '../lib/format';
-import { useNow } from '../lib/usePolling';
 import { faceFromBytes } from '../face/faceModel';
 import { shareCard } from '../share/ShareCard';
 import { useApp } from '../state/AppProvider';
 import { recordFace, type HistoryEntry, type HistoryRecord } from '../state/history';
 import { C, MONO, T } from '../theme';
-import { Banner, Btn, ExtLink } from '../ui/common';
+import { Banner, Btn, ExtLink, ScreenTitle } from '../ui/common';
+import { soonestAfter, useWakeAt } from '../ui/useWakeAt';
 
 const KIND_TEXT = { won: 'WON', lost: 'LOST', refund: 'REFUND', 'full-refund': 'FULL REFUND', pending: 'IN PLAY' } as const;
 
 export function HistoryScreen() {
   const { wallet, my, myReady, history } = useApp();
-  const nowMs = useNow(1_000);
+  // No clock here: a row wakes itself at its own deadlines (see HistoryRow), so the list never redraws on a tick.
   if (!wallet.owner) {
     return (
       <View style={styles.page}>
-        <Text style={T.h1}>History</Text>
-        <Text style={T.subtle}>Connect a wallet to see every bet you placed: wins, losses and refunds.</Text>
+        <ScreenTitle text="HISTORY" />
+        <Text style={T.subtle}>Connect a wallet to see every bet you placed.</Text>
         <Btn title="CONNECT WALLET" busy={wallet.busy === 'connect'} onPress={() => void wallet.connect()} />
       </View>
     );
@@ -37,8 +37,8 @@ export function HistoryScreen() {
       contentContainerStyle={styles.page}
       ListHeaderComponent={
         <View style={styles.headBox}>
-          <Text style={T.h1}>History</Text>
-          <Text style={T.subtle}>All your positions on devnet, newest first. Payouts go to your game balance.</Text>
+          <ScreenTitle text="HISTORY" />
+          <Text style={T.subtle}>Newest first. Payouts go to your game balance.</Text>
           {my.error ? <Banner tone="warn" text={`Could not refresh: ${my.error}`} /> : null}
         </View>
       }
@@ -46,27 +46,26 @@ export function HistoryScreen() {
         myReady ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>NO CALLS YET</Text>
-            <Text style={[T.subtle, styles.emptyHint]}>No bets yet. Pick UP or DOWN in the arena.</Text>
+            <Text style={[T.subtle, styles.emptyHint]}>Pick UP or DOWN in the arena.</Text>
           </View>
         ) : (
           <Text style={T.subtle}>Loading your positions...</Text>
         )
       }
-      extraData={nowMs}
-      renderItem={({ item }) => <HistoryItem entry={item} nowMs={nowMs} />}
+      renderItem={({ item }) => <HistoryItem entry={item} />}
     />
   );
 }
 
-function HistoryItem({ entry, nowMs }: { entry: HistoryEntry<MyPosition>; nowMs: number }) {
-  return entry.kind === 'chain' ? <HistoryRow item={entry.position} nowMs={nowMs} /> : <KeptRow record={entry.record} />;
+function HistoryItem({ entry }: { entry: HistoryEntry<MyPosition> }) {
+  return entry.kind === 'chain' ? <HistoryRow item={entry.position} /> : <KeptRow record={entry.record} />;
 }
 
-/** "+0.12% (start -> exit)" or where the round stopped. */
+/** "+0.12%" from the start price to the exit price, or where the round stopped. */
 function moveText(strike: bigint, exit: bigint, final: boolean): string {
-  if (strike > 0n && exit > 0n) return `${formatMicroPct(changeMicroPct(strike, exit))} (start -> exit)`;
-  if (strike > 0n) return 'start price fixed, exit pending';
-  return final ? 'no start price (round not played)' : 'start price pending';
+  if (strike > 0n && exit > 0n) return formatMicroPct(changeMicroPct(strike, exit));
+  if (strike > 0n) return 'waiting for the result';
+  return final ? 'round not played' : 'waiting for the start price';
 }
 
 function shareResult(r: {
@@ -130,9 +129,9 @@ function ResultCard(props: {
         <Text style={[styles.side, { color: props.side === Side.Up ? C.up : C.down }]}>
           {props.side === Side.Up ? 'UP' : 'DOWN'} {sol(props.stake)}
         </Text>
-        <Text style={styles.meta}>{props.accepted !== null ? `matched ${formatSol(props.accepted)}` : 'book open'}</Text>
+        {props.accepted !== null ? <Text style={styles.meta}>{props.accepted > 0n ? `${formatSol(props.accepted)} played` : 'no match'}</Text> : null}
       </View>
-      <Text style={styles.meta}>Move: {props.move}</Text>
+      <Text style={styles.meta}>Move {props.move}</Text>
       <View style={styles.rowBetween}>
         <Text style={[styles.outcome, { color }]}>
           {KIND_TEXT[kind]}
@@ -140,14 +139,11 @@ function ResultCard(props: {
         </Text>
         <Text style={[styles.payout, { color }]}>{props.payout !== null ? `+${sol(props.payout)}` : '-'}</Text>
       </View>
-      {final ? (
-        <Text style={styles.meta}>{props.claimed ? 'Paid to your game balance' : 'Credited automatically. CLAIM appears here if it takes longer.'}</Text>
-      ) : null}
       {kind === 'refund' && props.label === 'EXPIRED' && props.payout !== null && props.payout > props.stake ? (
-        <Text style={styles.meta}>Expired: your stake back plus a share of the house stake.</Text>
+        <Text style={styles.meta}>Stake back plus a house share.</Text>
       ) : null}
       <View style={styles.links}>
-        <ExtLink label="Position on Explorer" url={explorer.address(props.positionAddress)} />
+        <ExtLink label="Explorer" url={explorer.address(props.positionAddress)} />
         <ExtLink label="Round" url={explorer.address(props.roundAddress)} />
         {final ? (
           <Text style={T.link} onPress={props.onShare}>
@@ -160,13 +156,28 @@ function ResultCard(props: {
   );
 }
 
-function HistoryRow({ item, nowMs }: { item: MyPosition; nowMs: number }) {
+function HistoryRow({ item }: { item: MyPosition }) {
   const { offsetSec, betting, my, finalSeenAt } = useApp();
+  const nowMs = Date.now();
   const nowSec = chainNowSec(offsetSec, nowMs);
   const round = item.round;
   const info = useTokenInfo(round?.account.tokenMint ?? null, round?.account.pool ?? null);
   const p = item.account;
   const side = p.side === Side.Up ? 'UP' : 'DOWN';
+  // Three things change with time alone: the book fixing, the settle deadline passing and the claim fallback
+  // opening. The row sleeps until the next of them instead of ticking every second with the whole list.
+  const ra = round?.account;
+  const raFinal = ra?.status === RoundStatus.Final;
+  const seenFinal = round ? finalSeenAt(round.address) : null;
+  const claimAt =
+    ra && raFinal && !p.claimed && seenFinal !== null ? Math.max(seenFinal, chainToLocalMs(ra.exitEnd, offsetSec)) + CLAIM_FALLBACK_SECS * 1000 : null;
+  useWakeAt(
+    soonestAfter(nowMs, [
+      claimAt,
+      ra && !raFinal ? chainToLocalMs(ra.settleDeadline, offsetSec) : null,
+      ra && ra.status === RoundStatus.Open ? chainToLocalMs(ra.strikeStart, offsetSec) : null,
+    ]),
+  );
   if (!round) {
     return (
       <View style={styles.card}>
@@ -183,9 +194,7 @@ function HistoryRow({ item, nowMs }: { item: MyPosition; nowMs: number }) {
   const result = positionResult(p, a, nowSec);
   const label = roundResultLabel(a);
   const symbol = info?.symbol ? `$${info.symbol}` : shortAddress(a.tokenMint);
-  const seenFinal = finalSeenAt(round.address);
-  const exitEndLocal = chainToLocalMs(a.exitEnd, offsetSec);
-  const canClaim = final && !p.claimed && seenFinal !== null && nowMs - Math.max(seenFinal, exitEndLocal) >= CLAIM_FALLBACK_SECS * 1000;
+  const canClaim = claimAt !== null && nowMs >= claimAt;
   const expired = !final && nowSec > Number(a.settleDeadline);
   const claimingThis = betting.claiming === item.address;
   const claimError = betting.claimError?.position === item.address ? betting.claimError.message : null;
@@ -292,7 +301,7 @@ const styles = StyleSheet.create({
   card: { borderWidth: 1, borderColor: C.border, backgroundColor: C.panel, padding: 10, gap: 4 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   title: { color: C.white, fontSize: 13, fontWeight: '900', flexShrink: 1 },
-  time: { color: C.subtle, fontSize: 10, fontFamily: MONO },
+  time: { color: C.subtle, fontSize: 11, fontFamily: MONO },
   side: { fontSize: 13, fontWeight: '900', fontFamily: MONO },
   meta: { color: C.subtle, fontSize: 11, fontFamily: MONO },
   outcome: { fontSize: 12, fontWeight: '900' },

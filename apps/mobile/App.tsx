@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { StatusBar, StyleSheet, View } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { BackHandler, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MobileWalletProvider } from '@wallet-ui/react-native-kit';
 import { APP_IDENTITY, CLUSTER } from './src/config';
@@ -23,6 +23,23 @@ function Shell() {
     loadPrefs();
     preloadSounds();
   }, []);
+
+  // Back on Wallet, History or Profile goes to the Arena; on the Arena it leaves the app as before. The handler is
+  // registered once and reads the latest state through refs, so it is never re-registered behind another one. A
+  // result on screen has its own Back handler (it closes the result): this one steps aside for it. The sheets are
+  // Modals and take Back themselves.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const resultShown = useRef(false);
+  resultShown.current = toasts.length > 0;
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (resultShown.current || tabRef.current === 'arena') return false;
+      setTab('arena');
+      return true;
+    });
+    return () => subscription.remove();
+  }, [setTab]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>

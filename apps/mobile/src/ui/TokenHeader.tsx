@@ -1,30 +1,48 @@
 import { useState } from 'react';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, PixelRatio, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import type { Address } from '@solana/kit';
 import { explorer } from '../config';
 import { useTokenInfo } from '../chain/useTokenInfo';
 import { formatUsdCompact, poolAgeLabel, shortAddress } from '../lib/format';
-import { C, MONO } from '../theme';
+import { C, FONT_CAP, MONO } from '../theme';
 
-/** The arena token: logo, ticker and one line of signals. Tap opens the price source (the mainnet pool). */
+/** Width of one character of the 11sp monospace meta line, in dp at the default font size. */
+const META_CHAR_W = 6.7;
+
+/** "1 trade in 5 min", "23 trades in 5 min". */
+function tradesText(count: number): string {
+  return `${count} ${count === 1 ? 'trade' : 'trades'} in 5 min`;
+}
+
+/**
+ * The arena token: logo, ticker and one quiet line of signals (pool age, trades in 5 min, liquidity when
+ * there is room). Tap opens the price source (the mainnet pool).
+ */
 export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool: Address | null; nowMs: number }) {
   const info = useTokenInfo(mint, pool);
   const [imageFailed, setImageFailed] = useState(false);
+  const [metaWidth, setMetaWidth] = useState(0);
+  const onTextsLayout = (e: LayoutChangeEvent) => setMetaWidth(Math.round(e.nativeEvent.layout.width));
   if (!mint) {
     return (
       <View style={styles.row}>
         <View style={[styles.logo, styles.logoEmpty]}>
           <Text style={styles.logoLetter}>?</Text>
         </View>
-        <Text style={styles.waiting}>Picking the hottest coin...</Text>
+        <Text style={styles.waiting} maxFontSizeMultiplier={FONT_CAP}>
+          Picking the hottest coin...
+        </Text>
       </View>
     );
   }
   const symbol = info?.symbol ?? shortAddress(mint);
   const poolAge = poolAgeLabel(info?.pairCreatedAt, nowMs);
-  const signals = [poolAge, info?.liquidityUsd != null ? `liq ${formatUsdCompact(info.liquidityUsd)}` : null, info?.txnsM5 != null ? `${info.txnsM5} tx/5m` : null]
-    .filter(Boolean)
-    .join(' · ');
+  const trades = info?.txnsM5 != null ? tradesText(info.txnsM5) : null;
+  const signals = [poolAge, trades].filter(Boolean).join(' · ');
+  // Liquidity is the first signal to go: it is added only when the whole line fits at this font size.
+  const withLiquidity = info?.liquidityUsd != null ? `${signals}${signals ? ' · ' : ''}liq ${formatUsdCompact(info.liquidityUsd)}` : signals;
+  const room = metaWidth >= withLiquidity.length * META_CHAR_W * Math.max(1, Math.min(FONT_CAP, PixelRatio.getFontScale()));
+  const meta = room ? withLiquidity : signals;
   return (
     <Pressable
       style={styles.row}
@@ -39,22 +57,21 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
           <Text style={styles.logoLetter}>{symbol.slice(0, 1).toUpperCase()}</Text>
         </View>
       )}
-      <View style={styles.texts}>
+      <View style={styles.texts} onLayout={onTextsLayout}>
         <View style={styles.titleRow}>
-          <Text style={styles.symbol} numberOfLines={1}>
+          <Text style={styles.symbol} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             ${symbol}
           </Text>
           {info?.name ? (
-            <Text style={styles.name} numberOfLines={1}>
+            <Text style={styles.name} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
               {info.name}
             </Text>
           ) : null}
         </View>
-        <Text style={styles.meta} numberOfLines={1}>
-          {signals || 'busy pump.fun coin'}
+        <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
+          {meta || 'busy pump.fun coin'}
         </Text>
       </View>
-      <Text style={styles.badge}>ARENA{'\n'}TOKEN</Text>
     </Pressable>
   );
 }
@@ -68,18 +85,7 @@ const styles = StyleSheet.create({
   texts: { flex: 1, gap: 1 },
   titleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   symbol: { color: C.white, fontSize: 24, fontWeight: '900', flexShrink: 1 },
-  name: { color: C.subtle, fontSize: 11, flexShrink: 1 },
-  meta: { color: C.neonYellow, fontSize: 11, fontWeight: '800', fontFamily: MONO },
-  badge: {
-    color: C.neonPink,
-    fontSize: 9,
-    lineHeight: 11,
-    fontWeight: '900',
-    textAlign: 'center',
-    borderWidth: 1,
-    borderColor: C.neonPink,
-    paddingHorizontal: 5,
-    paddingVertical: 3,
-    fontFamily: MONO,
-  },
+  name: { color: C.subtle, fontSize: 12, flexShrink: 1 },
+  // Context, not an action: quiet next to the money and the round stage.
+  meta: { color: C.subtle, fontSize: 11, fontWeight: '700', fontFamily: MONO },
 });

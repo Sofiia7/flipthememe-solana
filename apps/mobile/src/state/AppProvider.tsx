@@ -23,6 +23,9 @@ import { useWalletActions, type WalletActions } from '../wallet/useWalletActions
 import { awaySummary, type AwayItem, type AwaySummary } from './away';
 import { challengeActive, createChallengeStore, type Challenge } from './challenge';
 import { HISTORY_CAP, createHistoryStore, mergeHistory, reconcileHistory, type HistoryEntry, type HistoryRecord } from './history';
+import { collectInPlay } from './reminders';
+import { EMPTY_LEDGER, scoreOf, updateLedger, type DuelLedger, type DuelScore } from './rivalScore';
+import { useAskPermissionAfterFirstBet, useResultReminders } from './useResultReminders';
 
 export { sessionStatusOf, type SessionStatus } from '../wallet/sessionList';
 
@@ -39,6 +42,9 @@ export type Toast = {
   /** Credited to the game balance by this round (lamports). */
   payout: bigint;
   tokenMint: string;
+  /** The round's start price and its exit price (the price scale of the pool): the move that decided it. */
+  strike: bigint;
+  exit: bigint;
   label: ResultLabel;
   title: string;
   body: string;
@@ -79,6 +85,8 @@ type AppValue = {
   /** A friend's challenge from the last round link that opened the app: kept a week, until OK. */
   challenge: Challenge | null;
   clearChallenge: () => void;
+  /** My score against the friend of the challenge (rounds where we called opposite sides, seen since the app opened); null without one. */
+  rivalScore: DuelScore | null;
   refreshAll: () => void;
 };
 
@@ -104,7 +112,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // The arena polls fast and the price feeds run only while the Arena tab is on screen.
   const [tab, setTab] = useState<Tab>('arena');
   const onArena = tab === 'arena';
-  const arena = useArena(rpc, onArena);
+  const arenaRead = useArena(rpc, onArena);
+  // The reads come back as a new object on every render; the context gets one object per read.
+  const { config: arenaConfig, rounds: arenaRounds, positions: arenaPositions, updatedAt: arenaUpdatedAt, error: arenaError, refresh: refreshArena } = arenaRead;
+  const arena = useMemo(
+    () => ({ config: arenaConfig, rounds: arenaRounds, positions: arenaPositions, updatedAt: arenaUpdatedAt, error: arenaError, refresh: refreshArena }),
+    [arenaConfig, arenaRounds, arenaPositions, arenaUpdatedAt, arenaError, refreshArena],
+  );
 
   const [sessionKey, setSessionKey] = useState<SessionKey | null>(null);
   const [sessionKeyError, setSessionKeyError] = useState<string | null>(null);
@@ -133,7 +147,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const wallet = useWalletActions({ rpc, sessionKey, chainNowSec: chainNow, onChanged: refreshAll, betInFlight });
   const owner = wallet.owner;
 
-  const myRaw = useMyAccount(rpc, owner, sessionKey?.address ?? null);
+  const myRead = useMyAccount(rpc, owner, sessionKey?.address ?? null);
+  const {
+    owner: myOwner,
+    vaultAddress: myVaultAddress,
+    vault: myVault,
+    sessionAddress: mySessionAddress,
+    session: mySession,
+    keyLamports: myKeyLamports,
+    walletLamports: myWalletLamports,
+    positions: myPositions,
+    updatedAt: myUpdatedAt,
+    error: myError,
+    refresh: refreshMy,
+  } = myRead;
+  const myRaw = useMemo(
+    () => ({
+      owner: myOwner,
+      vaultAddress: myVaultAddress,
+      vault: myVault,
+      sessionAddress: mySessionAddress,
+      session: mySession,
+      keyLamports: myKeyLamports,
+      walletLamports: myWalletLamports,
+      positions: myPositions,
+      updatedAt: myUpdatedAt,
+      error: myError,
+      refresh: refreshMy,
+    }),
+    [myOwner, myVaultAddress, myVault, mySessionAddress, mySession, myKeyLamports, myWalletLamports, myPositions, myUpdatedAt, myError, refreshMy],
+  );
   const myReady = owner !== null && myRaw.owner === owner && myRaw.updatedAt !== null;
   refreshRef.current = () => {
     arena.refresh();
@@ -371,41 +414,106 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void challengeStore.clear().catch(() => undefined);
   }, []);
 
-  const my = myReady ? myRaw : { ...myRaw, positions: [], vault: null, session: null, keyLamports: null, walletLamports: null };
+  // Until the data belongs to the connected wallet the screens see an empty account.
+  const my = useMemo(
+    () => (myReady ? myRaw : { ...myRaw, positions: NO_POSITIONS, vault: null, session: null, keyLamports: null, walletLamports: null }),
+    [myReady, myRaw],
+  );
   const chainPositions = myReady ? myRaw.positions : NO_POSITIONS;
   const keptRecords = kept && kept.owner === owner ? kept.records : NO_RECORDS;
   const history = useMemo(() => mergeHistory(chainPositions, keptRecords), [chainPositions, keptRecords]);
+  const pendingOfOwner = pending && owner && pending.owner === owner ? pending : null;
+  // A challenge shows for a week; it is read against the clock whenever the arena data moves (every few seconds).
+  const activeChallenge = useMemo(
+    () => (challenge && challengeActive(challenge, Date.now()) ? challenge : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [challenge, arena],
+  );
 
-  const value: AppValue = {
-    rpc,
-    offsetSec,
-    chainNow,
-    arena,
-    my,
-    myReady,
-    history,
-    wallet,
-    sessionKey,
-    sessionKeyError,
-    face,
-    setFace,
-    betting,
-    pending: pending && owner && pending.owner === owner ? pending : null,
-    pendingNote,
-    clearPendingNote,
-    feed,
-    myFeed,
-    toasts,
-    dismissToast,
-    away,
-    ackAway,
-    finalSeenAt,
-    tab,
-    setTab,
-    challenge: challenge && challengeActive(challenge, Date.now()) ? challenge : null,
-    clearChallenge,
-    refreshAll,
-  };
+  // The score against the friend of the challenge: the arena only reads the last few rounds, so the
+  // duels seen since the app opened are kept per wallet and friend (in memory, state/rivalScore.ts).
+  const duels = useRef<{ key: string; ledger: DuelLedger; score: DuelScore | null }>({ key: '', ledger: EMPTY_LEDGER, score: null });
+  const rivalScore = useMemo(() => {
+    const by = activeChallenge?.by ?? null;
+    if (!owner || !by || by === owner) return null;
+    const key = `${owner}:${by}`;
+    if (duels.current.key !== key) duels.current = { key, ledger: EMPTY_LEDGER, score: null };
+    const next = updateLedger(duels.current.ledger, arena.rounds, arena.positions, owner, by);
+    if (next !== duels.current.ledger) duels.current = { key, ledger: next, score: scoreOf(next) };
+    return duels.current.score;
+  }, [owner, activeChallenge, arena.rounds, arena.positions]);
+
+  // Local "did your call win?" notifications for my rounds in play, when the app goes to the background.
+  const inPlay = useMemo(
+    () => collectInPlay({ positions: chainPositions, pending: pendingOfOwner, rounds: arena.rounds }),
+    [chainPositions, pendingOfOwner, arena.rounds],
+  );
+  useResultReminders(inPlay, offsetSec);
+  useAskPermissionAfterFirstBet(betting.bet.phase);
+
+  const value = useMemo<AppValue>(
+    () => ({
+      rpc,
+      offsetSec,
+      chainNow,
+      arena,
+      my,
+      myReady,
+      history,
+      wallet,
+      sessionKey,
+      sessionKeyError,
+      face,
+      setFace,
+      betting,
+      pending: pendingOfOwner,
+      pendingNote,
+      clearPendingNote,
+      feed,
+      myFeed,
+      toasts,
+      dismissToast,
+      away,
+      ackAway,
+      finalSeenAt,
+      tab,
+      setTab,
+      challenge: activeChallenge,
+      clearChallenge,
+      rivalScore,
+      refreshAll,
+    }),
+    [
+      rpc,
+      offsetSec,
+      chainNow,
+      arena,
+      my,
+      myReady,
+      history,
+      wallet,
+      sessionKey,
+      sessionKeyError,
+      face,
+      setFace,
+      betting,
+      pendingOfOwner,
+      pendingNote,
+      clearPendingNote,
+      feed,
+      myFeed,
+      toasts,
+      dismissToast,
+      away,
+      ackAway,
+      finalSeenAt,
+      tab,
+      activeChallenge,
+      clearChallenge,
+      rivalScore,
+      refreshAll,
+    ],
+  );
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
@@ -438,7 +546,7 @@ function resultToast(
   const amount = r.payout ?? 0n;
   const symbol = peekTokenInfo(a.tokenMint)?.symbol;
   const token = symbol ? `$${symbol}` : 'a trending meme coin';
-  const base = { id: `${round.id}`, roundId: round.id, side, stake, payout: amount, tokenMint: a.tokenMint, label };
+  const base = { id: `${round.id}`, roundId: round.id, side, stake, payout: amount, tokenMint: a.tokenMint, strike: a.strikePrice, exit: a.exitPrice, label };
   if (r.kind === 'won') {
     return {
       ...base,

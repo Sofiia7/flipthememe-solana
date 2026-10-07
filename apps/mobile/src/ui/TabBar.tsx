@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Tab } from '../state/AppProvider';
-import { C } from '../theme';
+import { C, FONT_CAP } from '../theme';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'arena', label: 'ARENA' },
@@ -23,7 +23,9 @@ export function TabBar({ tab, onChange, bottomInset }: { tab: Tab; onChange: (ta
             style={styles.item}
           >
             <View style={[styles.marker, active && styles.markerActive]} />
-            <Text style={[styles.label, active && styles.labelActive]}>{t.label}</Text>
+            <Text style={[styles.label, active && styles.labelActive]} maxFontSizeMultiplier={FONT_CAP}>
+              {t.label}
+            </Text>
           </Pressable>
         );
       })}
@@ -36,6 +38,7 @@ const styles = StyleSheet.create({
   item: { flex: 1, alignItems: 'center', paddingTop: 6, paddingBottom: 6, gap: 5 },
   marker: { width: 22, height: 3, backgroundColor: 'transparent' },
   markerActive: { backgroundColor: C.accent },
+  // C.dim is 5.8:1 on this bar, above the 4.5:1 AA line for small text.
   label: { color: C.dim, fontSize: 11, fontWeight: '900', letterSpacing: 0.6 },
   labelActive: { color: C.white },
 });

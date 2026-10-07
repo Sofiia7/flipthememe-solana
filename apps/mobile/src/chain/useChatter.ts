@@ -1,11 +1,13 @@
 // Live X chatter about the arena token, served by the ftm-chatter Worker (services/chatter).
 // Every item is a real tweet; each one is shown once.
 import { useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { CHATTER_URL } from '../config';
 import { countRequest } from '../lib/requestLog';
 import { appInForeground } from '../lib/usePolling';
 
-const POLL_MS = 45_000;
+/** Tweets change slowly and each bubble stays up for seconds: one read every 90 s is plenty (and a lot less radio and battery). */
+const POLL_MS = 90_000;
 /** On the first load only the newest few tweets start the rain. */
 const FIRST_BATCH = 3;
 
@@ -21,7 +23,11 @@ export type ChatterItem = {
   mood: ChatterMood;
 };
 
-/** Tweets not shown yet: `next` is the oldest of them, `drop()` removes it once it is on screen. */
+/**
+ * Tweets not shown yet: `next` is the oldest of them, `drop()` removes it once it is on screen. The lane lives
+ * only on the Arena screen, so reads run only while it is mounted; and only while the app is on screen: the
+ * timer is stopped in the background and a read follows at once on the way back.
+ */
 export function useChatter(symbol: string | null, mint: string | null, enabled: boolean) {
   const [queue, setQueue] = useState<ChatterItem[]>([]);
   const seen = useRef(new Set<string>());
@@ -37,7 +43,6 @@ export function useChatter(symbol: string | null, mint: string | null, enabled: 
     if (!enabled || !symbol) return;
     let cancelled = false;
     const load = async () => {
-      // The timer keeps firing in the background; nothing is fetched until the app is on screen again.
       if (!appInForeground()) return;
       try {
         countRequest('http', 'chatter');
@@ -56,11 +61,31 @@ export function useChatter(symbol: string | null, mint: string | null, enabled: 
         // Chatter is decoration: a failed poll just means no new bubbles.
       }
     };
-    void load();
-    const timer = setInterval(load, POLL_MS);
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer === null) timer = setInterval(load, POLL_MS);
+    };
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+    if (appInForeground()) {
+      void load();
+      start();
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void load();
+        stop();
+        start();
+      } else {
+        stop();
+      }
+    });
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
+      subscription.remove();
     };
   }, [symbol, mint, enabled]);
 

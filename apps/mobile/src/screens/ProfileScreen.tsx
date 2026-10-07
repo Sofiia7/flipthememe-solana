@@ -23,7 +23,7 @@ import { playSound } from '../sound/sound';
 import { useApp } from '../state/AppProvider';
 import { accuracyOf, historyStats, streakOf, streakWords } from '../state/history';
 import { C, MONO, T } from '../theme';
-import { Btn, KV } from '../ui/common';
+import { Btn, KV, ScreenTitle } from '../ui/common';
 
 const FIELDS: { field: FaceField; title: string; names: readonly string[] }[] = [
   { field: 'skin', title: 'SKIN', names: SKIN_NAMES },
@@ -63,7 +63,7 @@ export function ProfileScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <Text style={T.h1}>Profile</Text>
+      <ScreenTitle text="PROFILE" />
       <View style={styles.hero}>
         <PixelFace face={face} size={112} />
         <View style={styles.heroText}>
@@ -110,7 +110,7 @@ export function ProfileScreen() {
           </View>
         </View>
       ))}
-      <Text style={T.dim}>Saved on this phone. Heads only, crisp pixels; the same face shows in the arena and in your results.</Text>
+      <Text style={T.dim}>Saved on this phone. Shows in the arena and in your results.</Text>
 
       <View style={T.panel}>
         <Text style={T.label}>STATS (TEST SOL)</Text>
@@ -124,7 +124,7 @@ export function ProfileScreen() {
               <KV k="Accuracy" v={accuracy === null ? '-' : `${Math.round(accuracy * 100)}%`} />
               <KV k="Best win streak" v={streak.best > 0 ? `${streak.best}` : '-'} tone="up" />
               <KV k="Current streak" v={streakWords(streak)} tone={streak.kind === 'win' ? 'up' : streak.kind === 'loss' ? 'down' : undefined} />
-              <KV k="Net (finished rounds)" v={`${formatSol(stats.net, { sign: true })} SOL`} tone={stats.net >= 0n ? 'up' : 'down'} />
+              <KV k="Net" v={`${formatSol(stats.net, { sign: true })} SOL`} tone={stats.net >= 0n ? 'up' : 'down'} />
             </>
           ) : (
             <Text style={T.subtle}>Loading...</Text>
@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
   hero: { flexDirection: 'row', gap: 14, alignItems: 'center' },
   heroText: { flex: 1, gap: 6 },
   name: { color: C.white, fontFamily: MONO, fontWeight: '900', fontSize: 15 },
-  addressLine: { color: C.dim, fontFamily: MONO, fontSize: 10 },
+  addressLine: { color: C.dim, fontFamily: MONO, fontSize: 11 },
   seekerBadge: { alignSelf: 'flex-start', color: C.upInk, backgroundColor: C.neonGreen, fontFamily: MONO, fontWeight: '900', fontSize: 11, paddingHorizontal: 8, paddingVertical: 3 },
   field: { gap: 6 },
   options: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

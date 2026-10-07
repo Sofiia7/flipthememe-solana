@@ -63,13 +63,24 @@ export function topUpBill(input: {
   return { plan, upTo: !input.known };
 }
 
+/**
+ * The sheet's bill in two lines: what goes into the game, and what the network and the setup take (the device
+ * key's fees, the rent of new accounts, the network fee). Together with the total they add up to plan.total.
+ */
+export function billLines(plan: TopUpPlan): [label: string, lamports: bigint][] {
+  return [
+    ['Deposit', plan.deposit],
+    ['Network & setup', plan.keyFees + plan.setup + plan.networkFee],
+  ];
+}
+
 /** Lamports the wallet must hold for this plan: the deposit, the key's fees and the margin above. */
 export function walletNeed(plan: TopUpPlan): bigint {
   return plan.deposit + plan.keyFees + TOP_UP_OVERHEAD;
 }
 
 export function walletTooPoor(walletLamports: bigint, need: bigint): Error {
-  return new Error(`The wallet has ${sol(walletLamports)} on devnet; this top up needs about ${sol(need)}. Use Airdrop 1 devnet SOL first.`);
+  return new Error(`The wallet has ${sol(walletLamports)} on devnet; this top up needs about ${sol(need)}. Get test SOL first.`);
 }
 
 /** The vault from its account bytes, or null when there is none or it cannot be read. */
