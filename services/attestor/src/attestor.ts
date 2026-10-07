@@ -14,9 +14,17 @@
  * refresh, whichever comes first.
  *
  * attest(): check.ts on the transaction and the round's window (a set_strike only from strike_end
- * until exit_start), the round fresh from devnet, the samples (samples.ts: a corroborated outage is
- * signed, otherwise the keeper's samples must be a fair share of the window and agree with the
- * attestor's own), then the Ed25519 signature over the message bytes.
+ * until exit_start), the round fresh from devnet, the lock on the (round, window) pair, the samples
+ * (samples.ts: a corroborated outage is signed, otherwise the keeper's samples must be a fair share
+ * of the window and agree with the attestor's own), then the Ed25519 signature over the message
+ * bytes.
+ *
+ * The lock (audit of 2026-10-07, H3): the first signature for a (round, strike|exit) pair stores a
+ * SHA-256 of the sample set it priced. The same set may be signed again (a retry after a timeout,
+ * a new blockhash), a different set is refused as `already_signed`, so a keeper key that has been
+ * stolen cannot collect signatures for several subsets of its readings and send the one that suits
+ * it. Every attempt that reaches the samples counts against ATTEST_MAX_TRIES per pair
+ * (`too_many_attempts`). Both live in SQLite (table attest_windows), so an eviction forgets nothing.
  */
 import {
   PROGRAM_ID,
@@ -33,6 +41,7 @@ import {
   type ConfigAccount,
   type OracleConfigAccount,
   type PoolRef,
+  type PriceSample,
   type RoundAccount,
 } from '@flipthememe/client';
 import { getBase58Decoder, getBase64Encoder, type Address } from '@solana/kit';
@@ -73,8 +82,21 @@ export const ROUNDS_BACK = 4n;
 const MIN_ALARM_GAP_MS = 100;
 /** The cron ping re-arms an alarm that should have fired this long ago. */
 const STALE_ALARM_MS = 60_000;
-/** Per endpoint. The keeper gives an attest call 5 s, which must cover one devnet read and a fallback. */
+/** Per endpoint (the sampler's reads and the refresh). */
 const RPC_TIMEOUT_MS = 3_000;
+/**
+ * Every devnet read of one attest call together, however many endpoints are tried: the keeper gives
+ * an attest call 8 s, and 6 s leaves it room for the checks and the round trip. With a keyed
+ * DEVNET_RPC in front of OnFinality and the public endpoint three tries of 3 s would be 9 s.
+ */
+export const ATTEST_DEVNET_BUDGET_MS = 6_000;
+/** Attempts per (round, window) that reach the samples before the attestor stops answering them. */
+export const DEFAULT_MAX_TRIES = 6;
+/**
+ * The lock on a signed window is kept this long. A round can be priced only until its settle
+ * deadline, about 12 minutes after its strike; 6 hours is far beyond that and still a few rows.
+ */
+export const ATTEST_RETAIN_MS = 6 * 60 * 60 * 1000;
 const LOG_EVERY_MS = 60_000;
 /** Attest calls kept for the health report (in memory: a restart of the object clears them). */
 const RECENT_ATTESTS = 20;
@@ -94,6 +116,7 @@ export type Alarms = { getAlarm(): Promise<number | null>; setAlarm(scheduledTim
 export type AttestorEnv = {
   ATTESTOR_SECRET?: string;
   ATTEST_TOLERANCE_BPS?: string;
+  ATTEST_MAX_TRIES?: string;
   MAINNET_RPC?: string;
   DEVNET_RPC?: string;
 };
@@ -106,6 +129,8 @@ export type CoreOptions = {
   now?: () => number;
   devnet?: Failover;
   mainnet?: Failover;
+  /** Time for all devnet reads of one attest call; ATTEST_DEVNET_BUDGET_MS unless a test shortens it. */
+  devnetBudgetMs?: number;
   log?: (fields: LogFields) => void;
 };
 
@@ -146,6 +171,23 @@ export function parseTolerance(raw: string | undefined): number {
   return Number(text);
 }
 
+/** ATTEST_MAX_TRIES: a whole number from 1 to 100; unset means the default. */
+export function parseMaxTries(raw: string | undefined): number {
+  const text = raw?.trim();
+  if (!text) return DEFAULT_MAX_TRIES;
+  if (!/^\d{1,3}$/.test(text) || Number(text) < 1 || Number(text) > 100) {
+    throw new Error('ATTEST_MAX_TRIES must be a whole number from 1 to 100');
+  }
+  return Number(text);
+}
+
+/** SHA-256, as hex, of the sample list a signature would fix (slot and price of each, in order). */
+async function samplesDigest(samples: readonly PriceSample[]): Promise<string> {
+  const text = samples.map((s) => `${s.slot}:${s.price}`).join(',');
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** The account's data when the FlipTheMeme program owns it. */
 function programData(account: Base64Account | undefined): Uint8Array | null {
   return account && account.owner === PROGRAM_ID ? new Uint8Array(base64.encode(account.data[0])) : null;
@@ -163,6 +205,8 @@ export class AttestorCore {
   private readonly mainnet: Failover;
   private readonly log: (fields: LogFields) => void;
   private readonly tolerance: { bps: number } | { error: string };
+  private readonly maxTries: { tries: number } | { error: string };
+  private readonly devnetBudgetMs: number;
 
   private keyPromise: Promise<AttestorKey> | null = null;
   private pdas: Promise<ProgramPdas> | null = null;
@@ -209,10 +253,16 @@ export class AttestorCore {
       opts.mainnet ??
       new Failover(endpointsFor([{ url: opts.env.MAINNET_RPC, secret: 'MAINNET_RPC' }, ...publicUrls(MAINNET_RPCS)], RPC_TIMEOUT_MS), this.now);
     this.log = opts.log ?? logLine;
+    this.devnetBudgetMs = opts.devnetBudgetMs ?? ATTEST_DEVNET_BUDGET_MS;
     try {
       this.tolerance = { bps: parseTolerance(opts.env.ATTEST_TOLERANCE_BPS) };
     } catch (error) {
       this.tolerance = { error: describe(error) };
+    }
+    try {
+      this.maxTries = { tries: parseMaxTries(opts.env.ATTEST_MAX_TRIES) };
+    } catch (error) {
+      this.maxTries = { error: describe(error) };
     }
     // One row per read. The key serves the attest query (one pool, a time range); a read that
     // served round N's exit and round N+1's strike is stored once, with both round ids.
@@ -225,6 +275,24 @@ export class AttestorCore {
       exit_round INTEGER,
       PRIMARY KEY (pool, at_ms)
     ) WITHOUT ROWID`);
+    // One row per (round, window): the attempts that reached the samples and, once a signature went
+    // out, the digest of the sample set it priced (see the lock in the header).
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS attest_windows (
+      round INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      tries INTEGER NOT NULL,
+      samples_hash TEXT,
+      signed_at_ms INTEGER,
+      updated_ms INTEGER NOT NULL,
+      PRIMARY KEY (round, kind)
+    ) WITHOUT ROWID`);
+  }
+
+  /** The first configuration error (a var that is not usable), or null. */
+  private configError(): string | null {
+    if ('error' in this.tolerance) return this.tolerance.error;
+    if ('error' in this.maxTries) return this.maxTries.error;
+    return null;
   }
 
   // ---- the sampling loop ----------------------------------------------------------------------
@@ -393,6 +461,7 @@ export class AttestorCore {
 
   private prune(now: number): void {
     this.sql.exec('DELETE FROM samples WHERE at_ms < ?', now - RETAIN_MS);
+    this.sql.exec('DELETE FROM attest_windows WHERE updated_ms < ?', now - ATTEST_RETAIN_MS);
     this.prunedAt = now;
   }
 
@@ -432,8 +501,11 @@ export class AttestorCore {
     const address = request.accounts[ROUND_ACCOUNT_INDEX] as Address;
     let accounts: readonly unknown[];
     try {
-      ({ value: accounts } = await this.devnet.call('getMultipleAccounts', (rpc) =>
-        rpc.getMultipleAccounts([address], { encoding: 'base64', commitment: 'confirmed' }).send(),
+      // One budget for every endpoint tried: the keeper's own timeout for this call is longer.
+      ({ value: accounts } = await this.devnet.call(
+        'getMultipleAccounts',
+        (rpc, abortSignal) => rpc.getMultipleAccounts([address], { encoding: 'base64', commitment: 'confirmed' }).send({ abortSignal }),
+        { budgetMs: this.devnetBudgetMs },
       ));
     } catch (error) {
       this.note('devnet', error);
@@ -451,6 +523,56 @@ export class AttestorCore {
       throw new Refusal('round_not_found', `account ${address} holds round ${round.id} but is not its PDA`);
     }
     return round;
+  }
+
+  /**
+   * The lock on a (round, window) pair, taken after the round and its window are checked and before
+   * the samples are looked at. Throws `already_signed` when a signature for a different sample set
+   * is on record, `too_many_attempts` when the pair has used up ATTEST_MAX_TRIES without one. The
+   * same set as the one signed passes without counting (a retry); every other attempt is counted
+   * here, refused or not. Synchronous, and the caller signs without an await in between, so two
+   * calls in flight cannot both get a signature for different sets.
+   */
+  private enterWindow(round: bigint, kind: WindowKind, digest: string, maxTries: number): void {
+    const row = this.sql
+      .exec('SELECT tries, samples_hash FROM attest_windows WHERE round = ? AND kind = ?', Number(round), kind)
+      .toArray()[0] as { tries: number; samples_hash: string | null } | undefined;
+    if (row?.samples_hash) {
+      if (row.samples_hash === digest) return;
+      throw new Refusal(
+        'already_signed',
+        `round ${round}: a different set of samples was already signed for the ${kind} window; only that set can be signed again`,
+        { tries: row.tries },
+      );
+    }
+    if (row && row.tries >= maxTries) {
+      throw new Refusal(
+        'too_many_attempts',
+        `round ${round}: ${row.tries} attempts were made for the ${kind} window and no more are answered (ATTEST_MAX_TRIES is ${maxTries})`,
+        { tries: row.tries },
+      );
+    }
+    this.sql.exec(
+      `INSERT INTO attest_windows (round, kind, tries, samples_hash, signed_at_ms, updated_ms) VALUES (?, ?, 1, NULL, NULL, ?)
+       ON CONFLICT (round, kind) DO UPDATE SET tries = tries + 1, updated_ms = excluded.updated_ms`,
+      Number(round),
+      kind,
+      this.now(),
+    );
+  }
+
+  /** Records that the pair's signature goes out for this sample set. */
+  private lockSigned(round: bigint, kind: WindowKind, digest: string): void {
+    const now = this.now();
+    this.sql.exec(
+      'UPDATE attest_windows SET samples_hash = ?, signed_at_ms = ?, updated_ms = ? WHERE round = ? AND kind = ? AND (samples_hash IS NULL OR samples_hash = ?)',
+      digest,
+      now,
+      now,
+      Number(round),
+      kind,
+      digest,
+    );
   }
 
   /** Keeps the call for the health report. */
@@ -487,7 +609,11 @@ export class AttestorCore {
       return result;
     };
 
-    if ('error' in this.tolerance) return finish(failure(503, 'not_configured', this.tolerance.error), 'not_configured');
+    if (!('bps' in this.tolerance) || !('tries' in this.maxTries)) {
+      return finish(failure(503, 'not_configured', this.configError() ?? 'not configured'), 'not_configured');
+    }
+    const { bps: toleranceBps } = this.tolerance;
+    const { tries: maxTries } = this.maxTries;
     let key: AttestorKey;
     try {
       key = await this.key();
@@ -499,16 +625,24 @@ export class AttestorCore {
 
     try {
       request = parseAttestRequest(wire, key.address, await this.programPdas());
+      const kind: WindowKind = request.instruction === 'set_strike' ? 'strike' : 'exit';
+      const digest = await samplesDigest(request.samples);
       round = await this.findRound(request);
       checkRound(request.instruction, round, this.now());
+      this.enterWindow(round.id, kind, digest, maxTries);
       const { messageBytes } = request;
-      const signed = async (): Promise<Result> => ({ status: 200, body: { signature: base58.decode(await key.sign(messageBytes)), attestor: key.address } });
+      const roundId = round.id;
+      // The lock is written before the first await of the signing, in the same turn as enterWindow.
+      const signed = async (): Promise<Result> => {
+        this.lockSigned(roundId, kind, digest);
+        return { status: 200, body: { signature: base58.decode(await key.sign(messageBytes)), attestor: key.address } };
+      };
       if (request.instruction === 'set_strike' && request.samples.length === 0 && !isActivated(round.rawUp, round.rawDown, round.minBank)) {
         // No matched bank: the program ends the round as NotActivated and returns every stake
         // without reading the samples or the attestor; co-signing it fixes no price.
         return finish(await signed(), 'signed', { verdict: 'not_activated', feePayer: request.feePayer });
       }
-      const window = windowOf(round, request.instruction === 'set_strike' ? 'strike' : 'exit');
+      const window = windowOf(round, kind);
       const own = this.ownSamples(window);
       if (isCorroboratedOutage(request.samples.length, own, window)) {
         // Fewer than 5 keeper samples and fewer than 5 attestor reads inside the window: both sides
@@ -522,7 +656,7 @@ export class AttestorCore {
           feePayer: request.feePayer,
         });
       }
-      const agreement = compareSamples(request.samples, own, window, this.tolerance.bps);
+      const agreement = compareSamples(request.samples, own, window, toleranceBps);
       const verdict = {
         verdict: 'agree',
         keeperMean: agreement.keeperMean,
@@ -564,7 +698,7 @@ export class AttestorCore {
     } catch (error) {
       keyError = describe(error);
     }
-    const configError = 'error' in this.tolerance ? this.tolerance.error : null;
+    const configError = this.configError();
     const totals = this.sql
       .exec('SELECT COUNT(*) AS samples, COUNT(DISTINCT strike_round) AS strikes, COUNT(DISTINCT exit_round) AS exits, MAX(at_ms) AS last FROM samples')
       .toArray()[0] as { samples: number; strikes: number; exits: number; last: number | null };
@@ -582,6 +716,7 @@ export class AttestorCore {
       ...(keyError ? { keyError } : {}),
       ...(configError ? { configError } : {}),
       toleranceBps: 'bps' in this.tolerance ? this.tolerance.bps : null,
+      maxTries: 'tries' in this.maxTries ? this.maxTries.tries : null,
       sampler: {
         lastSampleAt: iso(this.lastSample?.atMs ?? totals.last),
         lastSampleSlot: this.lastSample ? this.lastSample.slot.toString() : null,

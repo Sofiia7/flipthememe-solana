@@ -1,7 +1,7 @@
 // FlipTheMeme price attestor: a second signer for set_strike and settle, apart from the keeper.
 //
 //   POST /v1/attest     {"tx": "<base64 wire transaction>"}  ->  {"signature", "attestor"} or 422 {"error", "reason"}
-//   GET  /v1/attestor   the attestor's public key and the sampler's health
+//   GET  /v1/attestor   the attestor's public key and the sampler's health (edge-cached for 20 s)
 //
 // One Durable Object ("attestor") samples the pools and holds the samples in SQLite; the Worker
 // only routes (http.ts). A cron trigger pings the object every minute so its alarm loop restarts
@@ -44,7 +44,10 @@ export class Attestor extends DurableObject<Env> {
 const attestor = (env: Env) => env.ATTESTOR.getByName('attestor');
 
 export default {
-  fetch: (request: Request, env: Env) => handle(request, attestor(env), env),
+  // caches.default serves the 20 s edge cache of GET /v1/attestor; it does nothing on workers.dev
+  // hosts, only on the custom domain route (sol.flipthememe.com/v1/attestor).
+  fetch: (request: Request, env: Env, ctx: ExecutionContext) =>
+    handle(request, attestor(env), env, { cache: caches.default, waitUntil: (promise) => ctx.waitUntil(promise) }),
   scheduled: (_controller: ScheduledController, env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(attestor(env).ping());
   },

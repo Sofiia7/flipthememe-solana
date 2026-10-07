@@ -6,7 +6,18 @@ import { describe, test } from 'node:test';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { PROGRAM_ID, RoundStatus, setStrike, settle, type PriceSample, type RoundAccount } from '@flipthememe/client';
 import { getBase58Encoder, partiallySignTransaction, getTransactionDecoder, type KeyPairSigner } from '@solana/kit';
-import { AttestorCore, PRUNE_EVERY_MS, REFRESH_MS, RETAIN_MS, type AttestorEnv, type LogFields } from '../src/attestor.ts';
+import {
+  ATTEST_DEVNET_BUDGET_MS,
+  ATTEST_RETAIN_MS,
+  AttestorCore,
+  DEFAULT_MAX_TRIES,
+  PRUNE_EVERY_MS,
+  REFRESH_MS,
+  RETAIN_MS,
+  type AttestorEnv,
+  type CoreOptions,
+  type LogFields,
+} from '../src/attestor.ts';
 import { Failover } from '../src/rpc.ts';
 import { SAMPLE_MARGIN_MS, windowOf } from '../src/samples.ts';
 import {
@@ -28,11 +39,13 @@ import {
   encodeRound,
   keeperSigner,
   makeRound,
+  modalRpc,
   priceOfState,
   slotAt,
   testAddress,
   toBytes,
   wire,
+  type EndpointMode,
   type PoolState,
 } from './helpers.ts';
 
@@ -57,7 +70,7 @@ type Setup = {
   beforeTick?: (ms: number) => void;
 };
 
-async function setup(startMs: number, env: AttestorEnv = { ATTESTOR_SECRET }): Promise<Setup> {
+async function setup(startMs: number, env: AttestorEnv = { ATTESTOR_SECRET }, over?: (devnet: Devnet) => Partial<CoreOptions>): Promise<Setup> {
   const clock = new Clock(startMs);
   const sql = new MemorySql();
   const alarms = new MemoryAlarms();
@@ -73,6 +86,7 @@ async function setup(startMs: number, env: AttestorEnv = { ATTESTOR_SECRET }): P
     devnet: new Failover([{ name: 'devnet.test', rpc: devnet.rpc() }], clock.now),
     mainnet: new Failover([{ name: 'mainnet.test', rpc: mainnet.rpc() }], clock.now),
     log: (fields) => void logs.push(fields),
+    ...over?.(devnet),
   });
   return { core, sql, alarms, clock, devnet, mainnet, keeper, logs };
 }
@@ -251,16 +265,16 @@ describe('sampler', () => {
   });
 });
 
-describe('attest', () => {
-  /** Round 10 (activated, Open) sampled through its strike window; the clock 1 s after it. */
-  async function strikeReady() {
-    const s = await setup(T0 + 70_000);
-    const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
-    await s.core.ping();
-    await runUntil(s, Number(round.strikeEnd) * 1000 + 1000);
-    return { s, round };
-  }
+/** Round 10 (activated, Open) sampled through its strike window; the clock 1 s after it. */
+async function strikeReady(env?: AttestorEnv, over?: (devnet: Devnet) => Partial<CoreOptions>) {
+  const s = await setup(T0 + 70_000, env, over);
+  const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
+  await s.core.ping();
+  await runUntil(s, Number(round.strikeEnd) * 1000 + 1000);
+  return { s, round };
+}
 
+describe('attest', () => {
   test('agreeing samples are co-signed; the signature verifies against the message', async () => {
     const { s, round } = await strikeReady();
     const samples = keeperSamples(round, 'strike');
@@ -340,11 +354,11 @@ describe('attest', () => {
     const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
     await s.core.ping();
     await runUntil(s, Number(round.strikeEnd) * 1000 + 1000);
-    const high = keeperSamples(round, 'strike', { avoid: readSlots(s), scale: (p) => (p * 102n) / 100n });
-    assert.equal((await s.core.attest((await strikeTx(s, 10n, high)).tx)).status, 200);
     // Shared slots are exact whatever the tolerance.
     const shifted = keeperSamples(round, 'strike', { scale: (p) => p + 1n });
     assert.equal(body(await s.core.attest((await strikeTx(s, 10n, shifted)).tx)).reason, 'slot_price_mismatch');
+    const high = keeperSamples(round, 'strike', { avoid: readSlots(s), scale: (p) => (p * 102n) / 100n });
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, high)).tx)).status, 200);
   });
 
   test('slot outside the window: samples from slots the attestor never saw', async () => {
@@ -416,9 +430,9 @@ describe('attest', () => {
     assert.equal(body(result).reason, 'samples_withheld');
     assert.equal(s.logs.at(-1)?.result, 'samples_withheld');
     assert.equal(s.logs.at(-1)?.ownSamples, 10);
-    assert.equal(s.logs.at(-1)?.required, 7);
-    // Eight of ten (two reads lost) are fine.
-    assert.equal((await s.core.attest((await strikeTx(s, 10n, samples.slice(2))).tx)).status, 200);
+    assert.equal(s.logs.at(-1)?.required, 6);
+    // Six of ten (four reads lost, 60 percent) are fine.
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, samples.slice(4))).tx)).status, 200);
   });
 
   describe('set_strike only before the exit window opens (the program rejects a later one)', () => {
@@ -469,8 +483,10 @@ describe('attest', () => {
     test('set_strike: the attestor read 4, the keeper sends 4 or none: co-signed, the program refunds it as Unpriceable', async () => {
       const { s, round, inside } = await outageAfter(4_000);
       assert.equal(inside, 4);
-      for (const samples of [[], keeperSamples(round, 'strike').slice(0, 4)]) {
-        const { tx, messageBytes } = await strikeTx(s, 10n, samples);
+      // Round 11 has the same pool and windows: a second set for round 10 would be refused as already_signed.
+      s.devnet.add(makeRound(11n, OPENS, HIGGS_POOL));
+      for (const [roundId, samples] of [[10n, [] as PriceSample[]], [11n, keeperSamples(round, 'strike').slice(0, 4)]] as const) {
+        const { tx, messageBytes } = await strikeTx(s, roundId, samples);
         const result = await s.core.attest(tx);
         assert.equal(result.status, 200, JSON.stringify(result.body));
         assert.ok(ed25519.verify(new Uint8Array(getBase58Encoder().encode(body(result).signature!)), messageBytes, ATTESTOR_PUBLIC));
@@ -514,15 +530,15 @@ describe('attest', () => {
     test('settle: no reads at all of the exit window, the keeper sends none: co-signed; ten samples are refused', async () => {
       const { s, round, inside } = await outageAfter(0, RoundStatus.Live);
       assert.equal(inside, 0);
+      const ten = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: keeperSamples(round, 'exit'), attestor: ATTESTOR });
+      const refused = await s.core.attest(wire([ten], s.keeper.address).tx);
+      assert.equal(refused.status, 422);
+      assert.equal(body(refused).reason, 'too_few_samples');
       const none = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: [], attestor: ATTESTOR });
       const result = await s.core.attest(wire([none], s.keeper.address).tx);
       assert.equal(result.status, 200, JSON.stringify(result.body));
       assert.equal(s.logs.at(-1)?.verdict, 'unpriceable');
       assert.equal(s.logs.at(-1)?.ownSamples, 0);
-      const ten = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: keeperSamples(round, 'exit'), attestor: ATTESTOR });
-      const refused = await s.core.attest(wire([ten], s.keeper.address).tx);
-      assert.equal(refused.status, 422);
-      assert.equal(body(refused).reason, 'too_few_samples');
     });
   });
 
@@ -544,7 +560,14 @@ describe('attest', () => {
   });
 
   test('not configured: no key, or a tolerance that is not basis points', async () => {
-    for (const env of [{}, { ATTESTOR_SECRET: 'not-a-key' }, { ATTESTOR_SECRET, ATTEST_TOLERANCE_BPS: '1.5%' }]) {
+    for (const env of [
+      {},
+      { ATTESTOR_SECRET: 'not-a-key' },
+      { ATTESTOR_SECRET, ATTEST_TOLERANCE_BPS: '1.5%' },
+      { ATTESTOR_SECRET, ATTEST_MAX_TRIES: '0' },
+      { ATTESTOR_SECRET, ATTEST_MAX_TRIES: 'six' },
+      { ATTESTOR_SECRET, ATTEST_MAX_TRIES: '101' },
+    ]) {
       const s = await setup(T0, env);
       const result = await s.core.attest('AQID');
       assert.equal(result.status, 503);
@@ -559,6 +582,246 @@ describe('attest', () => {
   });
 });
 
+describe('the lock on a signed window: one sample set per round and window (audit of 2026-10-07, H3)', () => {
+  type Row = { round: number; kind: string; tries: number; samples_hash: string | null; signed_at_ms: number | null; updated_ms: number };
+  const locks = (s: Setup) => s.sql.rows<Row>('SELECT * FROM attest_windows ORDER BY round, kind');
+  const verifies = async (s: Setup, result: { body: Record<string, unknown> }, messageBytes: Uint8Array) => {
+    const signature = new Uint8Array(getBase58Encoder().encode(body(result).signature!));
+    assert.ok(ed25519.verify(signature, messageBytes, ATTESTOR_PUBLIC));
+    return signature;
+  };
+
+  test('a different set for the same round and window is refused after the first signature, and counts for nothing', async () => {
+    const { s, round } = await strikeReady();
+    const samples = keeperSamples(round, 'strike');
+    const first = await s.core.attest((await strikeTx(s, 10n, samples)).tx);
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(locks(s).length, 1);
+    assert.equal(locks(s)[0]!.tries, 1);
+    assert.ok(locks(s)[0]!.samples_hash);
+
+    // Another subset of the same real readings: every other check passes, the lock refuses it.
+    for (const subset of [samples.slice(1), samples.slice(0, 9), samples.slice(2).reverse().sort((a, b) => Number(a.slot - b.slot))]) {
+      const second = await s.core.attest((await strikeTx(s, 10n, subset)).tx);
+      assert.equal(second.status, 422);
+      assert.equal(body(second).reason, 'already_signed');
+      assert.equal(body(second).signature, undefined);
+      assert.match(body(second).error!, /different set of samples was already signed for the strike window/);
+    }
+    const log = s.logs.at(-1)!;
+    assert.equal(log.result, 'already_signed');
+    assert.equal(log.signed, false);
+    // The refusals are not attempts: the pair still says one try, and the signed set still passes.
+    assert.equal(locks(s)[0]!.tries, 1);
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, samples)).tx)).status, 200);
+    // An empty list is a different set as well.
+    assert.equal(body(await s.core.attest((await strikeTx(s, 10n, [])).tx)).reason, 'already_signed');
+  });
+
+  test('the same set again is signed again, also in a transaction with another message (a retry after a timeout)', async () => {
+    const { s, round } = await strikeReady();
+    const samples = keeperSamples(round, 'strike');
+    const one = await strikeTx(s, 10n, samples);
+    const two = await strikeTx(s, 10n, samples, testAddress(77));
+    assert.notDeepEqual(one.messageBytes, two.messageBytes);
+    const a = await s.core.attest(one.tx);
+    const b = await s.core.attest(two.tx);
+    const c = await s.core.attest(one.tx);
+    for (const [result, bytes] of [[a, one.messageBytes], [b, two.messageBytes], [c, one.messageBytes]] as const) {
+      assert.equal(result.status, 200, JSON.stringify(result.body));
+      await verifies(s, result, bytes);
+    }
+    assert.equal(body(a).signature, body(c).signature); // Ed25519 is deterministic: the same message, the same signature
+    assert.equal(locks(s)[0]!.tries, 1); // retries of the signed set are not attempts
+  });
+
+  test('the strike and the exit window of a round, and different rounds, are locked apart', async () => {
+    const s = await setup(T0 + 70_000);
+    const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
+    s.devnet.add(makeRound(11n, OPENS, HIGGS_POOL));
+    await s.core.ping();
+    await runUntil(s, Number(round.strikeEnd) * 1000 + 1000);
+    const strike = keeperSamples(round, 'strike');
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, strike)).tx)).status, 200);
+    // Round 11 is a round of its own: a different set is fine there.
+    assert.equal((await s.core.attest((await strikeTx(s, 11n, strike.slice(2))).tx)).status, 200);
+    // The exit window of round 10: its strike landed, the round is Live.
+    s.devnet.add({ ...round, status: RoundStatus.Live, strikePrice: 1n });
+    await runUntil(s, Number(round.exitEnd) * 1000 + 1000);
+    const exit = keeperSamples(round, 'exit');
+    const ix = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: exit, attestor: ATTESTOR });
+    assert.equal((await s.core.attest(wire([ix], s.keeper.address).tx)).status, 200);
+    assert.deepEqual(locks(s).map((r) => [r.round, r.kind, r.samples_hash !== null]), [
+      [10, 'exit', true],
+      [10, 'strike', true],
+      [11, 'strike', true],
+    ]);
+    const again = await settle({ priceAuthority: s.keeper, roundId: 10n, samples: exit.slice(1), attestor: ATTESTOR });
+    assert.equal(body(await s.core.attest(wire([again], s.keeper.address).tx)).reason, 'already_signed');
+  });
+
+  test('a round without a matched bank is locked too (its empty set, then any other)', async () => {
+    const { s } = await strikeReady();
+    const lonely = s.devnet.add(makeRound(12n, OPENS, HIGGS_POOL, { rawUp: SOL / 100n, rawDown: 0n, positionCount: 1 }));
+    assert.equal((await s.core.attest((await strikeTx(s, 12n, [])).tx)).status, 200);
+    assert.equal(s.logs.at(-1)?.verdict, 'not_activated');
+    assert.equal(body(await s.core.attest((await strikeTx(s, 12n, keeperSamples(lonely, 'strike'))).tx)).reason, 'already_signed');
+  });
+
+  test('the lock survives an eviction: a new core over the same storage still refuses the other set', async () => {
+    const { s, round } = await strikeReady();
+    const samples = keeperSamples(round, 'strike');
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, samples)).tx)).status, 200);
+    const reborn = new AttestorCore({
+      sql: s.sql,
+      alarms: s.alarms,
+      env: { ATTESTOR_SECRET },
+      now: s.clock.now,
+      devnet: new Failover([{ name: 'devnet.test', rpc: s.devnet.rpc() }], s.clock.now),
+      mainnet: new Failover([{ name: 'mainnet.test', rpc: s.mainnet.rpc() }], s.clock.now),
+      log: () => undefined,
+    });
+    assert.equal(body(await reborn.attest((await strikeTx(s, 10n, samples.slice(1))).tx)).reason, 'already_signed');
+    assert.equal((await reborn.attest((await strikeTx(s, 10n, samples)).tx)).status, 200);
+  });
+
+  test('two different sets in flight at the same moment: one signature goes out, the other call is refused', async () => {
+    const { s, round } = await strikeReady();
+    const samples = keeperSamples(round, 'strike');
+    const [a, b] = await Promise.all([
+      s.core.attest((await strikeTx(s, 10n, samples)).tx),
+      s.core.attest((await strikeTx(s, 10n, samples.slice(1))).tx),
+    ]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 422]);
+    assert.equal(body(a.status === 422 ? a : b).reason, 'already_signed');
+    assert.equal(locks(s).length, 1);
+  });
+
+  test('the lock is forgotten after ATTEST_RETAIN_MS, long after the round could be priced', async () => {
+    const { s, round } = await strikeReady();
+    assert.equal((await s.core.attest((await strikeTx(s, 10n, keeperSamples(round, 'strike'))).tx)).status, 200);
+    assert.equal(locks(s).length, 1);
+    s.clock.ms += ATTEST_RETAIN_MS - 60_000;
+    s.alarms.at = null;
+    await s.core.tick();
+    assert.equal(locks(s).length, 1, 'still there just before');
+    s.clock.ms += PRUNE_EVERY_MS + 120_000;
+    s.alarms.at = null;
+    await s.core.tick();
+    assert.equal(locks(s).length, 0);
+  });
+
+  describe('attempts per round and window (ATTEST_MAX_TRIES)', () => {
+    test(`by default ${DEFAULT_MAX_TRIES} attempts that reach the samples are answered, the next is too_many_attempts, even for a good set`, async () => {
+      const { s, round } = await strikeReady();
+      const good = keeperSamples(round, 'strike');
+      // Six different bad sets: each reaches the samples and is refused there (a keeper only 2 percent off).
+      for (let i = 0; i < DEFAULT_MAX_TRIES; i++) {
+        const bad = keeperSamples(round, 'strike', { avoid: readSlots(s), scale: (p) => (p * BigInt(102 + i)) / 100n });
+        assert.equal(body(await s.core.attest((await strikeTx(s, 10n, bad)).tx)).reason, 'price_mismatch', `attempt ${i + 1}`);
+      }
+      assert.equal(locks(s)[0]!.tries, DEFAULT_MAX_TRIES);
+      const last = await s.core.attest((await strikeTx(s, 10n, good)).tx);
+      assert.equal(last.status, 422);
+      assert.equal(body(last).reason, 'too_many_attempts');
+      assert.match(body(last).error!, /6 attempts were made for the strike window/);
+      assert.equal(s.logs.at(-1)?.result, 'too_many_attempts');
+      assert.equal(locks(s)[0]!.tries, DEFAULT_MAX_TRIES); // a refused call is not another attempt
+      assert.equal(locks(s)[0]!.samples_hash, null);
+      // Another round is not affected.
+      s.devnet.add(makeRound(11n, OPENS, HIGGS_POOL));
+      assert.equal((await s.core.attest((await strikeTx(s, 11n, good)).tx)).status, 200);
+    });
+
+    test('ATTEST_MAX_TRIES sets the number; a signed set may be asked for again beyond it', async () => {
+      const { s, round } = await strikeReady({ ATTESTOR_SECRET, ATTEST_MAX_TRIES: '2' });
+      assert.equal(((await s.core.health()).body as { maxTries: number }).maxTries, 2);
+      const bad = (scale: bigint) => keeperSamples(round, 'strike', { avoid: readSlots(s), scale: (p) => (p * scale) / 100n });
+      assert.equal(body(await s.core.attest((await strikeTx(s, 10n, bad(103n))).tx)).reason, 'price_mismatch');
+      const good = keeperSamples(round, 'strike');
+      assert.equal((await s.core.attest((await strikeTx(s, 10n, good)).tx)).status, 200); // the second attempt
+      for (let i = 0; i < 5; i++) assert.equal((await s.core.attest((await strikeTx(s, 10n, good)).tx)).status, 200);
+      assert.equal(locks(s)[0]!.tries, 2);
+    });
+
+    test('calls that stop before the samples are not attempts: window_open, round_state, devnet down, static refusals', async () => {
+      const { s, round } = await strikeReady({ ATTESTOR_SECRET, ATTEST_MAX_TRIES: '1' });
+      const good = keeperSamples(round, 'strike');
+      const { tx } = await strikeTx(s, 10n, good);
+      s.clock.ms = Number(round.strikeEnd) * 1000 - 1;
+      for (let i = 0; i < 4; i++) assert.equal(body(await s.core.attest(tx)).reason, 'window_open');
+      s.clock.ms = Number(round.strikeEnd) * 1000 + 1000;
+      s.devnet.down = true;
+      for (let i = 0; i < 4; i++) assert.equal(body(await s.core.attest(tx)).reason, 'devnet_unavailable');
+      s.devnet.down = false;
+      s.clock.ms += 1_500; // the endpoint's backoff after its failure is 1 s
+      assert.equal((await s.core.attest((await strikeTx(s, 10n, good, ATTESTOR)).tx)).status, 422); // attestor_is_fee_payer
+      assert.equal(locks(s).length, 0);
+      assert.equal((await s.core.attest(tx)).status, 200); // the one attempt is still there
+    });
+  });
+});
+
+describe('the devnet read of an attest call has one time budget, however many endpoints it tries', () => {
+  const BUDGET_MS = 800;
+  /** Two devnet endpoints, each switchable; the budget is shortened so the test runs in real time. */
+  async function ready(mode: { a: EndpointMode; b: EndpointMode }, calls = { a: { n: 0 }, b: { n: 0 } }) {
+    const ctx = await strikeReady(undefined, (devnet) => ({
+      devnetBudgetMs: BUDGET_MS,
+      devnet: new Failover(
+        [
+          { name: 'a', rpc: modalRpc(devnet, () => mode.a, calls.a) },
+          { name: 'b', rpc: modalRpc(devnet, () => mode.b, calls.b) },
+        ],
+        () => 0,
+      ),
+    }));
+    return { ...ctx, calls };
+  }
+
+  test('the budget is 6 s: inside the 8 s the keeper gives an attest call', () => {
+    assert.equal(ATTEST_DEVNET_BUDGET_MS, 6_000);
+  });
+
+  test('two endpoints that hang: the call ends at the budget with devnet_unavailable, not at the sum of two timeouts', { timeout: 15_000 }, async () => {
+    const mode = { a: 'ok' as EndpointMode, b: 'ok' as EndpointMode };
+    const { s, round } = await ready(mode);
+    const { tx } = await strikeTx(s, 10n, keeperSamples(round, 'strike'));
+    mode.a = 'hang';
+    mode.b = 'hang';
+    const started = Date.now();
+    const result = await s.core.attest(tx);
+    const took = Date.now() - started;
+    assert.equal(result.status, 503);
+    assert.equal(body(result).reason, 'devnet_unavailable');
+    // One budget: about 800 ms. Two timeouts of 800 ms each would be 1600.
+    assert.ok(took >= BUDGET_MS - 50 && took < BUDGET_MS * 1.6, `took ${took} ms for a budget of ${BUDGET_MS}`);
+  });
+
+  test('a slow first endpoint leaves the second only what is left: a first that hangs ends the call', { timeout: 15_000 }, async () => {
+    const mode = { a: 'ok' as EndpointMode, b: 'ok' as EndpointMode };
+    const { s, round, calls } = await ready(mode);
+    const { tx } = await strikeTx(s, 10n, keeperSamples(round, 'strike'));
+    mode.a = 'hang';
+    const before = calls.b.n;
+    const started = Date.now();
+    assert.equal(body(await s.core.attest(tx)).reason, 'devnet_unavailable');
+    assert.ok(Date.now() - started < BUDGET_MS * 1.6);
+    assert.equal(calls.b.n, before, 'the budget was gone before the fallback');
+  });
+
+  test('a first endpoint that fails at once: the fallback answers inside the budget', { timeout: 15_000 }, async () => {
+    const mode = { a: 'ok' as EndpointMode, b: 'ok' as EndpointMode };
+    const { s, round } = await ready(mode);
+    const { tx } = await strikeTx(s, 10n, keeperSamples(round, 'strike'));
+    mode.a = 'fail';
+    const started = Date.now();
+    const result = await s.core.attest(tx);
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.ok(Date.now() - started < BUDGET_MS);
+  });
+});
+
 test('health: key, sampler, rounds with their reads, recent attests with shared slots, the on-chain oracle', async () => {
   const s = await setup(T0 + 70_000);
   const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));
@@ -567,14 +830,16 @@ test('health: key, sampler, rounds with their reads, recent attests with shared 
   await runUntil(s, Number(round.strikeEnd) * 1000 + 2000);
   const samples = keeperSamples(round, 'strike');
   const shared = sharedWith(s, samples);
-  await s.core.attest((await strikeTx(s, 10n, samples)).tx); // signed
+  // The refusals come first: once a set is signed for a window, a different one is refused as already_signed.
   await s.core.attest((await strikeTx(s, 10n, samples.slice(0, 4))).tx); // unpriced: no comparison
   await s.core.attest((await strikeTx(s, 10n, samples.map((x) => ({ ...x, price: x.price + 1n })))).tx); // slot_price_mismatch
+  await s.core.attest((await strikeTx(s, 10n, samples)).tx); // signed
   const result = await s.core.health();
   assert.equal(result.status, 200);
   const h = result.body as any;
   assert.equal(h.attestor, ATTESTOR);
   assert.equal(h.toleranceBps, 150);
+  assert.equal(h.maxTries, DEFAULT_MAX_TRIES);
   assert.deepEqual(h.oracle, { attestor: ATTESTOR, required: true, matchesKey: true });
   assert.equal(h.sampler.nextRoundId, '12');
   assert.equal(h.sampler.windowsObserved, 1);
@@ -596,13 +861,13 @@ test('health: key, sampler, rounds with their reads, recent attests with shared 
   // The gap between the two means of the signed call, for tuning ATTEST_TOLERANCE_BPS.
   assert.equal(typeof maxDiffBps, 'number');
   assert.ok(maxDiffBps >= 0 && maxDiffBps <= 150, `maxDiffBps ${maxDiffBps}`);
-  assert.deepEqual(recent.map((r: any) => [r.verdict, r.diffBps]), [['agree', maxDiffBps], [null, null], [null, null]]);
+  assert.deepEqual(recent.map((r: any) => [r.verdict, r.diffBps]), [[null, null], [null, null], ['agree', maxDiffBps]]);
   assert.deepEqual(
     recent.map((r: any) => [r.round, r.instruction, r.result, r.keeperSamples, r.sharedSlots]),
     [
-      ['10', 'set_strike', 'signed', 10, shared],
       ['10', 'set_strike', 'unpriced', 4, null],
       ['10', 'set_strike', 'slot_price_mismatch', 10, shared],
+      ['10', 'set_strike', 'signed', 10, shared],
     ],
   );
   assert.ok(!JSON.stringify(h).includes(ATTESTOR_SECRET));

@@ -2,8 +2,13 @@
 //
 //   GET /v1/names?a=<addr>,<addr>,...   {"names": {"<addr>": "oxbla.skr" | null}}
 //
-// Up to 20 distinct base58 addresses. null: the address has no .skr name. An address left out of
-// "names": its lookup failed (RPC down, slow or rate limited), ask again later.
+// Up to 20 distinct base58 addresses and at most 10 getProgramAccounts calls (fallbacks included) per
+// request. null: the address has no .skr name. An address left out of "names": its lookup failed (RPC
+// down, slow or rate limited) or the request ran out of getProgramAccounts calls, ask again later.
+//
+// OPTIONAL: the app resolves .skr names itself on mainnet (apps/mobile/src/chain/skr.ts) and does not
+// call this route. It stays for other clients; every cache miss is one getProgramAccounts on the keyed
+// MAINNET_RPC, which is why the limits above exist.
 //
 // The reads are the ones @onsol/tldparser makes for getParsedAllUserDomainsFromTld(owner, 'skr'),
 // done with plain JSON-RPC so the Worker carries no Solana SDK:
@@ -40,6 +45,12 @@ const MAINNET_BETA = 'https://api.mainnet-beta.solana.com';
 const PUBLICNODE = 'https://solana-rpc.publicnode.com';
 
 const MAX_ADDRESSES = 20;
+/**
+ * getProgramAccounts calls one request may make, every try at a fallback endpoint counted: one cache
+ * miss costs one on a keyed provider, so a request with 20 misses must not cost 20 (and 40 with a
+ * failing first endpoint). The addresses left over are answered by a later request.
+ */
+export const MAX_GPA_CALLS = 10;
 const CALL_MS = 4_000;
 /** Whole request: cache reads, lookups and fallbacks together. */
 const BUDGET_MS = 7_000;
@@ -160,7 +171,7 @@ export function nameOf(account: Account): string | null {
   }
   try {
     const bytes = Uint8Array.from(atob(account.data[0]), (c) => c.charCodeAt(0));
-    const label = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(HEADER_BYTES)).split('\0')[0];
+    const label = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes.subarray(HEADER_BYTES)).split('\0')[0];
     return LABEL.test(label) ? `${label}.skr` : null;
   } catch {
     return null;
@@ -174,7 +185,7 @@ export function pickName(found: string[]): string | null {
   return [...found].sort((a, b) => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0))[0] ?? null;
 }
 
-type Rpc = { own: string[]; down: Set<string>; deadline: number };
+type Rpc = { own: string[]; down: Set<string>; deadline: number; gpaLeft: number };
 
 /** Endpoints still worth a try in this request; `indexed`: the call is getProgramAccounts. */
 const endpoints = (rpc: Rpc, indexed: boolean) =>
@@ -186,6 +197,10 @@ async function call<T>(rpc: Rpc, indexed: boolean, method: string, params: unkno
     const left = rpc.deadline - Date.now();
     if (left <= 0) break;
     if (rpc.down.has(url)) continue; // dropped by a parallel call meanwhile
+    if (indexed) {
+      if (rpc.gpaLeft <= 0) break;
+      rpc.gpaLeft--;
+    }
     // Only the host is logged: a keyed MAINNET_RPC carries its key in the URL.
     const host = new URL(url).host;
     try {
@@ -248,7 +263,7 @@ function ownRpc(url: string | undefined): string[] {
 
 /** .skr name per owner: a name, or null for none. Owners whose lookup failed are left out. */
 export async function lookupNames(owners: string[], env: NamesEnv, deadline: number): Promise<Map<string, string | null>> {
-  const rpc: Rpc = { own: ownRpc(env.MAINNET_RPC), down: new Set(), deadline };
+  const rpc: Rpc = { own: ownRpc(env.MAINNET_RPC), down: new Set(), deadline, gpaLeft: MAX_GPA_CALLS };
 
   const held: (string[] | undefined)[] = new Array(owners.length);
   let next = 0;
@@ -257,7 +272,7 @@ export async function lookupNames(owners: string[], env: NamesEnv, deadline: num
     while (next < owners.length) {
       const i = next++;
       const at = Math.max(slot, Date.now());
-      if (at >= deadline || !endpoints(rpc, true).length) continue; // left out: asked again later
+      if (at >= deadline || rpc.gpaLeft <= 0 || !endpoints(rpc, true).length) continue; // left out: asked again later
       slot = at + GPA_GAP_MS;
       if (at > Date.now()) await new Promise((wake) => setTimeout(wake, at - Date.now()));
       held[i] = await records(rpc, owners[i]).catch(() => undefined);

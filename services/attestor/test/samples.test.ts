@@ -220,10 +220,10 @@ describe('samples withheld: a keeper may not pick which of its reads to send', (
   const rising = (i: number) => PRICE + BigInt(i) * 300n;
 
   test(`the count to send: max(5, ${KEEPER_MIN_SHARE_PERCENT}% of the attestor's reads inside the window), at most the program's 16`, () => {
-    assert.equal(KEEPER_MIN_SHARE_PERCENT, 70);
-    assert.deepEqual([0, 3, 5, 8].map(requiredKeeperSamples), [5, 5, 5, 5]);
-    assert.deepEqual([9, 10, 11, 12, 14, 20, 22].map(requiredKeeperSamples), [6, 7, 7, 8, 9, 14, 15]);
-    assert.deepEqual([23, 40, 1000].map(requiredKeeperSamples), [16, 16, 16]);
+    assert.equal(KEEPER_MIN_SHARE_PERCENT, 60);
+    assert.deepEqual([0, 3, 5, 8, 9].map(requiredKeeperSamples), [5, 5, 5, 5, 5]);
+    assert.deepEqual([10, 11, 12, 14, 20, 22, 23].map(requiredKeeperSamples), [6, 6, 7, 8, 12, 13, 13]);
+    assert.deepEqual([26, 27, 40, 1000].map(requiredKeeperSamples), [15, 16, 16, 16]);
   });
 
   test('an honest keeper that lost two of its ten reads (a failed request, a late one) passes', () => {
@@ -232,6 +232,12 @@ describe('samples withheld: a keeper may not pick which of its reads to send', (
     const result = compareSamples(keeper, own, WINDOW, 150);
     assert.equal(result.ownSamples, 10);
     assert.equal(result.sharedSlots, 0); // none of its slots is one the attestor read: counts only, never slots
+  });
+
+  test('a keeper on a slow RPC that lost four of its ten reads and holds 6 passes (60 percent, not 70)', () => {
+    const own = ownReads(rising);
+    const keeper = keeperSamples(6, (i) => rising(i + 2));
+    assert.equal(compareSamples(keeper, own, WINDOW, 150).ownSamples, 10);
   });
 
   test('keeping only the 5 highest of 10 reads is refused, though the mean is inside the tolerance', () => {
@@ -246,7 +252,7 @@ describe('samples withheld: a keeper may not pick which of its reads to send', (
     const error = refused(() => compareSamples(picked, own, WINDOW, 150));
     assert.equal(error.reason, 'samples_withheld');
     // The counts are for the log; the message names them too.
-    assert.deepEqual(error.detail, { ownSamples: 10, required: 7 });
+    assert.deepEqual(error.detail, { ownSamples: 10, required: 6 });
     assert.match(error.message, /5 samples/);
     // All ten pass.
     assert.ok(compareSamples(real, own, WINDOW, 150));
@@ -258,11 +264,11 @@ describe('samples withheld: a keeper may not pick which of its reads to send', (
     assert.equal(refusal(() => compareSamples(real.slice(0, 5), own, WINDOW, 150)), 'samples_withheld');
   });
 
-  test('the line for ten own reads: 7 samples pass, 6 are refused', () => {
+  test('the line for ten own reads: 6 samples pass, 5 are refused', () => {
     const own = ownReads(rising);
     const real = keeperSamples(10, (i) => rising(i + 2));
-    assert.ok(compareSamples(real.slice(3), own, WINDOW, 150));
-    assert.equal(refusal(() => compareSamples(real.slice(4), own, WINDOW, 150)), 'samples_withheld');
+    assert.ok(compareSamples(real.slice(4), own, WINDOW, 150));
+    assert.equal(refusal(() => compareSamples(real.slice(5), own, WINDOW, 150)), 'samples_withheld');
   });
 
   test('with 5 to 8 own reads inside the window the program minimum of 5 is all that is asked', () => {

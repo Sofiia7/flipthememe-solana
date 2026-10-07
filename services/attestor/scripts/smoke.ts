@@ -1,12 +1,18 @@
 // End-to-end check of a running attestor with live data; nothing is ever sent to a chain.
 //
-//   node scripts/smoke.ts [attestor URL]        default http://127.0.0.1:8787 (wrangler dev)
+//   node scripts/smoke.ts [attestor URL] [--allow-live]     default http://127.0.0.1:8787 (wrangler dev)
+//
+// Run it against `wrangler dev`, not against the deployed attestor: the attestor signs one sample
+// set per round and window (already_signed), so the signature this script asks for would lock the
+// round it picked, and the real keeper's samples for that round would be refused. A URL other than
+// localhost needs --allow-live, which accepts losing that one round (it ends through refund_expired).
 //
 // Waits for the next devnet round's strike window, samples the round's pool on mainnet once a
 // second the way the keeper does (the client's observePrice and windowMean), then builds the
 // set_strike the keeper would (a throwaway key stands in for the price authority) and asks the
-// attestor to co-sign it. Passes when the signature verifies against the message and a copy with
-// prices 5% off is refused (slot_price_mismatch or price_mismatch). The attestor's log line shows
+// attestor to co-sign it. Passes when a copy with prices 5% off is refused (slot_price_mismatch or
+// price_mismatch; asked first, since after a signature any other set is already_signed) and the
+// signature of the real one verifies against the message. The attestor's log line shows
 // how many samples sat at a slot it read too (sharedSlots). Env: DEVNET_RPC, MAINNET_RPC (defaults:
 // public RPCs).
 import {
@@ -43,7 +49,15 @@ import {
   type Blockhash,
 } from '@solana/kit';
 
-const base = (process.argv[2] ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
+const base = (process.argv[2] && !process.argv[2].startsWith('--') ? process.argv[2] : 'http://127.0.0.1:8787').replace(/\/$/, '');
+if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(base) && !process.argv.includes('--allow-live')) {
+  console.error(
+    `${base} is not a local attestor. The smoke test would get a signature for the next real round and lock it ` +
+      '(one sample set is signed per round and window), so the keeper would be refused as already_signed. ' +
+      'Run it against wrangler dev, or add --allow-live to accept losing that round.',
+  );
+  process.exit(2);
+}
 const devnet = createSolanaRpc(process.env.DEVNET_RPC ?? 'https://api.devnet.solana.com');
 const mainnet = createSolanaRpc(process.env.MAINNET_RPC ?? 'https://solana-rpc.publicnode.com');
 const sleep = (ms: number) => new Promise((wake) => setTimeout(wake, Math.max(0, ms)));
@@ -113,6 +127,15 @@ const build = async (list: PriceSample[]) => {
   return compileTransaction(message);
 };
 
+// At a slot both sides read, the exact-price rule catches it first; otherwise the mean check does.
+// Asked before the real one: once a set is signed for the round, any other is already_signed.
+const off = await build(samples.map((s) => ({ ...s, price: (s.price * 105n) / 100n })));
+const refused = await attest(getBase64EncodedWireTransaction(off));
+if (refused.status !== 422 || !['slot_price_mismatch', 'price_mismatch'].includes(refused.body.reason ?? '')) {
+  throw new Error(`prices 5% off were not refused: ${JSON.stringify(refused)}`);
+}
+console.log(`prices 5% off refused (${refused.body.reason}): ${refused.body.error}`);
+
 const good = await build(samples);
 const signed = await attest(getBase64EncodedWireTransaction(good));
 if (signed.status !== 200 || !signed.body.signature) throw new Error(`refused: ${signed.status} ${JSON.stringify(signed.body)}`);
@@ -120,12 +143,4 @@ const signature = new Uint8Array(getBase58Encoder().encode(signed.body.signature
 const valid = await verifySignature(await getPublicKeyFromAddress(attestor), signature as never, good.messageBytes);
 if (!valid) throw new Error('the signature does not verify against the message');
 console.log(`co-signed, signature verifies: ${signed.body.signature}`);
-
-// At a slot both sides read, the exact-price rule catches it first; otherwise the mean check does.
-const off = await build(samples.map((s) => ({ ...s, price: (s.price * 105n) / 100n })));
-const refused = await attest(getBase64EncodedWireTransaction(off));
-if (refused.status !== 422 || !['slot_price_mismatch', 'price_mismatch'].includes(refused.body.reason ?? '')) {
-  throw new Error(`prices 5% off were not refused: ${JSON.stringify(refused)}`);
-}
-console.log(`prices 5% off refused (${refused.body.reason}): ${refused.body.error}`);
 console.log('smoke test passed');

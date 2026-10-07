@@ -17,12 +17,17 @@
   // Public health at https://sol.flipthememe.com/v1/attestor (the route also covers POST /v1/attest);
   // a more specific route than the link Worker's sol.flipthememe.com/*. The keeper may keep using the
   // workers.dev URL: both reach the same Worker and the same Durable Object.
+  // GET /v1/attestor is answered from the edge cache (caches.default) for 20 s, so polling it costs the
+  // Durable Object one request per 20 s; the cache works on the custom domain only, not on workers.dev.
   "workers_dev": true,
   "routes": [{ "pattern": "sol.flipthememe.com/v1/attest*", "zone_name": "flipthememe.com" }],
   "vars": {
     // Largest gap between the keeper's mean price and the attestor's, in basis points of the attestor's.
     // Not calibrated yet: tighten it after a day of attests.maxDiffBps in GET /v1/attestor (see README.md).
-    "ATTEST_TOLERANCE_BPS": "150"
+    "ATTEST_TOLERANCE_BPS": "150",
+    // Attempts per round and window (strike or exit) that reach the samples before the attestor answers
+    // "too_many_attempts". Once a sample set is signed for a window, any other set is "already_signed".
+    "ATTEST_MAX_TRIES": "6"
   },
   "durable_objects": {
     "bindings": [{ "name": "ATTESTOR", "class_name": "Attestor" }]

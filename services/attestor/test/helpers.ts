@@ -286,21 +286,47 @@ export class Devnet {
     return map;
   }
 
-  rpc(): SolanaRpc {
-    return scriptedRpc(async (method, params) => {
-      if (this.down) throw new TypeError('fetch failed');
-      if (method !== 'getMultipleAccounts') throw new TypeError(`devnet fake: no ${method}`);
-      this.reads++;
-      const map = await this.byAddress();
-      return {
-        context: { slot: 1 },
-        value: (params[0] as string[]).map((key) => {
-          const found = map.get(key);
-          return found ? accountInfo(found.data, found.owner) : null;
-        }),
-      };
-    });
+  /** The JSON-RPC result for a request, as the chain would answer it. */
+  async respond(method: string, params: any[]): Promise<unknown> {
+    if (this.down) throw new TypeError('fetch failed');
+    if (method !== 'getMultipleAccounts') throw new TypeError(`devnet fake: no ${method}`);
+    this.reads++;
+    const map = await this.byAddress();
+    return {
+      context: { slot: 1 },
+      value: (params[0] as string[]).map((key) => {
+        const found = map.get(key);
+        return found ? accountInfo(found.data, found.owner) : null;
+      }),
+    };
   }
+
+  rpc(): SolanaRpc {
+    return scriptedRpc((method, params) => this.respond(method, params));
+  }
+}
+
+/** What an endpoint does with a request: answer from the fake chain, fail at once, or never answer. */
+export type EndpointMode = 'ok' | 'fail' | 'hang';
+
+/**
+ * Devnet over a transport that follows `mode()` on every request and honours the abort signal, to
+ * test time budgets with real timers. A hanging request ends only when its signal aborts.
+ */
+export function modalRpc(devnet: Devnet, mode: () => EndpointMode, calls: { n: number } = { n: 0 }): SolanaRpc {
+  const transport = (async ({ payload, signal }: { payload: unknown; signal?: AbortSignal }) => {
+    calls.n++;
+    const m = mode();
+    if (m === 'fail') throw new TypeError('fetch failed');
+    if (m === 'hang') {
+      await new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    }
+    const { method, params } = payload as { method: string; params: any[] };
+    return structuredClone({ jsonrpc: '2.0', id: 1, result: await devnet.respond(method, params) });
+  }) as RpcTransport;
+  return createSolanaRpcFromTransport(transport);
 }
 
 // ---- mainnet: the HIGGS/SOL PumpSwap pool of the client fixtures ---------------------------------

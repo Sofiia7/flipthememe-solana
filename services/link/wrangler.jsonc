@@ -1,13 +1,33 @@
 {
-  // sol.flipthememe.com: landing page for shared round links and Android App Links.
+  // sol.flipthememe.com: landing page for shared round links and Android App Links, plus the devnet
+  // test SOL faucet (POST /v1/faucet) and the optional Seeker ID names route (GET /v1/names).
   // DNS: AAAA sol -> 100:: (proxied) in the flipthememe.com zone; this route serves it.
-  // Secret for /v1/names: MAINNET_RPC, a keyed mainnet RPC URL that allows getProgramAccounts
+  //
+  // Faucet (src/faucet.ts). Secrets (wrangler secret put NAME, value on stdin):
+  //   FAUCET_KEY   required: base58 of the faucet's 64-byte secret key. Make the value with
+  //                node scripts\secret.ts <faucet keypair json>   (prints it to stdout only)
+  //   DEVNET_RPC   optional: a keyed devnet RPC URL, tried before OnFinality's public endpoint and
+  //                api.devnet.solana.com (the public ones may answer a Worker with 403 or 429)
+  // Vars (below): EXPECTED_FAUCET_ADDRESS, the public address the key must give or the faucet answers
+  //   "unavailable" and sends nothing; FAUCET_LAMPORTS, the amount per call (0.2 SOL).
+  // Binding (below): FAUCET_LIMITER, a Workers rate limit, 1 request per 60 s per IP and per wallet. The
+  //   code works without it; delete the block if the deploy refuses it.
+  // The faucet keeps 1 SOL in reserve and refuses wallets that already hold 0.1 SOL.
+  //
+  // Names route (src/names.ts, OPTIONAL: the app resolves .skr names itself and does not call it).
+  // Secret: MAINNET_RPC, a keyed mainnet RPC URL that allows getProgramAccounts
   // (wrangler secret put MAINNET_RPC, value on stdin). Needed once deployed: the free public RPCs
   // refuse getProgramAccounts to Workers (see src/names.ts). Without it every name comes back missing.
+  // A request is limited to 20 addresses and 10 getProgramAccounts calls.
   "name": "ftm-link",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-05",
   "workers_dev": false,
   "routes": [{ "pattern": "sol.flipthememe.com/*", "zone_name": "flipthememe.com" }],
+  "vars": {
+    "EXPECTED_FAUCET_ADDRESS": "DED8cZ5zo5yFSEgNAuGD4tFvrkd8se6t6i42SwWKgomp",
+    "FAUCET_LAMPORTS": "200000000"
+  },
+  "ratelimits": [{ "name": "FAUCET_LIMITER", "namespace_id": "1001", "simple": { "limit": 1, "period": 60 } }],
   "observability": { "enabled": true }
 }

@@ -1,6 +1,11 @@
 {
   // Live X chatter for the arena token: hides the SocialData key, caches per ticker.
   // Secret: SOCIALDATA_API_KEY (wrangler secret put SOCIALDATA_API_KEY, value on stdin).
+  // Cache: an answer is kept 45 s in the data centre's cache (caches.default) and in each isolate's
+  // memory, and the hourly budget of SocialData calls (60) is counted in that cache too, so the bill
+  // does not grow with the number of isolates. The cache works on the custom domain route only, not
+  // on workers.dev. It saves SocialData calls and CPU, not Workers requests: every poll of the app is
+  // still one request of the account's 100,000 a day on the Free plan (see services/attestor/README.md).
   "name": "ftm-chatter",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-05",

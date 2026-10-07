@@ -1,7 +1,7 @@
 // Run: node --test "services/attestor/test/*.test.ts" (from the repo root). No network.
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { MAX_BODY_BYTES, handle, type AttestorApi, type Result } from '../src/http.ts';
+import { HEALTH_CACHE_SECONDS, MAX_BODY_BYTES, handle, type AttestorApi, type HealthCache, type HttpContext, type Result } from '../src/http.ts';
 
 const URL_ATTEST = 'https://attestor.test/v1/attest';
 const URL_HEALTH = 'https://attestor.test/v1/attestor';
@@ -118,4 +118,137 @@ test('a Durable Object that cannot be reached: 503 unavailable', async (t: TestC
     assert.equal(((await res.json()) as { reason: string }).reason, 'unavailable');
   }
   assert.equal(errors.length, 2);
+});
+
+/** A Workers-cache stand-in: keyed by URL, honours max-age against Date.now() and keeps what was put. */
+class FakeCache implements HealthCache {
+  readonly entries = new Map<string, { response: Response; storedAt: number }>();
+  puts = 0;
+  matches = 0;
+  async match(request: Request): Promise<Response | undefined> {
+    this.matches++;
+    const entry = this.entries.get(request.url);
+    if (!entry) return undefined;
+    const maxAge = Number(/max-age=(\d+)/.exec(entry.response.headers.get('cache-control') ?? '')?.[1] ?? 0);
+    if (Date.now() - entry.storedAt >= maxAge * 1000) return undefined;
+    return entry.response.clone();
+  }
+  async put(request: Request, response: Response): Promise<void> {
+    this.puts++;
+    this.entries.set(request.url, { response, storedAt: Date.now() });
+  }
+}
+
+function countingApi() {
+  const calls = { health: 0, attest: 0 };
+  const api: AttestorApi = {
+    attest: async () => {
+      calls.attest++;
+      return { status: 200, body: { signature: 'sig', attestor: 'key' } };
+    },
+    health: async () => {
+      calls.health++;
+      return { status: 200, body: { attestor: 'key', sampler: {}, n: calls.health } };
+    },
+  };
+  return { api, calls };
+}
+
+test(`GET /v1/attestor is served from the edge cache for ${HEALTH_CACHE_SECONDS} s: the Durable Object is asked once`, async (t) => {
+  const cache = new FakeCache();
+  const pending: Promise<unknown>[] = [];
+  const ctx: HttpContext = { cache, waitUntil: (p) => void pending.push(p) };
+  const { api, calls } = countingApi();
+  let now = Date.parse('2026-10-07T12:00:00Z');
+  t.mock.method(Date, 'now', () => now);
+
+  const first = await handle(new Request(URL_HEALTH), api, {}, ctx);
+  await Promise.all(pending);
+  assert.equal(first.status, 200);
+  assert.equal(first.headers.get('cache-control'), `public, max-age=${HEALTH_CACHE_SECONDS}`);
+  assert.equal(first.headers.get('x-cache'), 'miss');
+  assert.equal(((await first.json()) as { n: number }).n, 1);
+  assert.equal(calls.health, 1);
+  assert.equal(cache.puts, 1);
+
+  // Within 20 s, also with a query string (a cache buster) and a hash: the cache answers, the object is not asked.
+  now += 19_000;
+  for (const url of [URL_HEALTH, `${URL_HEALTH}?x=1`, `${URL_HEALTH}?x=2&y=3`]) {
+    const hit = await handle(new Request(url), api, {}, ctx);
+    assert.equal(hit.status, 200);
+    assert.equal(hit.headers.get('x-cache'), 'hit');
+    assert.equal(hit.headers.get('cache-control'), `public, max-age=${HEALTH_CACHE_SECONDS}`);
+    assert.equal(((await hit.json()) as { n: number }).n, 1);
+  }
+  assert.equal(calls.health, 1, 'no Durable Object request for a hit');
+  assert.equal(cache.puts, 1);
+
+  // After 20 s it goes to the object again and stores the new answer.
+  now += 2_000;
+  const stale = await handle(new Request(URL_HEALTH), api, {}, ctx);
+  await Promise.all(pending);
+  assert.equal(((await stale.json()) as { n: number }).n, 2);
+  assert.equal(calls.health, 2);
+  assert.equal(cache.puts, 2);
+});
+
+test('without waitUntil the answer is stored before it is returned; without a cache nothing changes', async () => {
+  const { api, calls } = countingApi();
+  const cache = new FakeCache();
+  await handle(new Request(URL_HEALTH), api, {}, { cache });
+  assert.equal(cache.puts, 1);
+  const none = await handle(new Request(URL_HEALTH), api);
+  assert.equal(none.status, 200);
+  assert.equal(none.headers.get('cache-control'), `public, max-age=${HEALTH_CACHE_SECONDS}`);
+  assert.equal(calls.health, 2);
+});
+
+test('POST /v1/attest is never cached: every call reaches the Durable Object and nothing is stored or looked up', async () => {
+  const cache = new FakeCache();
+  const { api, calls } = countingApi();
+  const ctx: HttpContext = { cache };
+  for (let i = 0; i < 3; i++) {
+    const res = await handle(post(JSON.stringify({ tx: 'AQID' })), api, {}, ctx);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.equal(res.headers.get('x-cache'), null);
+  }
+  assert.equal(calls.attest, 3);
+  assert.equal(cache.puts, 0);
+  assert.equal(cache.matches, 0);
+});
+
+test('a health error (503) is not cached, and a cache that throws is skipped', async () => {
+  const cache = new FakeCache();
+  let status = 503;
+  const api: AttestorApi = {
+    attest: async () => ({ status: 200, body: {} }),
+    health: async () => ({ status, body: { attestor: null, keyError: 'ATTESTOR_SECRET is not set' } }),
+  };
+  const bad = await handle(new Request(URL_HEALTH), api, {}, { cache });
+  assert.equal(bad.status, 503);
+  assert.equal(bad.headers.get('cache-control'), 'no-store');
+  assert.equal(cache.puts, 0);
+
+  status = 200;
+  const broken: HealthCache = {
+    match: async () => {
+      throw new Error('cache unavailable');
+    },
+    put: async () => {
+      throw new Error('cache unavailable');
+    },
+  };
+  const res = await handle(new Request(URL_HEALTH), api, {}, { cache: broken });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('x-cache'), 'miss');
+});
+
+test('only GET reaches the health cache: POST /v1/attestor is a 405 before it', async () => {
+  const cache = new FakeCache();
+  const { api, calls } = countingApi();
+  const res = await handle(new Request(URL_HEALTH, { method: 'POST', body: '{}' }), api, {}, { cache });
+  assert.equal(res.status, 405);
+  assert.equal(calls.health, 0);
+  assert.equal(cache.matches, 0);
 });

@@ -48,9 +48,11 @@ Every refusal is HTTP 422 with `{"error": "<what is wrong>", "reason": "<code>"}
 | `set_strike` needs an Open round, `settle` a Live one | `round_state` |
 | The attestor's clock is past `strike_end` / `exit_end` | `window_open` |
 | `set_strike` only: the attestor's clock is before the round's `exit_start` (the program rejects a later strike, also for a round without a matched bank) | `strike_too_late` |
+| No other sample set was signed for this round and window before (one signature per round and window: see below) | `already_signed` |
+| Fewer than `ATTEST_MAX_TRIES` (6) earlier attempts reached the samples for this round and window | `too_many_attempts` |
 | At least 5 keeper samples, unless the attestor itself holds fewer than 5 reads inside the window (a corroborated outage, which is signed: see below) | `unpriced` |
 | The attestor holds at least 3 of its own reads inside the window | `too_few_samples` |
-| The keeper sent at least `max(5, floor(0.7 * n))` samples, `n` being the attestor's reads inside the window, and never more than the program's 16 are asked | `samples_withheld` |
+| The keeper sent at least `max(5, floor(0.6 * n))` samples, `n` being the attestor's reads inside the window, and never more than the program's 16 are asked | `samples_withheld` |
 | Every keeper slot lies within the slots the attestor read for the window (margins included), widened by 10 slots (`SLOT_MARGIN`) | `slot_out_of_range` |
 | A keeper sample at a slot the attestor read too has exactly the attestor's price there | `slot_price_mismatch` |
 | The keeper's mean, `floor(sum / n)` as the program computes it, is within `ATTEST_TOLERANCE_BPS` of the attestor's mean of its reads inside the window | `price_mismatch` |
@@ -84,12 +86,35 @@ without a matched bank (the program checks the window before it ends such a roun
 the five highest (or lowest) of its ten readings would move the mean by up to the tolerance, in its
 favour, without breaking another rule. Both services read the pool once a second, so each holds about
 ten reads of a ten-second window and misses a few of its own (a failed request, a late alarm). The
-keeper must send at least `max(5, floor(0.7 * n))` samples, `n` being the attestor's reads inside the
+keeper must send at least `max(5, floor(0.6 * n))` samples, `n` being the attestor's reads inside the
 window (one per slot), and at most 16 are ever asked (`KEEPER_MIN_SHARE_PERCENT` and
-`requiredKeeperSamples` in `src/samples.ts`). With ten own reads that is 7: an honest keeper that
-lost two or three passes, one that keeps only five is refused as `samples_withheld`. Only the counts
-are compared, never the slots: the two services share about 4 in 10 of their slots, so asking the
-keeper's slots to be a subset of the attestor's would refuse honest keepers.
+`requiredKeeperSamples` in `src/samples.ts`). With ten own reads that is 6: an honest keeper that
+lost up to four passes, one that keeps only five is refused as `samples_withheld`. The share was 70
+percent until 2026-10-07 and is 60 now: an honest keeper on a slow mainnet RPC (one hung answer of its
+first endpoint costs several seconds of a once-a-second sampler) could hold 6 reads against the
+attestor's 10 and was refused for good, so its round waited for `refund_expired`. The share only keeps
+a keeper from dropping a lot; what stops it from choosing among subsets is the next paragraph. Only
+the counts are compared, never the slots: the two services share about 4 in 10 of their slots, so
+asking the keeper's slots to be a subset of the attestor's would refuse honest keepers.
+
+**One signature per round and window.** The first signature for a round's strike window, or for its
+exit window, stores a SHA-256 of the sample list it priced (table `attest_windows` in the object's
+SQLite, so an eviction forgets nothing). The same list may be signed again at any time, also in a
+transaction with another blockhash or fee payer (a retry after a timeout); any different list for
+that round and window is refused as `already_signed`. Without this a stolen keeper key and token
+could ask for signatures for many subsets of its own readings (every one of them passes the checks
+above: C(10,7) = 120 of them) and send the one that suits it after the fact. The strike and the exit
+window of a round, and different rounds, are locked apart. Every call that gets as far as the samples
+(the round exists, is in the right state, its window is over) and is not a repeat of the signed list
+counts as an attempt for its round and window; after `ATTEST_MAX_TRIES` (default 6) of them without a
+signature the attestor answers `too_many_attempts`, whatever the list. Calls that stop earlier
+(`window_open`, `round_state`, `strike_too_late`, `devnet_unavailable`, a malformed transaction) are
+not attempts, and neither are repeats of a signed list. The records are deleted 6 hours after their
+last change (a round can be priced for about 12 minutes). Both refusals are final for that round and
+window; the round then ends through `refund_expired` as before. One case to know: a keeper that was
+restarted after its signature went out and rebuilt a slightly different sample list gets
+`already_signed` and the round also ends through `refund_expired`; the keeper keeps its samples on
+disk, so this needs a crash within seconds of the window's end.
 
 **A corroborated outage is signed.** When the keeper sends fewer than 5 samples the program ends the
 round on the spot as a free `Unpriceable` refund, but while the OracleConfig says `required` it needs
@@ -117,7 +142,7 @@ Other answers: 400 `bad_request` (not `{"tx": "<base64>"}`), 401 `unauthorized` 
 ```
 POST /v1/attest     {"tx": "<base64 wire transaction>"}, body at most 4 KB
                     200 {"signature": "<base58>", "attestor": "<base58 public key>"}
-GET  /v1/attestor   {"attestor": "<base58 public key>", "toleranceBps": 150,
+GET  /v1/attestor   {"attestor": "<base58 public key>", "toleranceBps": 150, "maxTries": 6,
                      "sampler": {"lastSampleAt", "lastSampleSlot", "lastRefreshAt", "nextAlarmAt",
                                  "nextRoundId", "windowsObserved", "samplesStored",
                                  "rounds": [{"id", "status", "pool", "strike": {"start", "end", "samples", "slots"}, "exit": {...}}],
@@ -136,14 +161,25 @@ attestor's in basis points (null when no comparison got that far) and `maxDiffBp
 of the signed calls; `verdict` is `agree`, `not_activated` or `unpriceable` for a signature and null
 for a refusal. Every call also leaves one `"event": "attest"` log line with its `result`,
 `keeperSamples`, `sharedSlots` (null when no comparison ran) and, when it got that far, `diffBps`.
-The health answers 503 when the key or the tolerance is not usable.
+The health answers 503 when the key, the tolerance or `ATTEST_MAX_TRIES` is not usable.
+
+**The health is cached at the edge for 20 seconds.** `GET /v1/attestor` is answered from the Workers
+cache (`caches.default`, key = the URL without its query, so `?x=1` does not get around it) with
+`Cache-Control: public, max-age=20`, and the Durable Object is asked only when the cache has nothing:
+at most one Durable Object request per 20 s per data centre however often it is polled (audit of
+2026-10-07, M1: 1 call a second would have been 86,400 Durable Object requests a day, the whole Free
+quota). Only a 200 is stored; an error is never cached. The header `x-cache: hit | miss` says which one
+answered. So the numbers in it (`attests`, `sampler`) are up to 20 s old. The cache works on the
+custom domain route `sol.flipthememe.com/v1/attestor`; on a `workers.dev` host the Cache API does
+nothing, so poll the custom domain. `POST /v1/attest` is never cached.
 
 ## Secrets and vars
 
 | Name | Kind | |
 | --- | --- | --- |
 | `ATTESTOR_SECRET` | secret, required | base58 of the attestor's 64-byte Solana secret key (a keypair JSON's 64 numbers as bytes), or of its 32-byte seed. Never logged; errors about it never quote it. |
-| `ATTEST_TOLERANCE_BPS` | var, default 150 | largest gap between the two means, in basis points of the attestor's mean (0 to 10000). Not calibrated yet: after a day of real rounds read `attests.maxDiffBps` and the `diffBps` of `attests.recent` in `GET /v1/attestor` (or of the `attest` log lines) and tighten it to just above what honest keepers show; the audit suggests 50. The tighter it is, the less a keeper can move the mean at the slots the attestor did not read. |
+| `ATTEST_TOLERANCE_BPS` | var, default 150 | largest gap between the two means, in basis points of the attestor's mean (0 to 10000). Not calibrated yet: after a day of real rounds read `attests.maxDiffBps` and the `diffBps` of `attests.recent` in `GET /v1/attestor` (or of the `attest` log lines) and tighten it to just above what honest keepers show; the audit suggests 30 to 50. The tighter it is, the less a keeper can move the mean at the slots the attestor did not read. To change it: edit `vars` in `wrangler.jsonc` and deploy. |
+| `ATTEST_MAX_TRIES` | var, default 6 | attempts per round and window that reach the samples before the attestor answers `too_many_attempts` (1 to 100). Repeats of an already signed sample list are not attempts. |
 | `MAINNET_RPC` | secret, optional | keyed mainnet RPC URL, tried before publicnode |
 | `DEVNET_RPC` | secret, optional | keyed devnet RPC URL, tried before OnFinality; recommended (see below) |
 | `ATTEST_TOKEN` | secret, **required in production** | `POST /v1/attest` needs `Authorization: Bearer <token>`, and a call without it gets 401. The keeper's client (`services/keeper/src/attest.ts`) already sends the header when the keeper runs with the same `ATTEST_TOKEN`. With no token configured the Worker lets every caller in (`authorized()` in `src/http.ts`), so anyone could burn the Free plan's request budget and, while the oracle is required, push every priced round into `refund_expired`. Set it with `wrangler secret put ATTEST_TOKEN` and in the keeper's environment. |
@@ -157,19 +193,61 @@ their outgoing addresses, so a keyed `DEVNET_RPC` is the safer setting for a dep
 
 ## Workers Free plan budget
 
-One round a minute (the keeper's cadence), as measured by the `budget` test and seen live:
+The Free plan limits are per Cloudflare account, and the attestor, `ftm-link` and `ftm-chatter` share
+one: **100,000 Workers requests a day for all of them together** (the day ends at 00:00 UTC), and 100,000
+Durable Object requests a day (the attestor's object only). Past the limit Cloudflare answers every
+request of the account with an error, so the attestor stops co-signing and every priced round ends
+through `refund_expired` until the day is over. Count both limits.
+
+**Durable Object requests** (alarms, cron pings, attests, health cache misses), one round a minute
+(the keeper's cadence), as measured by the `budget` test (the sampler: alarms and sample rows; the attest and
+cache rows are added here by hand) and seen live:
 
 | Per minute | | Per day | Free plan |
 | --- | --- | --- | --- |
 | 13 alarms reading the pool (1.5 s + 10 s + 1.5 s), 4 refresh alarms, 1 cron ping, about 2 attest calls | 20 Durable Object requests | about 28,800 | 100,000 requests |
-| 17 `setAlarm`, 13 sample rows, 13 deleted rows | 43 rows written | about 62,000 | 100,000 rows written |
+| `GET /v1/attestor` cache misses: at most 1 per 20 s per data centre | up to 3 | up to 4,320 | |
+| 17 `setAlarm`, 13 sample rows, 13 deleted rows, 6 `attest_windows` rows (2 writes per signed attest, 2 deletes) | about 49 rows written | about 70,000 | 100,000 rows written |
 | the prune scans the table every 10 minutes (about 800 rows), an attest reads about 20 | | under 300,000 | 5,000,000 rows read |
 | 13 mainnet reads, 4 devnet reads, 1 devnet read per attest | at most a few per invocation | | 50 subrequests per invocation |
 
-`GET /v1/attestor` costs one Durable Object request each, so poll it once a minute at most. Anyone
-may call `POST /v1/attest`: nobody gets a signature for what the checks refuse (and a signature is
-useless without the keeper's), but every call costs a request and a devnet read. `ATTEST_TOKEN`
-closes that (the keeper sends the header), which is why it must be set in production.
+About 33,000 of 100,000 Durable Object requests with the health cache; without it, one poll a second
+alone would be 86,400.
+
+**Workers requests** (every HTTP request and every cron run starts one; a hit in `caches.default` still
+runs the Worker, so the cache saves Durable Object requests, CPU and upstream calls, not this count):
+
+| Worker | Counts | Per day |
+| --- | --- | --- |
+| `ftm-attestor` | cron ping 1 a minute, about 2 attests a minute, health polls | 1,440 + 2,880 + polls, about 4,500 to 5,000 |
+| `ftm-chatter` | one request per open app every 45 s (`useChatter.ts`) | 1,920 per app open all day, 27 per 20-minute session |
+| `ftm-link` | a page view of a shared link (`/r/<id>`, `/get`), the Android link check, the faucet | a few hundred to a few thousand |
+
+Worked example: attestor 5,000 + link 2,000 leaves about 93,000 for chatter: 48 apps open all day, or
+about 3,400 twenty-minute sessions. During the judging window (13 October to 10 November 2026) ten
+phones open at once and a demo day of 50 sessions is nowhere near the limit, but one forgotten app or a
+script on the public chatter route is. To see where you are: Cloudflare dashboard, Workers & Pages,
+Overview (requests today against 100,000, per Worker), and Workers & Pages, Durable Objects (requests
+today). Check it after the first demo day and again before a push of traffic (a post on X).
+
+**Recommendation: Workers Paid for the judging period.** It is $5 a month for the account (check the
+current numbers on the Cloudflare pricing page: 10 million Workers requests and 1 million Durable
+Object requests a month are included, each further million costs cents) and lifts the daily caps that
+can kill the arena's price feed. Subscribe before 13 October, cancel after the judging window. If you
+stay on Free, move the attestor to an account of its own so that chatter traffic cannot starve it:
+deploy it there with the same `ATTESTOR_SECRET` (the on-chain OracleConfig keeps pointing at the same
+key) and point the keeper's `ATTEST_URL` at the new Worker.
+
+Anyone may call `POST /v1/attest`: nobody gets a signature for what the checks refuse (and a signature
+is useless without the keeper's), but every call costs a Worker request, a Durable Object request and a
+devnet read. `ATTEST_TOKEN` closes that (the keeper sends the header), which is why it must be set in
+production.
+
+**Time budgets.** One attest call reads devnet once (`findRound`) and gives all its endpoints, a keyed
+`DEVNET_RPC`, OnFinality and the public one together, 6 seconds (`ATTEST_DEVNET_BUDGET_MS`; each endpoint
+still has its own 3 s timeout): a slow first endpoint leaves a fallback only what remains, and the call
+ends with 503 `devnet_unavailable` at 6 s. The keeper gives an attest call 8 s (`ATTEST_TIMEOUT_MS` in
+`services/keeper/src/attest.ts`), so the 503 reaches it as an answer instead of a timeout.
 
 ## How the keeper uses it
 
@@ -205,7 +283,9 @@ rule that failed. `window_open` and `round_state` can clear (the window ends, th
 `strike_too_late` is final for the round (the exit window has opened: the keeper stops, and the
 round ends through `refund_expired`). The attestor's reads of a past window never change, so
 `unpriced`, `too_few_samples`, `samples_withheld`, `slot_out_of_range`, `slot_price_mismatch` and
-`price_mismatch` stay refused and that round ends through `refund_expired` too. A keeper that
+`price_mismatch` stay refused and that round ends through `refund_expired` too. So do `already_signed`
+(a different sample list was signed for that round and window; only the signed one is answered again)
+and `too_many_attempts` (6 attempts used up): the keeper should treat both as final and stop asking. A keeper that
 sends fewer than 5 samples after an outage it shares with the attestor gets a signature, and the
 program refunds the round as Unpriceable. A 503 or a timeout is worth a retry.
 
@@ -226,8 +306,11 @@ Local run with a test key: put `ATTESTOR_SECRET=<base58>` into `services\attesto
 (ignored by git), start `corepack pnpm --filter @flipthememe/attestor run dev`, then from
 `services\attestor` run `node scripts\smoke.ts http://127.0.0.1:8787`. The smoke test waits for the
 next round's strike window, samples the pool itself like the keeper, asks for a co-signature of a
-`set_strike` (a throwaway key stands in for the keeper; nothing is ever sent to a chain), verifies
-it, and checks that prices 5% off are refused.
+`set_strike` (a throwaway key stands in for the keeper; nothing is ever sent to a chain), checks that
+prices 5% off are refused and that the signature of the real set verifies. Run it against `wrangler dev`
+only: the attestor signs one sample set per round and window, so against the deployed attestor the
+signature would lock the round the script picked and the keeper's own samples for it would be refused
+as `already_signed` (the script refuses a non-local URL without `--allow-live`).
 
 Deploy (not done yet), from `services\attestor`:
 
@@ -239,8 +322,9 @@ npx wrangler secret put DEVNET_RPC
 
 `scripts\secret.ts` turns a solana-keygen keypair file into the base58 value on stdout only (the
 pipe keeps it off the screen) and prints the public key to stderr. Then `GET /v1/attestor` on the
-`workers.dev` URL shows the key and, a minute later, the rounds; `node scripts\smoke.ts <url>` runs
-the end-to-end check against it.
+`workers.dev` URL shows the key and, a minute later, the rounds. The first real round the keeper
+prices is the end-to-end check of the deployed attestor (`attests` in the health, the `attest` log
+lines); do not point `scripts\smoke.ts` at it, see above.
 
 ## Files
 

@@ -6,12 +6,16 @@
 //                                   how to install and play; with a challenge, a button that opens the
 //                                   app on it once installed
 //   /.well-known/assetlinks.json    Android App Links: lets the app open /r/ links directly
-//   /v1/names?a=<addr>,<addr>       Seeker ID (.skr) names for the app's player rows, see names.ts
+//   /v1/faucet                      POST {"address"}: 0.2 test SOL on devnet for the app's GET TEST SOL
+//                                   button, see faucet.ts
+//   /v1/names?a=<addr>,<addr>       Seeker ID (.skr) names for player rows, see names.ts. OPTIONAL: the
+//                                   app resolves .skr names itself on mainnet and does not call this
 //
 // The app is not a web app: this page only bridges a messenger link to the Android app. A friend
 // rarely installs, connects and tops up within the minute a round is open, so the challenge travels
 // on (to /get, then into the app) and the copy invites them to any later round.
 
+import { faucet, type FaucetEnv } from './faucet.ts';
 import { base58Decode, names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
@@ -23,6 +27,8 @@ const APK_URL = 'https://github.com/Sofiia7/flipthememe-apk/releases/latest/down
 const OG_IMAGE = 'https://flipthememe.com/og-cover.png';
 /** The one promise, worded the same on every page: the move is one minute, the result takes about two. */
 const PROMISE = 'A 1-minute move on a busy Solana memecoin. Result in about 2 minutes.';
+/** The line that tells a new player where free devnet SOL comes from (the faucet in faucet.ts behind the app's button). */
+const FREE_SOL = 'No devnet SOL? Tap GET TEST SOL in the app.';
 
 const ASSET_LINKS = [
   {
@@ -163,7 +169,8 @@ ${headline}
 </div>
 <a class="btn go" href="${escapeHtml(appIntent(c))}">OPEN FLIPTHEMEME</a>
 <a class="btn get" href="${escapeHtml(getLink(c))}">GET THE ANDROID APP</a>
-<p>No rush: rounds start every minute. Install the app, top up once and ${side ? 'take the other side' : 'make your call'} whenever you are ready. In the app your friend's face is marked RIVAL when you meet in a round. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>`,
+<p>No rush: rounds start every minute. Install the app, top up once and ${side ? 'take the other side' : 'make your call'} whenever you are ready. In the app your friend's face is marked RIVAL when you meet in a round. Calls are matched in one shared bank, not against your friend directly. You never buy the token. Solana devnet, test SOL only.</p>
+<p>${FREE_SOL}</p>`,
   });
 }
 
@@ -186,6 +193,7 @@ function getPage(c: Challenge | null): string {
 <li>Switch your wallet to Devnet: Seed Vault Wallet or Solflare, Settings, Network, Devnet.</li>
 <li>Open FlipTheMeme, tap Top up &amp; play once, then every call is one tap.</li>
 </ol>
+<p>${FREE_SOL}</p>
 <p>Devnet only, test SOL only. Prices come from live PumpSwap pools on mainnet.</p>`,
   });
 }
@@ -212,6 +220,10 @@ export function handle(request: Request): Response {
 }
 
 export default {
-  fetch: (request: Request, env: NamesEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) =>
-    new URL(request.url).pathname === '/v1/names' ? names(request, env, ctx) : handle(request),
+  fetch: (request: Request, env: NamesEnv & FaucetEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
+    const { pathname } = new URL(request.url);
+    if (pathname === '/v1/names') return names(request, env, ctx);
+    if (pathname === '/v1/faucet') return faucet(request, env);
+    return handle(request);
+  },
 };

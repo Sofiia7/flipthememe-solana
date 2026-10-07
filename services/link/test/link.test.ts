@@ -168,6 +168,7 @@ test('other paths: home and /get explain the app, the rest redirects, writes are
 
 const HERO = 'ONE MINUTE.<br>UP OR DOWN.';
 const SUB = 'A 1-minute move on a busy Solana memecoin. Result in about 2 minutes.';
+const FREE_SOL = 'No devnet SOL? Tap GET TEST SOL in the app.';
 
 test('the home, /get and challenge pages use the canonical wording and stay honest about devnet', async () => {
   const hero = ['/', '/get', `/get?r=496&side=up&t=Tesla&by=${BY}`];
@@ -175,7 +176,8 @@ test('the home, /get and challenge pages use the canonical wording and stay hone
   for (const path of [...hero, ...challenge]) {
     const body = await get(path).text();
     assert.ok(body.includes(SUB), `${path}: sub line missing`);
-    assert.ok(!/fresh|60 seconds|60-second/i.test(body), `${path}: old wording left`);
+    assert.ok(body.includes(`<p>${FREE_SOL}</p>`), `${path}: the free test SOL line is missing`);
+    assert.ok(!/fresh|60 seconds|60-second|60 sec/i.test(body), `${path}: old wording left`);
     assert.match(body, /DEVNET/, path);
     assert.match(body, /test SOL/, path);
     assert.match(body, /<meta name="description" content="[^"]*1-minute move[^"]*about 2 minutes[^"]*">/, path);

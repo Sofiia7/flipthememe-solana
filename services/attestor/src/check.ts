@@ -64,6 +64,8 @@ export const REASONS = [
   'round_state',
   'window_open',
   'strike_too_late',
+  'already_signed',
+  'too_many_attempts',
   'unpriced',
   'too_few_samples',
   'samples_withheld',

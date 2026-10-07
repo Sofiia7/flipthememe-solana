@@ -25,20 +25,27 @@ export const SLOT_MARGIN = 10n;
 export const MIN_OWN_SAMPLES = 3;
 export const DEFAULT_TOLERANCE_BPS = 150;
 /**
- * The share of the attestor's own reads inside a window that the keeper must send (audit H2: the
- * keeper picks which of its readings go into the instruction, and the mean check alone leaves it
- * room to keep the five highest or lowest of ten). Both sides read the pool once a second, so each
- * holds about ten reads of a ten-second window and misses a few on its own (a failed request, a late
- * alarm): an honest keeper sends 8 to 10 when the attestor holds 10, and 70 percent lets three of
- * ten be missing. Only the counts are compared, never the slots: the two services share about 40
+ * The share of the attestor's own reads inside a window that the keeper must send (audit of
+ * 2026-10-06, H2: the keeper picks which of its readings go into the instruction, and the mean
+ * check alone leaves it room to keep the five highest or lowest of ten). Both sides read the pool
+ * once a second, so each holds about ten reads of a ten-second window and misses a few on its own
+ * (a failed request, a late alarm).
+ *
+ * 60 percent, not 70 (audit of 2026-10-07, H2): an honest keeper on a slow mainnet RPC loses a few
+ * reads, since one hung answer of its first endpoint costs several seconds of a once-a-second
+ * sampler, and at 70 percent a keeper holding 6 reads against the attestor's 10 was refused for
+ * good and its round waited for refund_expired. At 60 percent ten attestor reads ask for 6, so up
+ * to four of ten may be missing; the program's minimum of 5 stays the floor. What stops a keeper
+ * from trying subsets is the lock on the first signature, not this share (`already_signed` in
+ * attestor.ts). Only the counts are compared, never the slots: the two services share about 40
  * percent of their slots, so "the keeper's slots are a subset of mine" would refuse honest keepers.
- * Not calibrated yet: tighten it once `attests` in GET /v1/attestor shows a day of real counts.
+ * Not calibrated yet: revisit it once `attests` in GET /v1/attestor shows a day of real counts.
  */
-export const KEEPER_MIN_SHARE_PERCENT = 70;
+export const KEEPER_MIN_SHARE_PERCENT = 60;
 
 /**
  * How many samples the keeper must send when the attestor read `ownInside` times inside the window:
- * max(5, floor(70 percent of them)), never more than the 16 the program takes (an honest keeper
+ * max(5, floor(60 percent of them)), never more than the 16 the program takes (an honest keeper
  * sends at most 16, whatever the attestor read).
  */
 export function requiredKeeperSamples(ownInside: number): number {

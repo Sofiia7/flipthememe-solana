@@ -4,7 +4,11 @@
  *   POST /v1/attest     {"tx": "<base64 wire transaction>"}, body at most 4 KB
  *                       200 {"signature": "<base58>", "attestor": "<base58>"}
  *                       422 {"error": "...", "reason": "<code>"}: a check failed (check.ts REASONS)
- *   GET  /v1/attestor   {"attestor": "<base58>", "sampler": {...}}: the key and the sampler's health
+ *   GET  /v1/attestor   {"attestor": "<base58>", "sampler": {...}}: the key and the sampler's health;
+ *                       a 200 is served from the edge cache for 20 s, so the Durable Object is asked
+ *                       once per 20 s per data centre however often it is polled (audit of
+ *                       2026-10-07, M1: every uncached call is a Durable Object request, 100,000 a
+ *                       day on the Free plan). POST /v1/attest is never cached.
  *
  * Other answers: 400 bad_request, 401 unauthorized (only with ATTEST_TOKEN set), 405, 413
  * body_too_large, 503 not_configured / devnet_unavailable / unavailable. Every error body is
@@ -12,6 +16,8 @@
  */
 
 export const MAX_BODY_BYTES = 4096;
+/** How long the edge keeps a healthy GET /v1/attestor answer. */
+export const HEALTH_CACHE_SECONDS = 20;
 
 export type Result = { status: number; body: Record<string, unknown> };
 
@@ -20,6 +26,15 @@ export interface AttestorApi {
   attest(tx: string): Promise<Result>;
   health(): Promise<Result>;
 }
+
+/** The slice of the Workers cache (`caches.default`) the health answer uses, so tests can pass a fake. */
+export interface HealthCache {
+  match(request: Request): Promise<Response | undefined>;
+  put(request: Request, response: Response): Promise<void>;
+}
+
+/** What the runtime offers the handler besides the Durable Object: both optional (node:test has neither). */
+export type HttpContext = { cache?: HealthCache; waitUntil?(promise: Promise<unknown>): void };
 
 export type HttpEnv = {
   /**
@@ -96,13 +111,47 @@ async function attest(request: Request, api: AttestorApi, env: HttpEnv): Promise
   return answer(await api.attest(tx));
 }
 
-export async function handle(request: Request, api: AttestorApi, env: HttpEnv = {}): Promise<Response> {
+const withCacheHeader = (response: Response, state: 'hit' | 'miss'): Response => {
+  const headers = new Headers(response.headers);
+  headers.set('x-cache', state);
+  return new Response(response.body, { status: response.status, headers });
+};
+
+/**
+ * GET /v1/attestor: from the edge cache while its answer is under HEALTH_CACHE_SECONDS old, else
+ * from the Durable Object (and into the cache when it is a 200; an error is never cached). The
+ * cache key is the URL without its query, so a "?x=1" cannot reach the Durable Object. A cache that
+ * fails is skipped, never an error. `x-cache: hit | miss` says which one answered.
+ */
+async function health(request: Request, api: AttestorApi, ctx: HttpContext): Promise<Response> {
+  const { origin, pathname } = new URL(request.url);
+  const key = new Request(`${origin}${pathname}`);
+  if (ctx.cache) {
+    try {
+      const hit = await ctx.cache.match(key);
+      if (hit) return withCacheHeader(hit, 'hit');
+    } catch {
+      // fall through to the Durable Object
+    }
+  }
+  const result = await api.health();
+  const cacheable = result.status === 200;
+  const response = answer(result, cacheable ? { 'cache-control': `public, max-age=${HEALTH_CACHE_SECONDS}` } : {});
+  if (cacheable && ctx.cache) {
+    const stored = ctx.cache.put(key, response.clone()).catch(() => undefined);
+    if (ctx.waitUntil) ctx.waitUntil(stored);
+    else await stored;
+  }
+  return withCacheHeader(response, 'miss');
+}
+
+export async function handle(request: Request, api: AttestorApi, env: HttpEnv = {}, ctx: HttpContext = {}): Promise<Response> {
   const { pathname } = new URL(request.url);
   try {
     if (pathname === '/v1/attest') return await attest(request, api, env);
     if (pathname === '/v1/attestor') {
       if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'), { allow: 'GET' });
-      return answer(await api.health());
+      return await health(request, api, ctx);
     }
   } catch (error) {
     // The Durable Object could not be reached (overloaded, restarting) or threw.

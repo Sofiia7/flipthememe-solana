@@ -65,6 +65,16 @@ export class RpcUnavailable extends Error {
   }
 }
 
+/** `promise`, or a rejection with the signal's reason as soon as the signal aborts (whichever comes first). */
+function within<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    if (signal.aborted) onAbort();
+  });
+}
+
 export class Failover {
   private readonly endpoints: (Endpoint & { failures: number; retryAtMs: number; lastError: string })[];
   private readonly now: () => number;
@@ -79,12 +89,31 @@ export class Failover {
     return this.endpoints.map((e) => e.name);
   }
 
-  async call<T>(what: string, fn: (rpc: SolanaRpc) => Promise<T>): Promise<T> {
+  /**
+   * Runs `fn` on the first endpoint that answers. `budgetMs` caps the whole call, every endpoint
+   * and fallback together: each try gets the time left (as `signal`, which `fn` should hand to
+   * `.send({ abortSignal })`; an `fn` that ignores it is still cut off), so a slow first endpoint
+   * leaves a fallback only what remains and the call never runs past the budget. An endpoint cut
+   * off that way backs off like one that failed. Without a budget each endpoint has its own
+   * timeout only (`httpRpc`). The budget is measured on the real clock, not on `now`, which only
+   * schedules the backoff.
+   */
+  async call<T>(what: string, fn: (rpc: SolanaRpc, signal?: AbortSignal) => Promise<T>, options: { budgetMs?: number } = {}): Promise<T> {
     const errors: string[] = [];
+    const startedAt = Date.now();
     for (const endpoint of this.endpoints) {
       if (endpoint.retryAtMs > this.now()) continue;
+      let signal: AbortSignal | undefined;
+      if (options.budgetMs !== undefined) {
+        const left = options.budgetMs - (Date.now() - startedAt);
+        if (left <= 0) {
+          errors.push('the time budget is used up');
+          break;
+        }
+        signal = AbortSignal.timeout(left);
+      }
       try {
-        const result = await fn(endpoint.rpc);
+        const result = await (signal ? within(fn(endpoint.rpc, signal), signal) : fn(endpoint.rpc));
         endpoint.failures = 0;
         return result;
       } catch (error) {
@@ -93,6 +122,7 @@ export class Failover {
         endpoint.retryAtMs = this.now() + Math.min(BACKOFF_MAX_MS, 1_000 * 2 ** Math.min(endpoint.failures - 1, 16));
         endpoint.lastError = describe(error);
         errors.push(`${endpoint.name}: ${endpoint.lastError}`);
+        if (signal?.aborted) break; // the budget ran out during this try: nothing is left for a fallback
       }
     }
     if (errors.length > 0) throw new RpcUnavailable(what, errors.join('; '));

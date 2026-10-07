@@ -4,6 +4,7 @@ import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../src/index.ts';
 import {
+  MAX_GPA_CALLS,
   base58Decode,
   base58Encode,
   findPda,
@@ -231,4 +232,37 @@ test('MAINNET_RPC goes first, a failing endpoint is dropped for the request, pub
     'api.mainnet-beta.solana.com getProgramAccounts',
     'api.mainnet-beta.solana.com getMultipleAccounts',
   ]);
+});
+
+test('a request makes at most 10 getProgramAccounts calls; the addresses left over are missing, not null, and not cached', async (t) => {
+  assert.equal(MAX_GPA_CALLS, 10);
+  const { cache, calls, get } = setup(t, { records: {}, labels: {} });
+  const owners = Array.from({ length: 14 }, (_, i) => fake(i + 1));
+  const res = await get(`?a=${owners.join(',')}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'no-store'); // incomplete: ask again
+  assert.equal(calls.filter((c) => c.endsWith('getProgramAccounts')).length, MAX_GPA_CALLS);
+  const body = (await res.json()) as { names: Record<string, string | null> };
+  assert.equal(Object.keys(body.names).length, MAX_GPA_CALLS);
+  assert.ok(Object.values(body.names).every((n) => n === null));
+  assert.equal(cache.entries.size, MAX_GPA_CALLS);
+
+  // The second request finds ten in the cache and asks only for the four that were left out.
+  calls.length = 0;
+  const again = await get(`?a=${owners.join(',')}`);
+  assert.equal(calls.filter((c) => c.endsWith('getProgramAccounts')).length, 4);
+  assert.equal(again.headers.get('cache-control'), 'public, max-age=300');
+  assert.equal(Object.keys(((await again.json()) as { names: object }).names).length, 14);
+});
+
+test('a failing first endpoint counts against the same 10 getProgramAccounts calls', async (t) => {
+  const env = { MAINNET_RPC: 'https://rpc.example.com/?api-key=secret' };
+  const { calls, get } = setup(t, { records: {}, labels: {} }, (host) => host === 'rpc.example.com');
+  const owners = Array.from({ length: 14 }, (_, i) => fake(i + 1));
+  const res = await get(`?a=${owners.join(',')}`, env);
+  assert.equal(res.status, 200);
+  // The keyed endpoint fails once and is dropped for the request; every lookup after it goes to mainnet-beta.
+  const gpa = calls.filter((c) => c.endsWith('getProgramAccounts'));
+  assert.equal(gpa.length, MAX_GPA_CALLS);
+  assert.equal(gpa.filter((c) => c.startsWith('rpc.example.com')).length, 1);
 });
