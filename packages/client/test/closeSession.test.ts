@@ -48,11 +48,13 @@ test('a signer object is kept on the owner account, and another program id moves
   assert.notEqual(moved.accounts?.[0].address, (await closeSession({ owner: OWNER, sessionSigner: DEVICE })).accounts?.[0].address);
 });
 
-test('SessionStillActive is the next program error after MaxBankBelowMin', () => {
+test('SessionStillActive is the next program error after MaxBankBelowMin, and RoundOpensTooFar follows it', () => {
   const at = PROGRAM_ERRORS.indexOf('SessionStillActive');
   assert.equal(6000 + at, 6032);
   assert.equal(PROGRAM_ERRORS[at - 1], 'MaxBankBelowMin');
-  assert.equal(PROGRAM_ERRORS.length, at + 1, 'appended last');
+  assert.equal(PROGRAM_ERRORS[at + 1], 'RoundOpensTooFar');
+  assert.equal(6000 + at + 1, 6033);
+  assert.equal(PROGRAM_ERRORS.length, at + 2, 'appended last');
 });
 
 test('closePosition marks the round writable, since the program lowers its position counts', async () => {

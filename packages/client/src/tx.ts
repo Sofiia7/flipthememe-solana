@@ -140,6 +140,8 @@ export const PROGRAM_ERRORS = [
   'MaxBankBelowMin',
   // close_session; append only.
   'SessionStillActive',
+  // create_round refuses a round that opens more than 15 minutes ahead; append only.
+  'RoundOpensTooFar',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 

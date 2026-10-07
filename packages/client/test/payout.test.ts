@@ -6,7 +6,9 @@ import { Outcome, RefundReason, Side } from '../src/constants.ts';
 import { acceptedStake, houseContext, isActivated, positionPayout, previewBet, type HouseContext } from '../src/payout.ts';
 
 const SOL = 1_000_000_000n;
-const expired = (houseAmount: bigint, isHouse: boolean): HouseContext => ({ refundReason: RefundReason.Expired, houseAmount, isHouse });
+const withReason = (refundReason: RefundReason) => (houseAmount: bigint, isHouse: boolean): HouseContext => ({ refundReason, houseAmount, isHouse });
+const expired = withReason(RefundReason.Expired);
+const unpriceable = withReason(RefundReason.Unpriceable);
 
 test('without house information the payout is the plain payout of the book', () => {
   const s = SOL / 10n;
@@ -29,6 +31,27 @@ test('an expired round takes the house stake and the other positions share it', 
   assert.equal(pay(Side.Down, (6n * SOL) / 100n, true), 0n);
 });
 
+test('an unpriceable round treats the house exactly like an expired one', () => {
+  // Same book as above: 0.08 UP from two players, 0.02 DOWN from one, the house filled DOWN with 0.06.
+  const [up, down, house] = [(8n * SOL) / 100n, (8n * SOL) / 100n, (6n * SOL) / 100n];
+  const book = [
+    [Side.Up, (6n * SOL) / 100n, false],
+    [Side.Up, (2n * SOL) / 100n, false],
+    [Side.Down, (2n * SOL) / 100n, false],
+    [Side.Down, (6n * SOL) / 100n, true],
+  ] as const;
+  for (const fee of [0, 100]) {
+    for (const [side, stake, isHouse] of book) {
+      const got = positionPayout(up, down, Outcome.Refund, 200, fee, side, stake, unpriceable(house, isHouse));
+      assert.equal(got, positionPayout(up, down, Outcome.Refund, 200, fee, side, stake, expired(house, isHouse)));
+    }
+  }
+  const pay = (side: Side, stake: bigint, isHouse: boolean) => positionPayout(up, down, Outcome.Refund, 200, 0, side, stake, unpriceable(house, isHouse));
+  assert.equal(pay(Side.Up, (6n * SOL) / 100n, false), (6n * SOL) / 100n + (36n * SOL) / 1000n);
+  assert.equal(pay(Side.Down, (2n * SOL) / 100n, false), (2n * SOL) / 100n + (12n * SOL) / 1000n);
+  assert.equal(pay(Side.Down, (6n * SOL) / 100n, true), 0n);
+});
+
 test('the refund fee still applies to the stake of a player in an expired round', () => {
   // Equal sides, 100 bps: 0.05 * 0.99 back, plus the whole 0.05 house stake.
   const half = SOL / 20n;
@@ -46,18 +69,35 @@ test('an expired round without a house stake pays like any refund', () => {
   }
 });
 
-test('only an expired refund takes the house stake', () => {
+test('only a refund without a price takes the house stake', () => {
   const [up, down, house] = [SOL / 10n, SOL / 10n, SOL / 20n];
-  for (const refundReason of [RefundReason.None, RefundReason.Tie, RefundReason.Unpriceable]) {
+  // A tie is a real price that came out equal: the house is refunded like everyone.
+  for (const refundReason of [RefundReason.None, RefundReason.Tie]) {
     for (const isHouse of [true, false]) {
       const plain = positionPayout(up, down, Outcome.Refund, 200, 100, Side.Down, SOL / 20n);
       assert.equal(positionPayout(up, down, Outcome.Refund, 200, 100, Side.Down, SOL / 20n, { refundReason, houseAmount: house, isHouse }), plain);
     }
   }
-  for (const outcome of [Outcome.Up, Outcome.Down, Outcome.NotActivated]) {
-    const plain = positionPayout(up, down, outcome, 200, 100, Side.Down, SOL / 20n);
-    assert.equal(positionPayout(up, down, outcome, 200, 100, Side.Down, SOL / 20n, expired(house, true)), plain);
+  // A priced round and an unmatched one never look at the house either, whatever the reason says.
+  for (const reason of [expired, unpriceable]) {
+    for (const outcome of [Outcome.Up, Outcome.Down, Outcome.NotActivated]) {
+      const plain = positionPayout(up, down, outcome, 200, 100, Side.Down, SOL / 20n);
+      assert.equal(positionPayout(up, down, outcome, 200, 100, Side.Down, SOL / 20n, reason(house, true)), plain);
+    }
   }
+});
+
+test('an unmatched round returns a small house fill whole, and a tie refunds the house like everyone', () => {
+  // 0.05 UP against a 0.005 house fill: 2 x 0.005 is under a 0.02 minimum bank, so nothing plays.
+  const [up, down, house] = [SOL / 20n, SOL / 200n, SOL / 200n];
+  const notActivated = { refundReason: RefundReason.None, houseAmount: house };
+  assert.equal(positionPayout(up, down, Outcome.NotActivated, 200, 100, Side.Down, house, { ...notActivated, isHouse: true }), house);
+  assert.equal(positionPayout(up, down, Outcome.NotActivated, 200, 100, Side.Up, up, { ...notActivated, isHouse: false }), up);
+  // Tie: the house stake is refunded at the refund rate (99% at 100 bps), not forfeited.
+  const [tieUp, tieDown, tieHouse] = [(8n * SOL) / 100n, (8n * SOL) / 100n, (6n * SOL) / 100n];
+  const tie = { refundReason: RefundReason.Tie, houseAmount: tieHouse, isHouse: true };
+  assert.equal(positionPayout(tieUp, tieDown, Outcome.Refund, 200, 100, Side.Down, tieHouse, tie), (tieHouse * 99n) / 100n);
+  assert.equal(positionPayout(tieUp, tieDown, Outcome.Refund, 200, 0, Side.Down, tieHouse, tie), tieHouse);
 });
 
 test('with nobody to compensate the house gets its refund', () => {
@@ -97,7 +137,7 @@ function rng(seed: bigint) {
   };
 }
 
-test('expired payouts with a house never exceed the bank and the house keeps nothing', () => {
+test('payouts of a round without a price and with a house never exceed the bank and the house keeps nothing', () => {
   const next = rng(0x1234_5678_9abc_def1n);
   const stake = () => SOL / 100n + (next() % (SOL / 10n));
   for (let i = 0; i < 2_000; i++) {
@@ -114,18 +154,20 @@ test('expired payouts with a house never exceed the bank and the house keeps not
     const house = houseStakes.reduce((a, b) => a + b, 0n);
     const up = upPlayers + (houseSide === Side.Up ? house : 0n);
     const down = downPlayers + (houseSide === Side.Down ? house : 0n);
-    for (const fee of [0, 100]) {
-      const pay = (side: Side, s: bigint, isHouse: boolean) => positionPayout(up, down, Outcome.Refund, 200, fee, side, s, expired(house, isHouse))!;
-      let paid = 0n;
-      for (const s of ups) paid += pay(Side.Up, s, false);
-      for (const s of downs) paid += pay(Side.Down, s, false);
-      for (const s of houseStakes) {
-        const got = pay(houseSide, s, true);
-        assert.equal(got, 0n);
-        paid += got;
+    for (const reason of [expired, unpriceable]) {
+      for (const fee of [0, 100]) {
+        const pay = (side: Side, s: bigint, isHouse: boolean) => positionPayout(up, down, Outcome.Refund, 200, fee, side, s, reason(house, isHouse))!;
+        let paid = 0n;
+        for (const s of ups) paid += pay(Side.Up, s, false);
+        for (const s of downs) paid += pay(Side.Down, s, false);
+        for (const s of houseStakes) {
+          const got = pay(houseSide, s, true);
+          assert.equal(got, 0n);
+          paid += got;
+        }
+        assert.ok(paid <= up + down, `paid ${paid} > bank ${up + down} (house ${house}, fee ${fee})`);
+        if (fee === 0 && house > 0n) assert.ok(up + down - paid <= BigInt(ups.length + downs.length), 'floors lose under one lamport per position');
       }
-      assert.ok(paid <= up + down, `paid ${paid} > bank ${up + down} (house ${house}, fee ${fee})`);
-      if (fee === 0 && house > 0n) assert.ok(up + down - paid <= BigInt(ups.length + downs.length), 'floors lose under one lamport per position');
     }
   }
 });

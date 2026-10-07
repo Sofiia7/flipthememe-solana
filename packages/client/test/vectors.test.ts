@@ -155,11 +155,13 @@ test('account decoders read the program layout', () => {
 });
 
 test('payout mirror agrees with payout.rs', () => {
-  // 60 plain books, then 80 books with a house position (claim_payout).
-  assert.equal(vectors.payouts.length, 140);
+  // 60 plain books, then books with a house position (claim_payout): 42 fixed ones and 80 random ones.
+  assert.equal(vectors.payouts.length, 60 + 42 + 80);
   let withHouse = 0;
-  let forfeits = 0;
-  let shares = 0;
+  let tiesKept = 0;
+  let unmatchedKept = 0;
+  const forfeits = { [RefundReason.Expired]: 0, [RefundReason.Unpriceable]: 0 } as Record<number, number>;
+  const shares = { [RefundReason.Expired]: 0, [RefundReason.Unpriceable]: 0 } as Record<number, number>;
   for (const v of vectors.payouts) {
     const house =
       v.houseAmount === undefined ? undefined : { refundReason: v.refundReason, houseAmount: BigInt(v.houseAmount), isHouse: v.isHouse };
@@ -167,11 +169,30 @@ test('payout mirror agrees with payout.rs', () => {
     assert.equal(got, BigInt(v.payout), JSON.stringify(v));
     if (house === undefined) continue;
     withHouse++;
-    const isExpiredRefund = v.outcome === Outcome.Refund && v.refundReason === RefundReason.Expired && house.houseAmount > 0n;
-    if (isExpiredRefund && v.isHouse) forfeits++;
-    if (isExpiredRefund && !v.isHouse) shares++;
+    // A round that ended without a price (expired, or priced from too few samples) takes the house stake.
+    const withoutPrice =
+      v.outcome === Outcome.Refund &&
+      (v.refundReason === RefundReason.Expired || v.refundReason === RefundReason.Unpriceable) &&
+      house.houseAmount > 0n;
+    if (withoutPrice && v.isHouse) {
+      assert.equal(got, 0n);
+      forfeits[v.refundReason]++;
+    }
+    if (withoutPrice && !v.isHouse) shares[v.refundReason]++;
+    // A tie and an unmatched round give the house stake back.
+    if (v.outcome === Outcome.Refund && v.refundReason === RefundReason.Tie && v.isHouse && house.houseAmount > 0n) {
+      assert.ok(got! > 0n);
+      tiesKept++;
+    }
+    if (v.outcome === Outcome.NotActivated && v.isHouse) {
+      assert.equal(got, BigInt(v.stake));
+      unmatchedKept++;
+    }
   }
-  // The vectors must exercise the house rule, on both sides of it.
-  assert.equal(withHouse, 80);
-  assert.ok(forfeits >= 3 && shares >= 3, `forfeits ${forfeits}, shares ${shares}`);
+  // The vectors must exercise the house rule on both sides of it, for each reason.
+  assert.equal(withHouse, 42 + 80);
+  for (const reason of [RefundReason.Expired, RefundReason.Unpriceable]) {
+    assert.ok(forfeits[reason] >= 2 && shares[reason] >= 6, `reason ${reason}: forfeits ${forfeits[reason]}, shares ${shares[reason]}`);
+  }
+  assert.ok(tiesKept >= 2 && unmatchedKept >= 1, `ties ${tiesKept}, unmatched ${unmatchedKept}`);
 });

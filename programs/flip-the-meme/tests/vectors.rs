@@ -198,7 +198,7 @@ fn write_vectors() {
         InvalidRoundTime, InvalidRoundId, NotDue, NotFinal, AlreadyClaimed, FeeTooHigh, BankTooLargeForPool, InvalidSamples,
         Paused, Unauthorized, InvalidAccount, NotFillWindow, NothingToFill, NotSweepable, NotClosable, Insolvent, NotClaimed,
         HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor, StrikeWindowClosed, RoundTooLong,
-        SettleDeadlineTooFar, MaxBankBelowMin, SessionStillActive,
+        SettleDeadlineTooFar, MaxBankBelowMin, SessionStillActive, RoundOpensTooFar,
     ];
 
     let config = Config {
@@ -330,8 +330,49 @@ fn write_vectors() {
             outcome as u8, side as u8
         ));
     }
-    // Books with a house position, for every refund reason: what claim pays (an expired round takes
-    // the house stake and shares it among the other positions). The rows above stay as they were.
+    // Books with a house position, for every refund reason: what claim pays (a round that ended
+    // without a price, Expired or Unpriceable, takes the house stake and shares it among the other
+    // positions; a tie and an unmatched round return it). First fixed books, so that every case is in
+    // the vectors whatever the random ones below draw; the 60 rows above stay as they were.
+    let fixed = |rows: &mut Vec<String>,
+                 (up, down, house): (u64, u64, u64),
+                 outcome: Outcome,
+                 reason: RefundReason,
+                 fee_refund: u16,
+                 (side, stake, is_house): (Side, u64, bool)| {
+        let payout = claim_payout(up, down, house, outcome, reason, 200, fee_refund, side, stake, is_house).unwrap();
+        rows.push(format!(
+            "    {{ \"rawUp\": \"{up}\", \"rawDown\": \"{down}\", \"houseAmount\": \"{house}\", \"isHouse\": {is_house}, \"outcome\": {}, \"refundReason\": {}, \"side\": {}, \"stake\": \"{stake}\", \"feeWinBps\": 200, \"feeRefundBps\": {fee_refund}, \"payout\": \"{payout}\" }}",
+            outcome as u8, reason as u8, side as u8
+        ));
+    };
+    // About 0.08 UP from two players against 0.02 DOWN from one, and the house fills DOWN with 0.06;
+    // every stake has odd lamports on it, so the pro rata share has a remainder to floor.
+    let positions = [
+        (Side::Up, 60_000_051, false),
+        (Side::Up, 20_000_021, false),
+        (Side::Down, 20_000_031, false),
+        (Side::Down, 60_000_011, true),
+    ];
+    let house = positions[3].1;
+    let (up, down) = (positions[0].1 + positions[1].1, positions[2].1 + house);
+    for reason in [RefundReason::None, RefundReason::Tie, RefundReason::Unpriceable, RefundReason::Expired] {
+        for fee_refund in [0u16, 100] {
+            for position in positions {
+                fixed(&mut rows, (up, down, house), Outcome::Refund, reason, fee_refund, position);
+            }
+        }
+    }
+    // A priced round never looks at the house, whatever the reason field holds; an unmatched round
+    // returns the house fill whole (a small fill: 2 x 0.005 stays under min_bank).
+    for outcome in [Outcome::Up, Outcome::Down] {
+        for position in positions {
+            fixed(&mut rows, (up, down, house), outcome, RefundReason::None, 100, position);
+        }
+    }
+    for position in [(Side::Up, 50_000_000, false), (Side::Down, 5_000_000, true)] {
+        fixed(&mut rows, (50_000_000, 5_000_000, 5_000_000), Outcome::NotActivated, RefundReason::None, 100, position);
+    }
     let refund_reasons = [RefundReason::None, RefundReason::Tie, RefundReason::Unpriceable, RefundReason::Expired];
     let house_outcomes = [Outcome::Up, Outcome::Down, Outcome::Refund, Outcome::Refund, Outcome::Refund, Outcome::NotActivated];
     for _ in 0..80 {

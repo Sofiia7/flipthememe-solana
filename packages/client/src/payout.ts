@@ -17,8 +17,9 @@ export function acceptedStake(rawUp: bigint, rawDown: bigint, side: Side, stake:
 }
 
 /**
- * What claim needs beyond the book. Only a matched round that expired unpriced looks at it: the
- * house position then forfeits its stake and the other positions share it (see `positionPayout`).
+ * What claim needs beyond the book. Only a matched round that ended without a price (Expired, or
+ * Unpriceable: too few observations) looks at it: the house position then forfeits its stake and
+ * the other positions share it (see `positionPayout`).
  */
 export type HouseContext = {
   /** Round.refundReason. */
@@ -39,13 +40,14 @@ export function houseContext(
 
 /**
  * Lamports credited to a position once its round is final: the claim payout of the program
- * (`claim_payout` in payout.rs). Without `house` it is the plain payout of the book. With it, an
- * Expired refund also applies the house rule:
+ * (`claim_payout` in payout.rs). Without `house` it is the plain payout of the book. With it, a
+ * Refund that ended without a price (reason Expired or Unpriceable) also applies the house rule:
  *   house position:       0
  *   any other position:   its normal refund + floor(houseAmount * stake / otherStakes)
  * where otherStakes = rawUp + rawDown - houseAmount. If the house stake is the whole bank
  * (otherStakes = 0) there is nobody to compensate and nothing is forfeited. Every other outcome
- * and refund reason, and a round with no house stake, pay exactly as without `house`.
+ * and refund reason (a Tie, an unmatched NotActivated round, a priced round), and a round with no
+ * house stake, pay exactly as without `house`.
  */
 export function positionPayout(
   rawUp: bigint,
@@ -59,7 +61,8 @@ export function positionPayout(
 ): bigint | null {
   const base = bookPayout(rawUp, rawDown, outcome, feeWinBps, feeRefundBps, side, stake);
   if (base === null || house === undefined) return base;
-  if (outcome !== Outcome.Refund || house.refundReason !== RefundReason.Expired || house.houseAmount === 0n) return base;
+  const unpriced = house.refundReason === RefundReason.Expired || house.refundReason === RefundReason.Unpriceable;
+  if (outcome !== Outcome.Refund || !unpriced || house.houseAmount === 0n) return base;
   const otherStakes = rawUp + rawDown - house.houseAmount;
   if (otherStakes < 0n) return null;
   if (otherStakes === 0n) return base;

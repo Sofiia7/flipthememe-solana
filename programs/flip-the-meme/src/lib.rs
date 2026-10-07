@@ -5,6 +5,17 @@ pub mod payout;
 
 declare_id!("5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz");
 
+// Embedded in the deployed program: explorers and `query-security-txt` read it from the chain.
+// Left out of builds that use this crate as a library (feature `no-entrypoint`, so also `cpi`).
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "FlipTheMeme",
+    project_url: "https://sol.flipthememe.com",
+    contacts: "link:https://github.com/Sofiia7/flipthememe-solana/security/advisories/new",
+    policy: "https://github.com/Sofiia7/flipthememe-solana/blob/main/SECURITY.md",
+    source_code: "https://github.com/Sofiia7/flipthememe-solana"
+}
+
 /// Fewer observations than this in a price window means the round cannot be priced.
 pub const MIN_SAMPLES: usize = 5;
 pub const MAX_SAMPLES: usize = 16;
@@ -13,7 +24,8 @@ pub const MAX_FEE_WIN_BPS: u16 = 200;
 pub const MAX_FEE_REFUND_BPS: u16 = 100;
 pub const MAX_SESSION_SECS: i64 = 7 * 24 * 60 * 60;
 /// What the admin (the keeper's hot key) may schedule, so no round can hold bets for long: at most
-/// this long from a round's opening to the end of its exit window ...
+/// this long from a round's opening to the end of its exit window (and a round may not open more
+/// than this far ahead of the creating transaction) ...
 pub const MAX_ROUND_SECS: i64 = 15 * 60;
 /// ... and from the end of the exit window to the deadline after which anyone may refund it.
 pub const MAX_SETTLE_GRACE_SECS: i64 = 60 * 60;
@@ -47,7 +59,8 @@ pub mod flip_the_meme {
         Ok(())
     }
 
-    /// Stops new bets only. Settlement, refunds, claims and withdrawals keep working.
+    /// Stops new bets and house fills (both put new stake into a round). Settlement, refunds,
+    /// claims and withdrawals keep working.
     pub fn set_pause(ctx: Context<AdminConfig>, paused: bool) -> Result<()> {
         ctx.accounts.config.paused = paused;
         Ok(())
@@ -225,6 +238,12 @@ pub mod flip_the_meme {
             args.settle_deadline.saturating_sub(args.exit_end) <= MAX_SETTLE_GRACE_SECS,
             ErrorCode::SettleDeadlineTooFar
         );
+        // A round that opens far ahead would burn its id and keep the admin's rent locked until its
+        // settle deadline, with nobody able to bet on it meanwhile.
+        require!(
+            args.opens_at <= now.saturating_add(MAX_ROUND_SECS),
+            ErrorCode::RoundOpensTooFar
+        );
         config.next_round_id = round_id.checked_add(1).ok_or(ErrorCode::Arithmetic)?;
 
         let round = &mut ctx.accounts.round;
@@ -330,13 +349,16 @@ pub mod flip_the_meme {
     /// After entry closes, the house may bring the smaller side up to the larger one, so a
     /// lone player still gets a matched round. It never takes the larger side. HouseLimits caps
     /// the house total in one round and the house spend per UTC day (stakes only). The house
-    /// position's rent comes out of the house vault, like a player's.
+    /// position's rent comes out of the house vault, like a player's. Like place_bet, it stops
+    /// while the program is paused. One position per round and key: a house key that already holds
+    /// a player position in the round cannot fill it (the position address is taken).
     pub fn house_fill(ctx: Context<HouseFill>, amount: u64) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let config = &mut ctx.accounts.config;
         let round = &mut ctx.accounts.round;
         let vault = &mut ctx.accounts.house_vault;
         let limits = &mut ctx.accounts.house_limits;
+        require!(!config.paused, ErrorCode::Paused);
         require!(
             round.status == RoundStatus::Open && now >= round.cutoff_at && now < round.strike_start,
             ErrorCode::NotFillWindow
@@ -406,8 +428,10 @@ pub mod flip_the_meme {
     /// including `exit_start`: once the exit window has begun the exit price is on its way, so a
     /// strike fixed later could be chosen with it in view. A round whose strike is not set in time
     /// stays Open and ends through `refund_expired` after the settle deadline. A round without a
-    /// matched bank ends here as NotActivated and returns every stake in full; no price is used
-    /// for it, so it needs no attestor either, but it too must be closed in this window.
+    /// matched bank ends here as NotActivated and returns every stake in full, the house's too; no
+    /// price is used for it, so it needs no attestor either, but it too must be closed in this
+    /// window. A matched round with too few samples ends as Refund/Unpriceable, and then the house
+    /// forfeits its stake like it does when the round expires (payout::claim_payout).
     pub fn set_strike(ctx: Context<PriceUpdate>, samples: Vec<PriceSample>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -438,6 +462,10 @@ pub mod flip_the_meme {
         Ok(())
     }
 
+    /// Prices the exit from `exit_end` up to and including `settle_deadline` (refund_expired starts
+    /// one second after it). A window with fewer than MIN_SAMPLES ends as Refund/Unpriceable and an
+    /// exit mean equal to the strike as Refund/Tie. Only the first of the two makes the house forfeit
+    /// its stake (payout::claim_payout): a tie is a real price, a thin window is not.
     pub fn settle(ctx: Context<PriceUpdate>, samples: Vec<PriceSample>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -471,6 +499,7 @@ pub mod flip_the_meme {
     /// attestor outage only delays a round into this refund. A matched round ends as Refund with
     /// reason Expired, and claim then takes the house's stake and shares it among the other
     /// positions (payout::claim_payout), so withholding a price is no free option for the house.
+    /// An unmatched round ends as NotActivated and everyone, the house included, gets the stake back.
     pub fn refund_expired(ctx: Context<RefundExpired>) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let round = &mut ctx.accounts.round;
@@ -568,6 +597,11 @@ pub mod flip_the_meme {
     /// because sweep_fees needs the round: closing it earlier would strand the remainder (fee plus
     /// rounding dust) in Config for good. A round that paid out its whole bank has no remainder
     /// (zero-fee refunds, an unmatched round returned in full), so it needs no sweep.
+    ///
+    /// Permissionless in effect: `admin` is a plain account here, not a signer. `has_one = admin`
+    /// only pins who receives the rent, so anyone may send this once the conditions hold and the
+    /// rent still goes to `config.admin`. That is safe because the conditions are strict and a
+    /// round id is never reused (`next_round_id` only grows), so closing cannot be abused.
     pub fn close_empty_round(ctx: Context<CloseEmptyRound>) -> Result<()> {
         let round = &ctx.accounts.round;
         let bank = round.raw_up.checked_add(round.raw_down).ok_or(ErrorCode::Arithmetic)?;
@@ -809,8 +843,9 @@ pub enum Outcome {
     Pending,
     Up,
     Down,
-    /// Activated round returned minus `fee_refund_bps` (tie, no price, expired). When it expired,
-    /// the house position forfeits its stake to the other positions (payout::claim_payout).
+    /// Activated round returned minus `fee_refund_bps` (tie, no price, expired). When it ended
+    /// without a price (Unpriceable or Expired), the house position forfeits its stake to the other
+    /// positions (payout::claim_payout); a tie returns it like any other stake.
     Refund,
     /// No matched bank: every stake returns in full.
     NotActivated,
@@ -1173,13 +1208,14 @@ pub struct SweepFees<'info> {
     pub treasury: UncheckedAccount<'info>,
 }
 
+/// `admin` does not sign: the instruction is open to anyone and the rent always goes to `config.admin`.
 #[derive(Accounts)]
 pub struct CloseEmptyRound<'info> {
     #[account(seeds = [b"config"], bump = config.bump, has_one = admin @ ErrorCode::Unauthorized)]
     pub config: Account<'info, Config>,
     #[account(mut, close = admin, seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
-    /// CHECK: receives the rent back; its address is pinned by `config.admin`.
+    /// CHECK: receives the rent back and signs nothing; its address is pinned by `config.admin`.
     #[account(mut)]
     pub admin: UncheckedAccount<'info>,
 }
@@ -1316,4 +1352,7 @@ pub enum ErrorCode {
     // Added with close_session: append only.
     #[msg("The session can still bet: revoke it or wait for its expiry before closing it")]
     SessionStillActive,
+    // Added with the round-opening bound: append only.
+    #[msg("The round opens too far in the future")]
+    RoundOpensTooFar,
 }
