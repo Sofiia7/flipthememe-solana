@@ -6,6 +6,23 @@ import { HEALTH_CACHE_SECONDS, MAX_BODY_BYTES, handle, type AttestorApi, type He
 const URL_ATTEST = 'https://attestor.test/v1/attest';
 const URL_HEALTH = 'https://attestor.test/v1/attestor';
 
+test('public certificates need no bearer token, reject malformed context and tolerate a cache outage', async () => {
+  const { api } = fakeApi();
+  const calls: string[] = [];
+  api.certificate = async (id, kind) => { calls.push(`${id}:${kind}`); return { status: 200, body: { roundId: id, kind } }; };
+  const route = 'https://attestor.test/v1/attestation';
+  const cache: HealthCache = { match: async () => { throw new Error('cache down'); }, put: async () => { throw new Error('cache down'); } };
+  const res = await handle(new Request(`${route}?round=42&kind=exit`), api, { ATTEST_TOKEN: 'private-legacy-secret' }, { cache });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=5');
+  assert.deepEqual(await res.json(), { roundId: '42', kind: 'exit' });
+  for (const query of ['round=-1&kind=exit', 'round=042&kind=exit', 'round=42&kind=other', 'round=42', 'round=99999999999999999&kind=exit']) {
+    assert.equal((await handle(new Request(`${route}?${query}`), api)).status, 400);
+  }
+  assert.equal((await handle(new Request(`${route}?round=42&kind=exit`, { method: 'POST' }), api)).status, 405);
+  assert.deepEqual(calls, ['42:exit']);
+});
+
 function fakeApi(answer: Result = { status: 200, body: { signature: 'sig', attestor: 'key' } }) {
   const txs: string[] = [];
   const api: AttestorApi = {

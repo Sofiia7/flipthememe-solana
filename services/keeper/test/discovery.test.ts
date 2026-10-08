@@ -340,6 +340,17 @@ describe('PoolDiscovery: trending is for tracking only', () => {
     assert.equal(flowsOf({ data: 'x' }).size, 0);
   });
 
+  test('price drift uses signed finite five-minute percent, never treats missing data as a flat market', () => {
+    for (const value of ['-0.75', 0, '1.5']) {
+      const body = { data: [{ attributes: { address: 'A', transactions: { m5: { buys: 50, sells: 50 } }, price_change_percentage: { m5: value } } }] };
+      assert.equal(flowsOf(body).get('A' as Address)?.priceChangeM5, Number(value));
+    }
+    for (const value of [undefined, null, '', 'NaN', 'Infinity', {}]) {
+      const body = { data: [{ attributes: { address: 'A', transactions: { m5: { buys: 50, sells: 50 } }, price_change_percentage: { m5: value } } }] };
+      assert.equal(flowsOf(body).get('A' as Address)?.priceChangeM5, undefined);
+    }
+  });
+
   test('off by default: no trending request', async () => {
     const gecko = new FakeGecko();
     await discovery(gecko).refresh(NOW, null);
