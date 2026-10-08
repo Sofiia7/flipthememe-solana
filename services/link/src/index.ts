@@ -1,3 +1,4 @@
+import { avatar } from './avatar.ts';
 // sol.flipthememe.com: the web side of a shared round link.
 //
 //   /r/<round>?side=up&t=<ticker>&by=<wallet>&n=<name>
@@ -228,6 +229,7 @@ export default {
       const arena = raw ? JSON.parse(raw).arena : null;
       return Response.json(arena ?? { error: 'collecting' }, { status: arena ? 200 : 503, headers: { 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }
+    if (pathname === '/v1/avatar' && request.method === 'GET') return avatar(request);
     if (pathname === '/v1/leaderboard') return leaderboard(request, env);
     if (pathname === '/leaderboard') return leaderboardPage();
     if (pathname === '/v1/names') return names(request, env, ctx);
