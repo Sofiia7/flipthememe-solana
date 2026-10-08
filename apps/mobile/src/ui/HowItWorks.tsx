@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HouseFace } from '../PixelFace';
 import { C, MONO } from '../theme';
 import { NeonButton } from './NeonButton';
@@ -9,16 +10,18 @@ import { PixelIcon, PixelText } from './PixelText';
 const BACK_ARROW = ['..#....', '.##....', '#######', '.##...#', '..#...#', '......#', '.######'];
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(5,3,12,0.72)' },
+  modal: { flex: 1 },
+  backdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(5,3,12,0.72)' },
   sheet: {
     backgroundColor: C.bg,
-    borderTopWidth: 2,
+    borderWidth: 2,
     borderColor: C.neonPurple,
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 26,
     gap: 12,
     maxHeight: '86%',
+    marginHorizontal: 12,
   },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   close: { width: 30, height: 30, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
@@ -101,28 +104,32 @@ const RULES: { icon: ReactNode; text: string }[] = [
   },
 ];
 
-/** The rules in one screen: opened by the "?" in the arena header. */
-export function HowItWorksSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+/** On-demand rules and the player's current phase, above the arena rather than inside its layout. */
+export function HowItWorksSheet({ visible, onClose, context }: { visible: boolean; onClose: () => void; context?: ReactNode }) {
+  const insets = useSafeAreaInsets();
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
-      <View style={styles.sheet}>
-        <View style={styles.titleRow}>
-          <PixelText text="HOW IT WORKS" size={3} color={C.white} shadow={C.accent} />
-          <Pressable onPress={onClose} hitSlop={10} style={styles.close} accessibilityRole="button" accessibilityLabel="Close">
-            <Text style={styles.closeText}>X</Text>
-          </Pressable>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <View style={styles.modal}>
+        <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close rules" />
+        <View style={[styles.sheet, { marginTop: insets.top + 8 }]}>
+          <View style={styles.titleRow}>
+            <PixelText text="RULES" size={3} color={C.white} shadow={C.accent} />
+            <Pressable onPress={onClose} hitSlop={10} style={styles.close} accessibilityRole="button" accessibilityLabel="Close">
+              <Text style={styles.closeText}>X</Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.list} bounces={false}>
+            {context}
+            {RULES.map((rule) => (
+              <View key={rule.text} style={styles.rule}>
+                {rule.icon}
+                <Text style={styles.ruleText}>{rule.text}</Text>
+              </View>
+            ))}
+          </ScrollView>
+          <Text style={styles.devnet}>Test SOL only</Text>
+          <NeonButton title="LET'S PLAY" kind="purple" onPress={onClose} />
         </View>
-        <ScrollView contentContainerStyle={styles.list} bounces={false}>
-          {RULES.map((rule) => (
-            <View key={rule.text} style={styles.rule}>
-              {rule.icon}
-              <Text style={styles.ruleText}>{rule.text}</Text>
-            </View>
-          ))}
-        </ScrollView>
-        <Text style={styles.devnet}>Test SOL only</Text>
-        <NeonButton title="LET'S PLAY" kind="purple" onPress={onClose} />
       </View>
     </Modal>
   );

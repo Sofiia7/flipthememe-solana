@@ -5,7 +5,7 @@ import { formatSol } from '../lib/format';
 import { C, MONO } from '../theme';
 import { PixelText } from './PixelText';
 
-/** Explains the chart before the player encounters the two clocks. */
+/** Detailed phase explanation shown only inside the rules overlay. */
 export function RoundProgress({ round, position, nowSec }: { round: RoundView; position: PositionView; nowSec: number }) {
   const progress = roundProgress(round.account, position.account.side, nowSec);
   return (

@@ -358,8 +358,8 @@ export function ArenaScreen() {
             <Text style={styles.devnet}>DEVNET</Text>
           </View>
           <View style={styles.headerRight}>
-            <Pressable onPress={() => setHowOpen(true)} hitSlop={8} style={styles.help} accessibilityRole="button" accessibilityLabel="How it works">
-              <Text style={styles.helpText}>?</Text>
+            <Pressable onPress={() => setHowOpen(true)} hitSlop={8} style={styles.help} accessibilityRole="button" accessibilityLabel="Rules and current round">
+              <Text style={styles.helpText}>RULES</Text>
             </Pressable>
             {/* A visitor's chip opens the same sheet as UP and DOWN (connect and approve in one wallet trip); a player's opens the wallet tab. */}
             <Pressable onPress={() => (owner ? app.setTab('wallet') : setTopUpOpen(true))} style={styles.walletChip} accessibilityRole="button">
@@ -389,10 +389,6 @@ export function ArenaScreen() {
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? preview.pool} nowMs={secMs} />
-
-          {focus ?? inOpen ? (
-            <RoundProgress round={(focus ?? inOpen)!.round} position={(focus ?? inOpen)!.position} nowSec={nowSec} />
-          ) : null}
 
           <PriceChart
             points={stageFeed.points}
@@ -453,12 +449,6 @@ export function ArenaScreen() {
               upcoming={panel.kind !== 'open'}
             />
           ) : null}
-          {/* One button family: the invitation to my live round is the purple NeonButton (as in the dock), the open invitation a quiet ghost. */}
-          {challengeFocus ? (
-            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} />
-          ) : inviteRound ? (
-            <Btn small kind="ghost" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
-          ) : null}
           {extraRounds.map((m) => (
             <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />
           ))}
@@ -476,6 +466,17 @@ export function ArenaScreen() {
 
         </ScrollView>
       </View>
+
+      {/* Keep the invitation visible even when an alert or extra round makes the stage scroll. */}
+      {challengeFocus || inviteRound ? (
+        <View style={styles.friendDock}>
+          {challengeFocus ? (
+            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} style={styles.friend} />
+          ) : inviteRound ? (
+            <Btn small kind="ghost" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
+          ) : null}
+        </View>
+      ) : null}
 
       <View style={styles.dock}>
         {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
@@ -606,7 +607,9 @@ export function ArenaScreen() {
         // Named in the sheet while its round is still open: a round that closed under the sheet is not promised.
         call={intent && !intent.committed && open?.id === intent.roundId ? { side: intent.side, text: intentText(intent, sideName, formatSol) } : null}
       />
-      <HowItWorksSheet visible={howOpen} onClose={closeHow} />
+      <HowItWorksSheet visible={howOpen} onClose={closeHow} context={
+        howOpen && (focus ?? inOpen) ? <RoundProgress round={(focus ?? inOpen)!.round} position={(focus ?? inOpen)!.position} nowSec={nowSec} /> : null
+      } />
     </View>
   );
 }
@@ -707,7 +710,7 @@ const styles = StyleSheet.create({
   streakPill: { color: '#2a1a00', backgroundColor: C.neonYellow, fontFamily: MONO, fontWeight: '900', fontSize: 12, paddingHorizontal: 8, paddingVertical: 3 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   help: {
-    width: 30,
+    width: 46,
     height: 30,
     borderRadius: 0,
     borderWidth: 2,
@@ -716,13 +719,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     boxShadow: `0 0 8px ${C.neonPurple}88`,
   },
-  helpText: { color: C.white, fontSize: 15, fontWeight: '900' },
+  helpText: { color: C.white, fontSize: 10, fontWeight: '900', fontFamily: MONO },
   nextExplanation: { color: C.accentText, fontSize: 12, lineHeight: 17 },
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
   stage: { flex: 1, overflow: 'hidden' },
   page: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 16, gap: 8 },
   friend: { minHeight: 32, paddingVertical: 6 },
+  friendDock: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
   loadingText: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   results: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
