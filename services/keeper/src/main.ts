@@ -1,3 +1,4 @@
+import { shadowSamplingWindow } from './market-reserve.ts';
 import { marketStatus } from './market-status.ts';
 /**
  * FlipTheMeme keeper (devnet). One process, no HTTP server:
@@ -140,14 +141,24 @@ async function main(): Promise<void> {
       ? { ...persisted, quoteReserve: 0n, reserveAtMs: 0 }
       : null;
   // Discover by activity and new listings; trending never seeds production selection.
-  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: false, newPoolsPages: 1 });
-  const selector = new PoolSelector({
+  let selector: PoolSelector;
+  const discovery = new PoolDiscovery({ gate: cfg.poolGate, logger: log, trending: false, newPoolsPages: 1,
+    topPages: cfg.poolGate.balanced ? [1, 2, 3, 4, 5] : undefined,
+    isolateNewPools: !!cfg.poolGate.balanced,
+    reservePools: () => selector?.watching.length ? selector.watching.map(p => p.pool) : shadow.observedPools(Date.now()),
+  });
+  selector = new PoolSelector({
     source: discovery,
     chain: poolChain(refs, mainnet, tokens),
     gate: cfg.poolGate,
     logger: log,
     override: cfg.poolOverride,
     initial,
+    reservePrice: (pool, nowMs) => {
+      const price = store.latest(pool);
+      return price && nowMs - price.atMs <= 10_000 ? price.quoteAmount : null;
+    },
+    marketSample: (pool, nowMs) => shadow.market(pool, nowMs),
     marketBias: (pool, nowMs) => cfg.poolGate.neutral ? shadow.bias(pool, nowMs) : null,
     marketWarming: (pool, nowMs) => !!cfg.poolGate.neutral && shadow.readiness(pool, nowMs) !== null && shadow.bias(pool, nowMs) === null,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
@@ -198,9 +209,10 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
-      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: cfg.poolGate.neutral ? 10 : null, momentumMaxShare: cfg.poolGate.neutral ? 0.8 : null, warmupRequired: !!cfg.poolGate.neutral },
+      selectionPolicy: { neutral: cfg.poolGate.neutral, balancedReserve: cfg.poolGate.balanced, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: cfg.poolGate.neutral ? 10 : null, momentumMaxShare: cfg.poolGate.neutral ? 0.8 : null, warmupRequired: !!cfg.poolGate.neutral },
       priceProtocol: cfg.legacyPrices ? 'legacy-cosign' : 'detached-canonical',
       marketReadiness: pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, now) : null,
+      marketReserve: selector.reserveStatus,
       observingPools: selector.watching.map(p => ({ pool: p.pool, readiness: shadow.readiness(p.pool, now) })),
       ...sched.status(),
       houseBudget: {
@@ -233,7 +245,7 @@ async function main(): Promise<void> {
     const pools = sched.activeRoundPools();
     if (selector.current) pools.push(selector.current.pool);
     // A pool that was dropped after a shadow round was noted for it stays read until that round is evaluated.
-    pools.push(...selector.watching.map(p => p.pool), ...shadow.pendingPools());
+    if (shadowSamplingWindow(Date.now())) pools.push(...selector.watching.map(p => p.pool), ...shadow.pendingPools());
     return pools;
   };
   const shadowPool = () => {
@@ -264,6 +276,7 @@ async function main(): Promise<void> {
     every('shadow', 1_000, 700, errors, async () => shadow.tick(Date.now(), shadowPool(), selector.watching)),
     every('scheduler', 1_000, 300, errors, async () => {
       try {
+        selector.activateReserve(Date.now());
         await sched.tick(Date.now());
       } finally {
         writeStatus();

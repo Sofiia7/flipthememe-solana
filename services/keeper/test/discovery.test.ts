@@ -357,3 +357,24 @@ describe('PoolDiscovery: trending is for tracking only', () => {
     assert.ok(gecko.urls.every((u) => !u.includes('trending_pools')));
   });
 });
+
+
+test('reserve pools keep fresh statistics beyond the new-token age window; extra top pages widen discovery',async()=>{
+  const gecko=new FakeGecko();
+  const old=candidate(100,100,48*60*MINUTE);
+  gecko.numbers.set(old.pool,old);
+  gecko.top=Array.from({length:60},(_,i)=>candidate(i+1,100,48*60*MINUTE));
+  const d=new PoolDiscovery({gate:DEFAULT_GATE,logger:()=>{},fetchFn:gecko.fetchFn,newPoolsPages:0,topPages:[1,2,3],reservePools:()=>[old.pool]});
+  for(let i=0;i<3;i++)await d.refresh(NOW+i*MINUTE,null);
+  assert.equal(d.status(NOW+2*MINUTE).candidates,61);
+  assert.ok(d.poolsToRefresh(NOW+2*MINUTE,null).includes(old.pool));
+});
+test('new-pool endpoint failures do not stop reserve and top-list refreshes',async()=>{
+  const gecko=new FakeGecko();gecko.failUrl=/new_pools/;
+  const d=new PoolDiscovery({gate:DEFAULT_GATE,logger:()=>{},fetchFn:gecko.fetchFn,isolateNewPools:true});
+  await d.refresh(NOW,null);
+  const from=gecko.urls.length;
+  await d.refresh(NOW+MINUTE,null);
+  assert.deepEqual(gecko.kinds(from),['top2']);
+  assert.equal(d.status(NOW+MINUTE).skipRefreshes,0);
+});

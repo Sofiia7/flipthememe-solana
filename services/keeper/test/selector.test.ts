@@ -33,6 +33,8 @@ function harness(
     reserves?: [number, bigint][];
     complete?: boolean;
     gate?: PoolGate;
+    reservePrice?: (pool: Address, nowMs: number) => bigint | null;
+    marketSample?: (pool: Address, nowMs: number) => import('../src/market-reserve.ts').MarketSample;
     marketBias?: (pool: Address, nowMs: number) => string | null;
     marketWarming?: (pool: Address, nowMs: number) => boolean;
     /** The token check by pool number: a verdict, or an Error that is thrown (the RPC failed). Pools not listed pass. Absent: no token check at all. */
@@ -81,6 +83,8 @@ function harness(
     source,
     chain,
     gate: opts.gate ?? DEFAULT_GATE,
+    reservePrice: opts.reservePrice ?? (() => DEEP),
+    marketSample: opts.marketSample,
     marketBias: opts.marketBias,
     marketWarming: opts.marketWarming,
     logger: (f) => logs.push(f),
@@ -470,4 +474,74 @@ test('a prepared neutral pool replaces a warming pool even during the hold; a re
   assert.equal(last(h)?.reason, 'prepared market available');
   await h.selector.refresh(NOW + HOUR);
   assert.equal(h.selector.current?.pool, testAddress(2));
+});
+
+
+const balancedGate = { ...DEFAULT_GATE, balanced: true, neutral: false, youthWeight: 0, maxImbalance: 0.3 };
+const calm = (i: number) => ({ ...withFlow(candidate(i, 0, 48 * HOUR), 60, 60), priceChangeM5: 0.2 });
+const sample = (up: number, down: number) => ({ priced: up + down, up, down, dominantShare: up + down ? Math.max(up, down) / (up + down) : null });
+test('continuous reserve switches a biased current market to a prepared balanced pool during the hold', async () => {
+  const h = harness([calm(1), calm(2)], { gate: balancedGate, initial: selection(1, 3, NOW - MINUTE), marketSample: p => p === testAddress(1) ? sample(16,4) : sample(5,5) });
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool, testAddress(2));
+  assert.equal(h.changes.some(p => p === null), false);
+  assert.equal(h.selector.reserveStatus.find(p => p.pool === testAddress(2))?.prepared, true);
+});
+test('continuous reserve keeps serving when every candidate is biased or warming', async () => {
+  for (const stats of [sample(10,0), sample(0,0), sample(0,10)]) {
+    const h = harness([calm(1), calm(2)], { gate: balancedGate, initial: selection(1,3,NOW - MINUTE), marketSample: () => stats });
+    await h.selector.refresh(NOW);
+    assert.ok(h.selector.current);
+    assert.equal(h.changes.some(p => p === null), false);
+    assert.equal(h.selector.watching.length, 2);
+  }
+});
+test('continuous reserve retains candidates while they warm and switches to lower observed risk symmetrically', async () => {
+  const h = harness([calm(1),calm(2)], { gate: balancedGate, initial: selection(1,3,NOW - MINUTE), marketSample: p => p === testAddress(1) ? sample(2,18) : sample(5,5) });
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(2));
+  assert.equal(h.selector.watching.some(p => p.pool===testAddress(1)),true);
+});
+test('unsafe and shallow candidates never enter the continuous reserve even when perfectly balanced', async () => {
+  const h = harness([calm(1),calm(2),calm(3)], { gate: balancedGate, initial: selection(1,3,NOW - MINUTE), marketSample: () => sample(5,5), reserves: [[2,SHALLOW]], tokens: [[3,{ok:false,reason:'freeze authority'}]] });
+  await h.selector.refresh(NOW);
+  assert.deepEqual(h.selector.watching.map(p => p.pool),[testAddress(1)]);
+  assert.equal(h.selector.current?.pool,testAddress(1));
+});
+test('a current pool that truly fails depth is replaced directly from the qualified reserve', async () => {
+  const h=harness([calm(1),calm(2)],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:()=>sample(5,5),reserves:[[1,SHALLOW]]});
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(2));
+  assert.equal(h.changes.some(p=>p===null),false);
+});
+
+
+test('temporary discovery outage does not erase qualified reserve pools or stop the current market',async()=>{
+  const h=harness([calm(1),calm(2)],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:()=>sample(5,5)});
+  await h.selector.refresh(NOW);
+  h.source.result={candidates:[],complete:false};
+  await h.selector.refresh(NOW+MINUTE);
+  assert.ok(h.selector.current);
+  assert.equal(h.selector.watching.length,2);
+  assert.equal(h.changes.some(p=>p===null),false);
+});
+
+
+test('handover keeps the active market until a reserve has a fresh sufficiently deep price feed',async()=>{
+  let live: bigint | null=null;
+  const h=harness([calm(1),calm(2)],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:p=>p===testAddress(1)?sample(16,4):sample(5,5),reservePrice:()=>live});
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(1));
+  live=SHALLOW;h.selector.activateReserve(NOW+1000);
+  assert.equal(h.selector.current?.pool,testAddress(1));
+  live=DEEP;h.selector.activateReserve(NOW+2000);
+  assert.equal(h.selector.current?.pool,testAddress(2));
+  assert.equal(h.changes.some(p=>p===null),false);
+});
+test('expired handover cannot switch using a no longer validated reserve',async()=>{
+  let live: bigint | null=null;
+  const h=harness([calm(1),calm(2)],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:p=>p===testAddress(1)?sample(16,4):sample(5,5),reservePrice:()=>live});
+  await h.selector.refresh(NOW);
+  live=DEEP;h.selector.activateReserve(NOW+91_000);
+  assert.equal(h.selector.current?.pool,testAddress(1));
 });

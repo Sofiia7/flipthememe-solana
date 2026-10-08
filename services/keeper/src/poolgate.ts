@@ -36,6 +36,8 @@ const HOUR_MS = 60 * MINUTE_MS;
 export type PoolGate = {
   /** Production selection: no age preference, hard flow/activity checks on entry and retention. */
   neutral?: boolean;
+  /** Continuous rounds with a measured, qualified reserve and soft directional ranking. */
+  balanced?: boolean;
   /** Absolute five-minute return, percent. Production rejects missing returns too. */
   maxPriceMoveM5?: number;
   /** Entry gate: pool age at least this ... */
@@ -93,8 +95,8 @@ export function isRung(value: unknown): value is Rung {
 
 /** The best rung a pool qualifies for by its numbers, or null while it is too young (or undated). */
 export function rungOf(c: Candidate, nowMs: number, gate: PoolGate): Rung | null {
-  if (gate.pumpOnly && !isPumpFunMint(c.baseMint)) return null;
   const age = nowMs - c.createdAtMs;
+  if (gate.pumpOnly && !isPumpFunMint(c.baseMint) && !(gate.balanced && age >= 24 * HOUR_MS)) return null;
   if (!(age >= gate.minAgeMs)) return null;
   if (c.txM5 >= gate.minTxM5) {
     if (age <= gate.maxAgeMs) return 0;
@@ -159,8 +161,8 @@ export function rankCandidates(candidates: readonly Candidate[], nowMs: number, 
     const rung = rungOf(candidate, nowMs, gate);
     if (rung !== null) ranked.push({ candidate, rung, score: scoreOf(candidate, nowMs, gate), oneSided: isOneSided(candidate, gate) });
   }
-  ranked.sort((a, b) => gate.neutral ? b.score - a.score || a.candidate.pool.localeCompare(b.candidate.pool) : a.rung - b.rung || b.score - a.score);
-  if (gate.neutral) return ranked;
+  ranked.sort((a, b) => gate.neutral || gate.balanced ? b.score - a.score || a.candidate.pool.localeCompare(b.candidate.pool) : a.rung - b.rung || b.score - a.score);
+  if (gate.neutral || gate.balanced) return ranked;
   if (!ranked.some((r) => !r.oneSided && r.rung < 3)) return ranked;
   return [...ranked.filter((r) => !r.oneSided), ...ranked.filter((r) => r.oneSided)];
 }

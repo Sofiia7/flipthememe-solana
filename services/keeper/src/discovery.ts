@@ -105,6 +105,10 @@ export class PoolDiscovery {
   private readonly maxCalls: number;
   private readonly newPoolsPages: number;
   private readonly trending: boolean;
+  private readonly topPages: readonly number[];
+  private readonly reservePools: () => readonly Address[];
+  private readonly isolateNewPools: boolean;
+  private newPoolsRetryAt = 0;
   private readonly tracked = new Map<Address, Tracked>();
   private readonly numbers = new Map<Address, Numbers>();
   /** Buys and sells of the last 5 minutes per pool, noted from the raw answers (see flowsOf). */
@@ -132,8 +136,14 @@ export class PoolDiscovery {
      * from the trending rows. It costs one request of the budget.
      */
     trending?: boolean;
+    topPages?: readonly number[];
+    reservePools?: () => readonly Address[];
+    isolateNewPools?: boolean;
   }) {
     this.gate = opts.gate;
+    this.topPages = opts.topPages ?? TOP_PAGES;
+    this.reservePools = opts.reservePools ?? (() => []);
+    this.isolateNewPools = opts.isolateNewPools ?? false;
     this.logger = opts.logger;
     const base: GeckoTerminalFetch =
       opts.fetchFn ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }));
@@ -179,7 +189,7 @@ export class PoolDiscovery {
 
       step = 'top pools';
       if (this.topPending.length === 0 && nowMs >= this.topDueAtMs) {
-        this.topPending = [...TOP_PAGES];
+        this.topPending = [...this.topPages];
         this.topDueAtMs = nowMs + TOP_REFRESH_MS;
       }
       const topPage = this.topPending[0];
@@ -194,7 +204,7 @@ export class PoolDiscovery {
       step = 'new_pools';
       const previousNewest = this.newestSeenMs;
       let newest = previousNewest;
-      for (let page = 1; page <= this.newPoolsPages && budget > 0; page++) {
+      for (let page = 1; page <= this.newPoolsPages && budget > 0 && nowMs >= this.newPoolsRetryAt; page++) {
         budget--;
         const result = await fetchNewPumpSwapPools(this.fetchFn, page, nowMs);
         for (const c of result.pumpSwap) this.track(c, nowMs);
@@ -209,6 +219,12 @@ export class PoolDiscovery {
       // Running out of pages instead leaves a gap, which is accepted.
       this.newestSeenMs = newest;
     } catch (error) {
+      if (this.isolateNewPools && step === 'new_pools') {
+        this.newPoolsRetryAt = nowMs + 5 * 60_000;
+        this.lastOkAtMs = nowMs;
+        this.logger({ event: 'new_pools_backoff', error: shortError(error), action: 'reserve and top-list refreshes continue' });
+        return { candidates: this.candidates(nowMs), complete: false };
+      }
       this.failures++;
       this.skips = Math.min(MAX_SKIPPED_REFRESHES, 2 ** Math.min(this.failures - 1, 10));
       this.logger({
@@ -263,10 +279,10 @@ export class PoolDiscovery {
     const rest = eligible
       .filter((t) => !hotPools.has(t.pool))
       .sort((a, b) => a.refreshedAtMs - b.refreshedAtMs || b.createdAtMs - a.createdAtMs);
-    const out: Address[] = current ? [current] : [];
+    const out: Address[] = [...new Set([...(current ? [current] : []), ...this.reservePools()])].slice(0, 8);
     for (const t of [...hot, ...rest]) {
       if (out.length >= GECKOTERMINAL_MULTI_LIMIT) break;
-      out.push(t.pool);
+      if (!out.includes(t.pool)) out.push(t.pool);
     }
     return out;
   }

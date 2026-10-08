@@ -1,3 +1,4 @@
+import type { MarketSample } from './market-reserve.ts';
 /**
  * Shadow rounds: the outcome of a round that would have opened at every minute boundary, whether or not
  * anyone bet (or the keeper created it). This is the honest share of UP of the pools the arena plays: the
@@ -19,7 +20,7 @@
  * stays in the sampler's list until the round is evaluated (pendingPools).
  */
 import { roundTimes, windowMean, type PriceObservation } from '@flipthememe/client';
-import type { Address } from '@solana/kit';
+import { isAddress, type Address } from '@solana/kit';
 import type { JsonlFile } from './jsonl.ts';
 import type { Logger } from './log.ts';
 import { CREATE_LEAD_MS, PRICE_AFTER_WINDOW_MS, nextBoundarySecs } from './steps.ts';
@@ -27,7 +28,7 @@ import { CREATE_LEAD_MS, PRICE_AFTER_WINDOW_MS, nextBoundarySecs } from './steps
 /** The aggregate in status.json covers this many minutes. */
 export const SHADOW_SUMMARY_MINUTES = 200;
 /** Lines of shadow.jsonl read back at start: enough for the summary with room to spare. */
-const RESTORE_LINES = SHADOW_SUMMARY_MINUTES * 5;
+const RESTORE_LINES = SHADOW_SUMMARY_MINUTES * 8;
 
 export type ShadowDir = 'up' | 'down' | 'tie' | 'unpriced';
 const DIRS: ReadonlySet<string> = new Set(['up', 'down', 'tie', 'unpriced']);
@@ -74,6 +75,13 @@ export function summarize(rows: readonly ShadowRow[], nowMs: number, minutes: nu
     counts[row.dir]++;
   }
   return { windowMinutes: minutes, rounds, ...counts, upShare: upShare(counts.up, counts.down) };
+}
+
+export function marketSample(rows: readonly Pick<ShadowRow, 'pool' | 'opensAt' | 'dir'>[], pool: string, nowMs: number): MarketSample {
+  const recent = rows.filter((r) => r.pool === pool && r.opensAt * 1000 >= nowMs - 30 * 60_000 && r.opensAt * 1000 <= nowMs && (r.dir === 'up' || r.dir === 'down')).sort((a, b) => a.opensAt - b.opensAt).slice(-20);
+  const up = recent.filter(r => r.dir === 'up').length;
+  const down = recent.length - up;
+  return { priced: recent.length, up, down, dominantShare: recent.length ? Math.max(up, down) / recent.length : null };
 }
 
 /** Symmetric momentum veto: at least ten priced minutes, 80% in one direction, last 30 minutes. */
@@ -181,6 +189,13 @@ export class ShadowBook {
 
   summary(nowMs: number): ShadowSummary {
     return summarize(this.rows, nowMs);
+  }
+
+  market(pool: string, nowMs: number): MarketSample { return marketSample(this.rows, pool, nowMs); }
+
+  observedPools(nowMs: number): Address[] {
+    const recent = this.rows.filter(r => r.opensAt * 1000 >= nowMs - 30 * 60_000).slice().reverse();
+    return [...new Set(recent.map(r => r.pool).filter(isAddress))].slice(0, 6);
   }
 
   bias(pool: string, nowMs: number): string | null {

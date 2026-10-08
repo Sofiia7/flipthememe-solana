@@ -1,3 +1,4 @@
+import { marketQuality, type MarketSample } from './market-reserve.ts';
 /**
  * Token choice, once a minute (rules and defaults in poolgate.ts, candidates from discovery.ts):
  *
@@ -94,6 +95,13 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 export class PoolSelector {
   private readonly marketBias: (pool: Address, nowMs: number) => string | null;
   private readonly marketWarming: (pool: Address, nowMs: number) => boolean;
+  private readonly marketSample: (pool: Address, nowMs: number) => MarketSample;
+  private readonly reserveRejected = new Map<Address, number>();
+  private reserveCursor = 0;
+  private readonly reservePrice: (pool: Address, nowMs: number) => bigint | null;
+  private handover: { r: Ranked; reserve: bigint; expires: number; reason: string } | null = null;
+  private reserveInventory = new Map<Address, Ranked>();
+  reserveStatus: { pool: Address; name: string; tier: number; risk: number; prepared: boolean; up: number; down: number }[] = [];
   current: Selection | null;
   /** Observe candidates together so a rejected pool does not reset all market preparation. */
   watching: ShadowPool[] = [];
@@ -117,12 +125,16 @@ export class PoolSelector {
     override: Address | null;
     minBank: () => bigint;
     initial: Selection | null;
+    reservePrice?: (pool: Address, nowMs: number) => bigint | null;
+    marketSample?: (pool: Address, nowMs: number) => MarketSample;
     marketBias?: (pool: Address, nowMs: number) => string | null;
     marketWarming?: (pool: Address, nowMs: number) => boolean;
     /** Every new selection or rung; null when the current pool is dropped. */
     onChange: (s: Selection | null) => void;
   }) {
     this.source = opts.source;
+    this.reservePrice = opts.reservePrice ?? (() => null);
+    this.marketSample = opts.marketSample ?? (() => ({ priced: 0, up: 0, down: 0, dominantShare: null }));
     this.marketBias = opts.marketBias ?? (() => null);
     this.marketWarming = opts.marketWarming ?? (() => false);
     this.chain = opts.chain;
@@ -149,6 +161,7 @@ export class PoolSelector {
     }
     const current = this.current;
     const { candidates, complete } = await this.source.refresh(nowMs, current?.pool ?? null);
+    if (this.gate.balanced && !this.gate.neutral) return this.refreshBalanced(candidates, nowMs);
     const ranked = rankCandidates(candidates, nowMs, this.gate);
     this.watching = this.gate.neutral ? ranked.slice(0, 3).map(r => ({ pool: r.candidate.pool, baseMint: r.candidate.baseMint, name: r.candidate.name, rung: RUNG_NAMES[r.rung] })) : [];
     const readyFirst = this.gate.neutral ? [...ranked.filter(r => !this.marketWarming(r.candidate.pool, nowMs)), ...ranked.filter(r => this.marketWarming(r.candidate.pool, nowMs))] : ranked;
@@ -231,6 +244,75 @@ export class PoolSelector {
       complete,
       keeping: current?.pool ?? null,
     });
+  }
+
+  /** Preparation changes the preferred next market; it never blocks the scheduler. */
+  private async refreshBalanced(candidates: Candidate[], nowMs: number): Promise<void> {
+    const current = this.current;
+    this.handover = null;
+    const ranked = rankCandidates(candidates, nowMs, this.gate).filter(r => r.candidate.txM5 >= this.gate.keepMinTxM5);
+    // A discovery outage does not erase already checked backups. Recheck their actual liquidity/token.
+    for (const r of this.reserveInventory.values()) if (!ranked.some(p => p.candidate.pool === r.candidate.pool)) {
+      ranked.push({ ...r, candidate: { ...r.candidate, buys: undefined, sells: undefined, priceChangeM5: undefined } });
+    }
+    const prepared = new Map<Address, { r: Ranked; reserve: bigint }>();
+    let currentReserve: bigint | null | 'unreadable' = null;
+    if (current) {
+      currentReserve = await this.qualify(current.pool, true);
+      if (typeof currentReserve === 'bigint') this.current = { ...current, quoteReserve: currentReserve, reserveAtMs: nowMs };
+    }
+    // Retain up to four measured backups; use the remaining checks to explore the wider universe.
+    const retained = this.watching.flatMap(p => ranked.find(r => r.candidate.pool === p.pool) ?? []).slice(0, 4);
+    const rest = ranked.filter(r => r.candidate.pool !== current?.pool && !retained.some(k => k.candidate.pool === r.candidate.pool));
+    const pivot = rest.length ? this.reserveCursor % rest.length : 0;
+    const exploring = [...rest.slice(pivot), ...rest.slice(0, pivot)];
+    this.reserveCursor += 2;
+    let checks = 0;
+    const currentRank = ranked.find(r => r.candidate.pool === current?.pool);
+    if (currentRank && typeof currentReserve === 'bigint') prepared.set(current!.pool, { r: currentRank, reserve: currentReserve });
+    for (const r of [...retained, ...exploring]) {
+      const pool = r.candidate.pool;
+      if (pool === current?.pool || prepared.has(pool) || nowMs < (this.reserveRejected.get(pool) ?? 0)) continue;
+      if (++checks > MAX_DEPTH_CHECKS) break;
+      const reserve = await this.qualify(pool, false);
+      if (typeof reserve === 'bigint') prepared.set(pool, { r, reserve });
+      else this.reserveRejected.set(pool, nowMs + (this.unsafe.has(pool) ? TOKEN_CACHE_TTL_MS : 60_000));
+    }
+    const choices = [...prepared.values()].map(p => ({ ...p, quality: marketQuality(p.r.candidate, this.marketSample(p.r.candidate.pool, nowMs)) }))
+      .sort((a,b) => a.quality.tier - b.quality.tier || a.quality.risk - b.quality.risk || b.r.score - a.r.score);
+    this.reserveInventory = new Map(choices.slice(0, 6).map(p => [p.r.candidate.pool, p.r]));
+    this.watching = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, baseMint: p.r.candidate.baseMint, name: p.r.candidate.name, rung: RUNG_NAMES[p.r.rung] }));
+    this.reserveStatus = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, name: p.r.candidate.name, tier: p.quality.tier, risk: round1(p.quality.risk), prepared: p.quality.prepared, up: p.quality.sample.up, down: p.quality.sample.down }));
+    const best = choices[0];
+    if (current && currentReserve === 'unreadable') return; // An outage does not invalidate a known pool.
+    if (current && typeof currentReserve === 'bigint') {
+      const mine = choices.find(p => p.r.candidate.pool === current.pool);
+      if (!best || best.r.candidate.pool === current.pool) return;
+      const betterQuality = !mine || best.quality.tier < mine.quality.tier || (mine.quality.tier === 2 && best.quality.risk + 0.5 < mine.quality.risk);
+      const held = nowMs - current.selectedAtMs >= this.gate.holdMs;
+      if (betterQuality || (held && mine && best.quality.tier === mine.quality.tier && best.r.score >= mine.r.score * this.gate.switchRatio && best.quality.risk <= mine.quality.risk)) {
+        this.handover = { r: best.r, reserve: best.reserve, expires: nowMs + 90_000, reason: betterQuality ? 'better measured market; continuous handover' : 'higher balanced activity' };
+        this.activateReserve(nowMs);
+      }
+      return;
+    }
+    if (best) return this.select(best.r, best.reserve, nowMs, 'qualified reserve; continuous handover');
+    if (current && currentReserve === null) {
+      this.current = null;
+      this.onChange(null);
+      this.logger({ event: 'pool_dropped', pool: current.pool, reason: this.unsafe.get(current.pool) ?? 'no safe liquid pool', candidates: candidates.length });
+    }
+  }
+
+  /** Switch only after the standby's feed is live, while the old pool continues serving. */
+  activateReserve(nowMs: number): void {
+    const next = this.handover;
+    if (!next) return;
+    if (nowMs > next.expires) { this.handover = null; return; }
+    const reserve = this.reservePrice(next.r.candidate.pool, nowMs);
+    if (reserve === null || reserve < this.minReserve()) return;
+    this.handover = null;
+    this.select(next.r, reserve, nowMs, next.reason);
   }
 
   private select(r: Ranked, reserve: bigint, nowMs: number, reason: string): void {

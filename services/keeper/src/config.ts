@@ -119,6 +119,7 @@ export function loadPoolGate(env: Env): PoolGate {
   const count = (name: string, fallback: number) => parseNumber(name, text(env, name), fallback, { integer: true });
   const gate: PoolGate = {
     neutral: flag(env, 'POOL_NEUTRAL', false),
+    balanced: flag(env, 'POOL_BALANCED', true),
     minAgeMs: minutes('POOL_MIN_AGE_MIN', DEFAULT_GATE.minAgeMs),
     maxAgeMs: minutes('POOL_MAX_AGE_MIN', DEFAULT_GATE.maxAgeMs),
     minTxM5: count('POOL_MIN_TX_M5', DEFAULT_GATE.minTxM5),
