@@ -221,8 +221,13 @@ export function handle(request: Request): Response {
 }
 
 export default {
-  fetch: (request: Request, env: NamesEnv & FaucetEnv & LeaderboardEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
+  fetch: async (request: Request, env: NamesEnv & FaucetEnv & LeaderboardEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
     const { pathname } = new URL(request.url);
+    if (pathname === '/v1/arena' && request.method === 'GET') {
+      const raw = await env.LEADERBOARD?.get('snapshot');
+      const arena = raw ? JSON.parse(raw).arena : null;
+      return Response.json(arena ?? { error: 'collecting' }, { status: arena ? 200 : 503, headers: { 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
+    }
     if (pathname === '/v1/leaderboard') return leaderboard(request, env);
     if (pathname === '/leaderboard') return leaderboardPage();
     if (pathname === '/v1/names') return names(request, env, ctx);

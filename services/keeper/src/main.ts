@@ -1,3 +1,4 @@
+import { marketStatus } from './market-status.ts';
 /**
  * FlipTheMeme keeper (devnet). One process, no HTTP server:
  * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth and token checks),
@@ -148,7 +149,7 @@ async function main(): Promise<void> {
     override: cfg.poolOverride,
     initial,
     marketBias: (pool, nowMs) => cfg.poolGate.neutral ? shadow.bias(pool, nowMs) : null,
-    marketWarming: (pool, nowMs) => cfg.poolGate.neutral && shadow.readiness(pool, nowMs) !== null && shadow.bias(pool, nowMs) === null,
+    marketWarming: (pool, nowMs) => !!cfg.poolGate.neutral && shadow.readiness(pool, nowMs) !== null && shadow.bias(pool, nowMs) === null,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
     onChange: (s) => {
       state.state.pool = s ? { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback } : null;
@@ -197,9 +198,10 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
-      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.6, warmupRequired: true },
+      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.8, warmupRequired: true },
       priceProtocol: cfg.legacyPrices ? 'legacy-cosign' : 'detached-canonical',
       marketReadiness: pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, now) : null,
+      observingPools: selector.watching.map(p => ({ pool: p.pool, readiness: shadow.readiness(p.pool, now) })),
       ...sched.status(),
       houseBudget: {
         day: house.day,
@@ -231,7 +233,7 @@ async function main(): Promise<void> {
     const pools = sched.activeRoundPools();
     if (selector.current) pools.push(selector.current.pool);
     // A pool that was dropped after a shadow round was noted for it stays read until that round is evaluated.
-    pools.push(...shadow.pendingPools());
+    pools.push(...selector.watching.map(p => p.pool), ...shadow.pendingPools());
     return pools;
   };
   const shadowPool = () => {
@@ -251,11 +253,15 @@ async function main(): Promise<void> {
   // is the error log's business, a loop that stopped completing is the watchdog's.
   let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
+    every('market-status', 120_000, 12_000, errors, async () => {
+      const pool = selector.current;
+      await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, Date.now()) : null, sched.snapshot?.config?.paused ?? false, selector.watching.length));
+    }),
     every('leaderboard', 120_000, 45_000, errors, async () => { await leaderboard?.tick(shadow.summary(Date.now())); }),
     every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),
     // Starts the reads and returns: the 1 s tick does not wait for them (sampler.ts: two in flight per pool).
     every('sampler', 1_000, 0, errors, async () => sampler.tick(samplePools())),
-    every('shadow', 1_000, 700, errors, async () => shadow.tick(Date.now(), shadowPool())),
+    every('shadow', 1_000, 700, errors, async () => shadow.tick(Date.now(), shadowPool(), selector.watching)),
     every('scheduler', 1_000, 300, errors, async () => {
       try {
         await sched.tick(Date.now());

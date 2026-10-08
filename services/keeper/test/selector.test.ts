@@ -458,3 +458,16 @@ describe('PoolSelector: token check (authorities, Token-2022 extensions, holders
     assert.deepEqual([last(h)?.buys, last(h)?.sells, last(h)?.oneSided], [52, 48, false]);
   });
 });
+
+
+test('a prepared neutral pool replaces a warming pool even during the hold; a ready pool never rotates to a warming one', async () => {
+  const gate = { ...DEFAULT_GATE, neutral: true, maxImbalance: 0.3, youthWeight: 0 };
+  const list = [withFlow(candidate(1, 0, 30 * MINUTE), 100, 100), withFlow(candidate(2, 0, 48 * HOUR), 50, 50)];
+  const h = harness(list, { gate, initial: selection(1, 0, NOW - MINUTE), marketWarming: p => p === testAddress(1) });
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool, testAddress(2));
+  assert.equal(h.selector.watching.length, 2);
+  assert.equal(last(h)?.reason, 'prepared market available');
+  await h.selector.refresh(NOW + HOUR);
+  assert.equal(h.selector.current?.pool, testAddress(2));
+});

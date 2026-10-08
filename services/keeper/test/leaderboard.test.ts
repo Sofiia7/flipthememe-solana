@@ -25,3 +25,12 @@ test('UP outcome pays the UP player and loses the DOWN player; house and open be
   assert.equal(scorePosition({ ...r, status: RoundStatus.Live }, p), null);
   assert.equal(scorePosition(r, { ...p, claimed: true, payout: 123n })?.payout, '123');
 });
+
+
+test('latest recorded pixel face survives ranking and missing legacy faces', () => {
+  const now = 1_800_000_000_000;
+  const base: Score = { key: '1:a', owner: 'a', at: now - 1000, stake: '1', payout: '2', result: 'win', face: '0001020304050607' };
+  const rows = [ { ...base, key: '2:a', at: now, face: '08090a0b0c0d0e0f' }, base, { ...base, key: '3:a', at: now + 1, face: undefined } ];
+  assert.equal(rank(rows, now + 1)[0].face, '08090a0b0c0d0e0f');
+  assert.equal(rank([{ ...base, face: 'invalid' }], now)[0].face, undefined);
+});

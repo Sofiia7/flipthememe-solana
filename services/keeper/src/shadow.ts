@@ -27,7 +27,7 @@ import { CREATE_LEAD_MS, PRICE_AFTER_WINDOW_MS, nextBoundarySecs } from './steps
 /** The aggregate in status.json covers this many minutes. */
 export const SHADOW_SUMMARY_MINUTES = 200;
 /** Lines of shadow.jsonl read back at start: enough for the summary with room to spare. */
-const RESTORE_LINES = SHADOW_SUMMARY_MINUTES * 2;
+const RESTORE_LINES = SHADOW_SUMMARY_MINUTES * 5;
 
 export type ShadowDir = 'up' | 'down' | 'tie' | 'unpriced';
 const DIRS: ReadonlySet<string> = new Set(['up', 'down', 'tie', 'unpriced']);
@@ -48,6 +48,8 @@ export type ShadowRow = {
   strikeSamples: number;
   exitSamples: number;
   dir: ShadowDir;
+  /** Candidate observation only; excluded from the selected-arena summary. */
+  observedOnly?: true;
 };
 
 export type ShadowSummary = { windowMinutes: number; rounds: number; up: number; down: number; tie: number; unpriced: number; upShare: number | null };
@@ -55,7 +57,7 @@ export type ShadowSummary = { windowMinutes: number; rounds: number; up: number;
 /** What the book needs to know of the selector's current pool. */
 export type ShadowPool = { pool: Address; baseMint: Address; name: string; rung: string };
 
-type Pending = ShadowPool & { opensAt: number };
+type Pending = ShadowPool & { opensAt: number; observedOnly?: true };
 
 /** The share of UP among the rounds that had a direction (up / (up + down)), three decimals; null with none. */
 export function upShare(up: number, down: number): number | null {
@@ -67,20 +69,20 @@ export function summarize(rows: readonly ShadowRow[], nowMs: number, minutes: nu
   const counts = { up: 0, down: 0, tie: 0, unpriced: 0 };
   let rounds = 0;
   for (const row of rows) {
-    if (row.opensAt * 1000 < since) continue;
+    if (row.observedOnly || row.opensAt * 1000 < since) continue;
     rounds++;
     counts[row.dir]++;
   }
   return { windowMinutes: minutes, rounds, ...counts, upShare: upShare(counts.up, counts.down) };
 }
 
-/** Symmetric momentum veto: at least ten priced minutes, 60% in one direction, last 30 minutes. */
+/** Symmetric momentum veto: at least ten priced minutes, 80% in one direction, last 30 minutes. */
 export function directionalBias(rows: readonly Pick<ShadowRow, 'pool' | 'opensAt' | 'dir'>[], pool: string, nowMs: number): string | null {
   const recent = rows.filter((r) => r.pool === pool && r.opensAt * 1000 >= nowMs - 30 * 60_000 && r.opensAt * 1000 <= nowMs && (r.dir === 'up' || r.dir === 'down')).sort((a, b) => a.opensAt - b.opensAt).slice(-20);
   if (recent.length < 10) return null;
   const up = recent.filter((r) => r.dir === 'up').length;
   const down = recent.length - up;
-  return Math.max(up, down) / recent.length >= 0.6 ? `observed momentum ${up} UP / ${down} DOWN in ${recent.length} priced minutes` : null;
+  return Math.max(up, down) / recent.length >= 0.8 ? `observed momentum ${up} UP / ${down} DOWN in ${recent.length} priced minutes` : null;
 }
 
 /** Observe an unfamiliar pool before accepting calls, rather than funding its first biased minutes. */
@@ -115,6 +117,7 @@ export function parseShadowRow(raw: Record<string, unknown>): ShadowRow | null {
     strikeSamples,
     exitSamples,
     dir: dir as ShadowDir,
+    ...(raw.observedOnly === true ? { observedOnly: true as const } : {}),
   };
 }
 
@@ -122,7 +125,7 @@ export class ShadowBook {
   private readonly store: { get(pool: string): readonly PriceObservation[] };
   private readonly logger: Logger;
   private readonly file: JsonlFile | null;
-  private readonly pending = new Map<number, Pending>();
+  private readonly pending = new Map<string, Pending>();
   /** Boundaries already handled (noted or skipped for lack of a pool), so a tick that repeats does nothing. */
   private readonly seen = new Set<number>();
   private rows: ShadowRow[] = [];
@@ -154,16 +157,18 @@ export class ShadowBook {
    * Called every second: notes the pool for the next boundary once it is CREATE_LEAD_MS away, and
    * evaluates every hypothetical round whose exit window has closed.
    */
-  tick(nowMs: number, current: ShadowPool | null): void {
+  tick(nowMs: number, current: ShadowPool | null, watching: readonly ShadowPool[] = []): void {
     const boundary = Number(nextBoundarySecs(nowMs));
     if (nowMs >= boundary * 1000 - CREATE_LEAD_MS && !this.seen.has(boundary)) {
       this.seen.add(boundary);
-      if (current) this.pending.set(boundary, { ...current, opensAt: boundary });
+      const pools = new Map<string, Pending>(watching.map(p => [p.pool, { ...p, opensAt: boundary, observedOnly: true }]));
+      if (current) pools.set(current.pool, { ...current, opensAt: boundary });
+      for (const p of pools.values()) this.pending.set(`${boundary}:${p.pool}`, p);
     }
-    for (const [opensAt, round] of this.pending) {
-      const times = roundTimes(BigInt(opensAt));
+    for (const [key, round] of this.pending) {
+      const times = roundTimes(BigInt(round.opensAt));
       if (nowMs < Number(times.exitEnd) * 1000 + PRICE_AFTER_WINDOW_MS) continue;
-      this.pending.delete(opensAt);
+      this.pending.delete(key);
       this.evaluate(round, nowMs);
     }
     for (const b of this.seen) if (b < boundary - 10) this.seen.delete(b);
@@ -205,6 +210,7 @@ export class ShadowBook {
       strikeSamples: strike ? strike.samples.length : 0,
       exitSamples: exit ? exit.samples.length : 0,
       dir,
+      ...(round.observedOnly ? { observedOnly: true as const } : {}),
     };
     this.rows.push(row);
     const cutoff = nowMs - SHADOW_SUMMARY_MINUTES * 60_000;

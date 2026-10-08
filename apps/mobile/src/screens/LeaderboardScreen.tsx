@@ -1,3 +1,6 @@
+import { PixelFace } from '../PixelFace';
+import { faceFromBytes } from '../face/faceModel';
+import { leaderboardFaceBytes } from '../lib/leaderboardFace';
 import { useEffect, useState } from 'react';
 import { ScrollView, Text, View, RefreshControl, StyleSheet } from 'react-native';
 import { useApp } from '../state/AppProvider';
@@ -6,10 +9,10 @@ import { C, T } from '../theme';
 import { ScreenTitle } from '../ui/common';
 import { formatSol, shortAddress } from '../lib/format';
 
-type Player = { rank: number; owner: string; wins: number; losses: number; refunds: number; net: string; accuracy: number | null };
-type Board = { updatedAt: string; coverageSince: string; period: string; directions?: { up: number; down: number; windowMinutes: number } | null; players: Player[] };
+type Player = { rank: number; owner: string; wins: number; losses: number; refunds: number; net: string; accuracy: number | null; face?: string };
+type Board = { updatedAt: string; indexedAt?: string | null; coverageSince: string; period: string; directions?: { up: number; down: number; windowMinutes: number } | null; players: Player[] };
 export function LeaderboardScreen() {
-  const { wallet } = useApp();
+  const { wallet, face } = useApp();
   const [board, setBoard] = useState<Board | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -41,11 +44,13 @@ export function LeaderboardScreen() {
     <Text style={T.subtle}>Players only. Ranked by returns minus stakes, after game fees. Network fees and account rent are excluded.</Text>
     {error ? <Text style={styles.error}>{error}</Text> : null}
     {stale ? <Text style={styles.error}>Updates are delayed. Showing the last recorded results.</Text> : null}
-    {board ? <Text style={T.dim}>Updated {new Date(board.updatedAt).toLocaleTimeString()} · tracking since {new Date(board.coverageSince).toLocaleDateString()}. Earlier closed bets may be missing.</Text> : null}
+    {board ? <Text style={T.dim}>Updated {new Date(board.indexedAt ?? board.updatedAt).toLocaleTimeString()} · tracking since {new Date(board.coverageSince).toLocaleDateString()}. Earlier closed bets may be missing.</Text> : null}
     {board?.directions ? <Text style={T.subtle}>Market sample, last {board.directions.windowMinutes} min: {board.directions.up} UP · {board.directions.down} DOWN. Outcomes are not guaranteed to be 50/50.</Text> : null}
     {board?.players.length === 0 ? <Text style={T.subtle}>No settled player bets yet.</Text> : null}
     {board?.players.map((p) => <View key={p.owner} style={[styles.row, p.owner === wallet.owner && styles.mine]}>
-      <Text style={styles.rank}>#{p.rank}</Text><View style={styles.player}>
+      <Text style={styles.rank}>#{p.rank}</Text>
+      {p.owner === wallet.owner ? <PixelFace face={face} size={36} /> : leaderboardFaceBytes(p.face) ? <PixelFace face={faceFromBytes(leaderboardFaceBytes(p.face)!)} size={36} /> : <View style={styles.unknownFace}><Text style={styles.name}>?</Text></View>}
+      <View style={styles.player}>
         <Text style={styles.name}>{names.get(p.owner) ?? shortAddress(p.owner)}{p.owner === wallet.owner ? ' · YOU' : ''}</Text>
         <Text style={T.subtle}>{p.wins} W · {p.losses} L · {p.refunds} refunds{p.accuracy === null ? '' : ` · ${p.accuracy}%`}</Text>
       </View><Text style={[styles.net, { color: BigInt(p.net) >= 0n ? C.up : C.down }]}>{formatSol(BigInt(p.net), { sign: true })}</Text>
@@ -56,5 +61,6 @@ const styles = StyleSheet.create({
   content: { padding: 14, gap: 12, paddingBottom: 30 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.border },
   mine: { borderColor: C.accent }, rank: { color: C.accent, fontWeight: '900', width: 34 },
+  unknownFace: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.border },
   player: { flex: 1 }, name: { color: C.white, fontWeight: '800' }, net: { fontWeight: '900', fontSize: 13 }, error: { color: C.down },
 });

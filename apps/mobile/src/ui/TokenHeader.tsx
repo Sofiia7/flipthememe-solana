@@ -31,7 +31,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
           <Text style={styles.logoLetter}>?</Text>
         </View>
         <Text style={styles.waiting} maxFontSizeMultiplier={FONT_CAP}>
-          Picking the hottest coin...
+          Checking markets...
         </Text>
       </View>
     );

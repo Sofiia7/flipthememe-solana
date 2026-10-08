@@ -39,6 +39,7 @@ import {
 } from './poolgate.ts';
 import { shortError, type FailoverRpc } from './rpc.ts';
 import type { PoolRefs } from './sampler.ts';
+import type { ShadowPool } from './shadow.ts';
 import { TOKEN_CACHE_TTL_MS, type TokenChecker, type TokenVerdict } from './tokencheck.ts';
 
 /** Depth checks of candidates per refresh (2 mainnet reads each, the first one cached). */
@@ -94,6 +95,8 @@ export class PoolSelector {
   private readonly marketBias: (pool: Address, nowMs: number) => string | null;
   private readonly marketWarming: (pool: Address, nowMs: number) => boolean;
   current: Selection | null;
+  /** Observe candidates together so a rejected pool does not reset all market preparation. */
+  watching: ShadowPool[] = [];
   private readonly source: CandidateSource;
   private readonly chain: PoolChain;
   private readonly gate: PoolGate;
@@ -146,6 +149,9 @@ export class PoolSelector {
     }
     const current = this.current;
     const { candidates, complete } = await this.source.refresh(nowMs, current?.pool ?? null);
+    const ranked = rankCandidates(candidates, nowMs, this.gate);
+    this.watching = this.gate.neutral ? ranked.slice(0, 3).map(r => ({ pool: r.candidate.pool, baseMint: r.candidate.baseMint, name: r.candidate.name, rung: RUNG_NAMES[r.rung] })) : [];
+    const readyFirst = this.gate.neutral ? [...ranked.filter(r => !this.marketWarming(r.candidate.pool, nowMs)), ...ranked.filter(r => this.marketWarming(r.candidate.pool, nowMs))] : ranked;
     /** Per pool read: the reserve when deep enough, null when too shallow, 'unreadable' when the read failed. */
     const depth = new Map<Address, bigint | null | 'unreadable'>();
     let checks = 0;
@@ -171,13 +177,21 @@ export class PoolSelector {
       const reserve = await deepEnough(current.pool);
       if (typeof reserve === 'bigint') {
         this.current = { ...current, quoteReserve: reserve, reserveAtMs: Date.now() };
+        if (this.gate.neutral && this.marketWarming(current.pool, nowMs)) {
+          for (const r of readyFirst) {
+            if (r.candidate.pool === current.pool || this.marketWarming(r.candidate.pool, nowMs)) continue;
+            const deep = await deepEnough(r.candidate.pool);
+            if (deep === undefined) break;
+            if (deep !== null) return this.select(r, deep, nowMs, 'prepared market available');
+          }
+        }
         if (nowMs - current.selectedAtMs < this.gate.holdMs || !complete || this.marketWarming(current.pool, nowMs)) return;
         const stats = candidates.find((c) => c.pool === current.pool);
         const failure = keepFailure(stats, current.rung, nowMs, this.gate);
         if (failure === null && stats) {
           const mine = { rung: current.rung, score: scoreOf(stats, nowMs, this.gate) };
           for (const r of rankCandidates(candidates, nowMs, this.gate)) {
-            if (r.candidate.pool === current.pool) continue;
+            if (r.candidate.pool === current.pool || (this.gate.neutral && this.marketWarming(r.candidate.pool, nowMs))) continue;
             if (!beats(r, mine, this.gate)) break; // ranked best first: nothing later beats it either
             const deep = await deepEnough(r.candidate.pool);
             if (deep === undefined) break;
@@ -193,7 +207,7 @@ export class PoolSelector {
       reason = 'no pool yet';
     }
 
-    for (const r of rankCandidates(candidates, nowMs, this.gate)) {
+    for (const r of readyFirst) {
       const deep = await deepEnough(r.candidate.pool);
       if (deep === undefined) break;
       if (deep !== null) return this.select(r, deep, nowMs, reason);

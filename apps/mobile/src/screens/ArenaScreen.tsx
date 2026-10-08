@@ -1,3 +1,5 @@
+import { useMarketStatus } from '../chain/useMarketStatus';
+import { waitingView } from '../lib/marketStatus';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import * as Haptics from 'expo-haptics';
@@ -18,7 +20,7 @@ import {
   type RoundGroups,
 } from '../chain/phase';
 import { chainNowSec, chainToLocalMs } from '../chain/useChainClock';
-import { isFeedStale, type PoolFeed } from '../chain/usePoolPrice';
+import { isFeedStale, usePoolPrice, type PoolFeed } from '../chain/usePoolPrice';
 import { useRents } from '../chain/rent';
 import { peekTokenInfo, useTokenInfo } from '../chain/useTokenInfo';
 import { multiplierText } from '../chain/repeatBet';
@@ -78,6 +80,8 @@ export function ArenaScreen() {
   const secMs = Math.floor(nowMs / 1000) * 1000;
   const nowSec = chainNowSec(offsetSec, nowMs);
   const nowWhole = Math.floor(nowSec);
+  const market = useMarketStatus();
+  const waiting = waitingView(market, nowMs);
   const owner = wallet.owner;
   const myName = useSkrNames(owner ? [owner] : []).get(owner ?? '') ?? null;
   // The friend whose challenge link opened the app: their face in the round panels says RIVAL.
@@ -155,8 +159,9 @@ export function ArenaScreen() {
 
   // While a round of mine plays, the stage (token header, X lane, chart) follows it, even after the
   // keeper moved the next rounds to another token: the strike line I bet on stays on screen.
-  const stagePool = focus?.round.account.pool ?? feed.pool;
-  const stageFeed: PoolFeed = stagePool !== feed.pool && myFeed.pool === stagePool ? myFeed : feed;
+  const preview = usePoolPrice(!focus && !feed.pool && market && nowMs - Date.parse(market.updatedAt) <= 240_000 ? market.pool?.pool ?? null : null);
+  const stagePool = focus?.round.account.pool ?? feed.pool ?? preview.pool;
+  const stageFeed: PoolFeed = stagePool !== feed.pool && myFeed.pool === stagePool ? myFeed : feed.pool ? feed : preview;
   // The chart follows my round, else the latest live round on this pool.
   const chartRound = selectChartRound({ pool: stageFeed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
   const chartStrike = chartRound ? strikeState(chartRound.account, nowSec) : null;
@@ -203,7 +208,7 @@ export function ArenaScreen() {
     panelRound ??
     arena.rounds[0] ??
     null;
-  const tokenMint = tokenRound?.account.tokenMint ?? null;
+  const tokenMint = tokenRound?.account.tokenMint ?? (preview.pool ? market?.pool?.baseMint ?? null : null);
   const tokenInfo = peekTokenInfo(tokenMint);
   const symbol = tokenInfo?.symbol ?? null;
   // The open round's token, named in the NEXT bar and in a challenge when it differs from the stage.
@@ -240,7 +245,7 @@ export function ArenaScreen() {
   const arenaStaleSec = arena.updatedAt ? Math.floor((nowMs - arena.updatedAt) / 1000) : null;
   let blocked: string | null = null;
   let blockedByFunds = false;
-  if (!open) blocked = 'The next round opens on the minute.';
+  if (!open) blocked = waiting.detail;
   else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
@@ -369,7 +374,7 @@ export function ArenaScreen() {
         ) : null}
       </View>
 
-      {chatterShown ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
+      {chatterShown && tokenMint ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
 
       <View style={styles.stage}>
         <ScrollView contentContainerStyle={styles.page}>
@@ -383,7 +388,7 @@ export function ArenaScreen() {
           {app.away ? <Banner tone="info" text={awayText(app.away, formatSol)} action={{ label: 'OK', onPress: app.ackAway }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
-          <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={secMs} />
+          <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? preview.pool} nowMs={secMs} />
 
           {focus ?? inOpen ? (
             <RoundProgress round={(focus ?? inOpen)!.round} position={(focus ?? inOpen)!.position} nowSec={nowSec} />
@@ -403,7 +408,7 @@ export function ArenaScreen() {
             cutoffMs={!focus && open && open.account.pool === stageFeed.pool ? chainToLocalMs(open.account.cutoffAt, offsetSec) : null}
             stale={priceStale && stageFeed.points.length > 0}
             emptyText={
-              stageFeed.pool ? (stageFeed.error ? `Price source unreachable: ${stageFeed.error}` : 'Reading the live price...') : 'Waiting for the first round'
+              stageFeed.pool ? (stageFeed.error ? `Price source unreachable: ${stageFeed.error}` : 'Reading the live price...') : waiting.title
             }
           />
 
@@ -413,12 +418,19 @@ export function ArenaScreen() {
               <Text style={styles.loadingText}>{arena.error ? `Cannot reach devnet: ${arena.error}` : 'Loading the arena...'}</Text>
             </View>
           ) : (
-            <LiveClock at={clockAt} />
+            panel.kind === 'empty' && groups.inFlight.length === 0 ? (
+              <View style={{ paddingVertical: 16, gap: 10 }}>
+                <PixelText text={waiting.title} size={2} color={C.neonYellow} fit />
+                {waiting.progress ? <Text style={[T.subtle, { color: C.white }]}>{waiting.progress.observed}/{waiting.progress.required} measured minutes</Text> : null}
+                <Text style={T.subtle}>{waiting.detail}</Text>
+                <Text style={T.subtle}>Bets open only after market checks pass. No bet is placed while waiting.</Text>
+              </View>
+            ) : <LiveClock at={clockAt} />
           )}
           {streakText || (myUnresolved.length === 0 && !pendingHere) ? (
             <View style={styles.hintRow}>
               {streakText ? <Text style={styles.streakPill}>{streakText}</Text> : null}
-              {myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>Call the next minute. Result in about 2 minutes.</Text> : null}
+              {open && myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>Call the next minute. Result in about 2 minutes.</Text> : null}
             </View>
           ) : null}
 
@@ -432,7 +444,7 @@ export function ArenaScreen() {
               me={owner}
               rival={rival}
             />
-          ) : (
+          ) : panelRound ? (
             <OpenRoundPanel
               round={panelRound}
               positions={panelRound ? (arena.positions.get(panelRound.id) ?? NO_PLAYERS) : NO_PLAYERS}
@@ -440,7 +452,7 @@ export function ArenaScreen() {
               rival={rival}
               upcoming={panel.kind !== 'open'}
             />
-          )}
+          ) : null}
           {/* One button family: the invitation to my live round is the purple NeonButton (as in the dock), the open invitation a quiet ghost. */}
           {challengeFocus ? (
             <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} />
@@ -552,7 +564,7 @@ export function ArenaScreen() {
             <View style={styles.sides}>
               <NeonButton
                 title="UP ▲"
-                subtitle={upFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
+                subtitle={!open ? 'WAITING FOR MARKET' : upFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
                 kind="up"
                 big
                 badge={multiplier}
@@ -563,7 +575,7 @@ export function ArenaScreen() {
               />
               <NeonButton
                 title="DOWN ▼"
-                subtitle={downFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
+                subtitle={!open ? 'WAITING FOR MARKET' : downFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
                 kind="down"
                 big
                 badge={multiplier}

@@ -26,8 +26,8 @@ test('observed momentum veto is symmetric, needs ten priced minutes, excludes ol
   const rows = (up: number, down: number) => Array.from({ length: up + down }, (_, i) => ({ pool: POOL, opensAt: B - (i + 1) * 60, dir: i < up ? 'up' as const : 'down' as const }));
   assert.match(directionalBias(rows(8, 2), POOL, now)!, /8 UP \/ 2 DOWN/);
   assert.match(directionalBias(rows(2, 8), POOL, now)!, /2 UP \/ 8 DOWN/);
-  assert.match(directionalBias(rows(6, 4), POOL, now)!, /6 UP \/ 4 DOWN/);
-  assert.match(directionalBias(rows(4, 6), POOL, now)!, /4 UP \/ 6 DOWN/);
+  assert.equal(directionalBias(rows(6, 4), POOL, now), null);
+  assert.equal(directionalBias(rows(4, 6), POOL, now), null);
   assert.equal(directionalBias(rows(5, 5), POOL, now), null);
   assert.match(marketReadiness(rows(4, 5), POOL, now)!, /9\/10/);
   assert.equal(marketReadiness(rows(5, 5), POOL, now), null);
@@ -270,4 +270,20 @@ describe('ShadowBook: the aggregate and the file', () => {
     assert.equal(parseShadowRow({ opensAt: 1, dir: 'up', strikeSamples: 0, exitSamples: 0, strikeMean: 12, exitMean: null }), null, 'a mean is a decimal string');
     assert.ok(parseShadowRow({ opensAt: 1, dir: 'unpriced', strikeSamples: 0, exitSamples: 0, strikeMean: null, exitMean: null }));
   });
+});
+
+
+test('parallel candidates are measured without double-counting the current pool or inflating arena statistics', () => {
+  const { store, book, rows } = setup();
+  levels(store, POOL, [1n, 1000n, 1100n]);
+  levels(store, OTHER, [1n, 1000n, 900n]);
+  for (let t = B - 20; t <= B + 165; t++) book.tick(ms(t), current(), [current(), current(OTHER)]);
+  const first = rows().filter(r => r.opensAt === B);
+  assert.equal(first.length, 2);
+  assert.equal(first.find(r => r.pool === OTHER)?.observedOnly, true);
+  assert.equal(first.find(r => r.pool === POOL)?.observedOnly, undefined);
+  assert.equal(book.summary(ms(B + 165)).rounds, 1);
+  assert.match(book.readiness(OTHER, ms(B + 165))!, /1\/10/);
+  const candidate = first.find(r => r.pool === OTHER)!;
+  assert.equal(parseShadowRow(candidate)?.observedOnly, true);
 });
