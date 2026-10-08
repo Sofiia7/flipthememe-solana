@@ -87,7 +87,9 @@
     "SettleDeadlineTooFar": 6030,
     "MaxBankBelowMin": 6031,
     "SessionStillActive": 6032,
-    "RoundOpensTooFar": 6033
+    "RoundOpensTooFar": 6033,
+    "AttestationInvalid": 6034,
+    "DetachedPriceRequired": 6035
   },
   "payouts": [
     { "rawUp": "247700564", "rawDown": "97042158", "outcome": 3, "side": 0, "stake": "11001529", "feeWinBps": 30, "feeRefundBps": 64, "payout": "10973944" },

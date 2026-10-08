@@ -54,7 +54,7 @@ test('SessionStillActive is the next program error after MaxBankBelowMin, and Ro
   assert.equal(PROGRAM_ERRORS[at - 1], 'MaxBankBelowMin');
   assert.equal(PROGRAM_ERRORS[at + 1], 'RoundOpensTooFar');
   assert.equal(6000 + at + 1, 6033);
-  assert.equal(PROGRAM_ERRORS.length, at + 2, 'appended last');
+  assert.deepEqual(PROGRAM_ERRORS.slice(at + 2), ['AttestationInvalid', 'DetachedPriceRequired']);
 });
 
 test('closePosition marks the round writable, since the program lowers its position counts', async () => {

@@ -27,6 +27,10 @@ export class Attestor extends DurableObject<Env> {
     return this.core.attest(tx);
   }
 
+  certificate(id: string, kind: 'strike' | 'exit'): Promise<Result> {
+    return this.core.certificate(id, kind);
+  }
+
   health(): Promise<Result> {
     return this.core.health();
   }

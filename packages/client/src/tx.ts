@@ -142,6 +142,8 @@ export const PROGRAM_ERRORS = [
   'SessionStillActive',
   // create_round refuses a round that opens more than 15 minutes ahead; append only.
   'RoundOpensTooFar',
+  'AttestationInvalid',
+  'DetachedPriceRequired',
 ] as const;
 export type ProgramErrorName = (typeof PROGRAM_ERRORS)[number];
 

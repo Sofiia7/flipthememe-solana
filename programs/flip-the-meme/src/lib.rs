@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program::{self, Allocate, Assign, Transfer};
 
 pub mod payout;
+pub mod attestation;
 
 declare_id!("5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz");
 
@@ -444,6 +445,7 @@ pub mod flip_the_meme {
             finalize(round, Outcome::NotActivated, RefundReason::None);
             return Ok(());
         }
+        require!(!ctx.accounts.oracle.required, ErrorCode::DetachedPriceRequired);
         check_attestor(&ctx.accounts.oracle, &ctx.accounts.attestor)?;
         let mean = mean_price(&samples)?;
         round.strike_samples = samples.len() as u8;
@@ -475,6 +477,7 @@ pub mod flip_the_meme {
                 && now <= round.settle_deadline,
             ErrorCode::NotDue
         );
+        require!(!ctx.accounts.oracle.required, ErrorCode::DetachedPriceRequired);
         check_attestor(&ctx.accounts.oracle, &ctx.accounts.attestor)?;
         let mean = mean_price(&samples)?;
         round.exit_samples = samples.len() as u8;
@@ -489,6 +492,51 @@ pub mod flip_the_meme {
                 } else {
                     finalize(round, Outcome::Refund, RefundReason::Tie)
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Anyone may relay the attestor's fixed certificate. No keeper signature is needed.
+    pub fn set_strike_attested(ctx: Context<AttestedPrice>, samples: Vec<PriceSample>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let round = &mut ctx.accounts.round;
+        require!(round.status == RoundStatus::Open && now >= round.strike_end, ErrorCode::NotDue);
+        require!(now < round.exit_start, ErrorCode::StrikeWindowClosed);
+        if !payout::is_activated(round.raw_up, round.raw_down, round.min_bank) {
+            finalize(round, Outcome::NotActivated, RefundReason::None);
+            return Ok(());
+        }
+        let mean = mean_price(&samples)?;
+        let expected = attestation::message(&round.key(), round, 0, &samples);
+        attestation::verify(&ctx.accounts.instructions, &ctx.accounts.oracle, &expected)?;
+        round.strike_samples = samples.len() as u8;
+        match mean {
+            None => finalize(round, Outcome::Refund, RefundReason::Unpriceable),
+            Some(price) => {
+                round.strike_price = price;
+                round.status = RoundStatus::Live;
+                emit!(StrikeSet { round_id: round.id, price, samples: samples.len() as u8 });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn settle_attested(ctx: Context<AttestedPrice>, samples: Vec<PriceSample>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let round = &mut ctx.accounts.round;
+        require!(round.status == RoundStatus::Live && now >= round.exit_end && now <= round.settle_deadline, ErrorCode::NotDue);
+        let mean = mean_price(&samples)?;
+        let expected = attestation::message(&round.key(), round, 1, &samples);
+        attestation::verify(&ctx.accounts.instructions, &ctx.accounts.oracle, &expected)?;
+        round.exit_samples = samples.len() as u8;
+        match mean {
+            None => finalize(round, Outcome::Refund, RefundReason::Unpriceable),
+            Some(price) => {
+                round.exit_price = price;
+                if price > round.strike_price { finalize(round, Outcome::Up, RefundReason::None); }
+                else if price < round.strike_price { finalize(round, Outcome::Down, RefundReason::None); }
+                else { finalize(round, Outcome::Refund, RefundReason::Tie); }
             }
         }
         Ok(())
@@ -1186,6 +1234,17 @@ pub struct RefundExpired<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AttestedPrice<'info> {
+    #[account(mut, seeds = [b"round", round.id.to_le_bytes().as_ref()], bump = round.bump)]
+    pub round: Account<'info, Round>,
+    #[account(seeds = [b"oracle"], bump = oracle.bump)]
+    pub oracle: Account<'info, OracleConfig>,
+    /// CHECK: fixed instructions sysvar, parsed by attestation::verify.
+    #[account(address = solana_instructions_sysvar::ID)]
+    pub instructions: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
 pub struct Claim<'info> {
     #[account(mut, seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
@@ -1355,4 +1414,8 @@ pub enum ErrorCode {
     // Added with the round-opening bound: append only.
     #[msg("The round opens too far in the future")]
     RoundOpensTooFar,
+    #[msg("Invalid detached price certificate")]
+    AttestationInvalid,
+    #[msg("Use an attestor certificate and the permissionless price instruction")]
+    DetachedPriceRequired,
 }

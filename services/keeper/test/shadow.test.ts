@@ -26,7 +26,9 @@ test('observed momentum veto is symmetric, needs ten priced minutes, excludes ol
   const rows = (up: number, down: number) => Array.from({ length: up + down }, (_, i) => ({ pool: POOL, opensAt: B - (i + 1) * 60, dir: i < up ? 'up' as const : 'down' as const }));
   assert.match(directionalBias(rows(8, 2), POOL, now)!, /8 UP \/ 2 DOWN/);
   assert.match(directionalBias(rows(2, 8), POOL, now)!, /2 UP \/ 8 DOWN/);
-  assert.equal(directionalBias(rows(7, 3), POOL, now), null);
+  assert.match(directionalBias(rows(6, 4), POOL, now)!, /6 UP \/ 4 DOWN/);
+  assert.match(directionalBias(rows(4, 6), POOL, now)!, /4 UP \/ 6 DOWN/);
+  assert.equal(directionalBias(rows(5, 5), POOL, now), null);
   assert.equal(directionalBias(rows(9, 0), POOL, now), null);
   assert.equal(directionalBias(rows(10, 0), OTHER, now), null);
   assert.equal(directionalBias(rows(10, 0), POOL, now + 40 * 60_000), null);

@@ -25,6 +25,7 @@ export type Result = { status: number; body: Record<string, unknown> };
 export interface AttestorApi {
   attest(tx: string): Promise<Result>;
   health(): Promise<Result>;
+  certificate?(id: string, kind: 'strike' | 'exit'): Promise<Result>;
 }
 
 /** The slice of the Workers cache (`caches.default`) the health answer uses, so tests can pass a fake. */
@@ -148,6 +149,24 @@ async function health(request: Request, api: AttestorApi, ctx: HttpContext): Pro
 export async function handle(request: Request, api: AttestorApi, env: HttpEnv = {}, ctx: HttpContext = {}): Promise<Response> {
   const { pathname } = new URL(request.url);
   try {
+    if (pathname === '/v1/attestation') {
+      if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'), { allow: 'GET' });
+      const url = new URL(request.url);
+      const id = url.searchParams.get('round') ?? '';
+      const kind = url.searchParams.get('kind');
+      if (!/^(0|[1-9][0-9]{0,15})$/.test(id) || (kind !== 'strike' && kind !== 'exit')) return answer(failure(400, 'bad_request', 'round and kind=strike|exit are required'));
+      if (!api.certificate) return answer(failure(503, 'unavailable', 'certificates unavailable'));
+      const key = new Request(`${url.origin}${pathname}?round=${id}&kind=${kind}`);
+      const hit = await ctx.cache?.match(key);
+      if (hit) return hit;
+      const result = await api.certificate(id, kind);
+      const response = answer(result, result.status === 200 ? { 'cache-control': 'public, max-age=5' } : {});
+      if (result.status === 200 && ctx.cache) {
+        const stored = ctx.cache.put(key, response.clone()).catch(() => undefined);
+        if (ctx.waitUntil) ctx.waitUntil(stored); else await stored;
+      }
+      return response;
+    }
     if (pathname === '/v1/attest') return await attest(request, api, env);
     if (pathname === '/v1/attestor') {
       if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'), { allow: 'GET' });

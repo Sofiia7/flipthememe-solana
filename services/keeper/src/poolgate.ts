@@ -28,7 +28,7 @@ import type { PoolCandidate } from '@flipthememe/client';
  * carries their sum (`txM5`); discovery.ts reads the two numbers from the raw rows and adds them here,
  * so a candidate that has no split (a test fixture, an old restore) simply scores as balanced.
  */
-export type Candidate = PoolCandidate & { buys?: number; sells?: number };
+export type Candidate = PoolCandidate & { buys?: number; sells?: number; priceChangeM5?: number };
 
 export const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -36,6 +36,8 @@ const HOUR_MS = 60 * MINUTE_MS;
 export type PoolGate = {
   /** Production selection: no age preference, hard flow/activity checks on entry and retention. */
   neutral?: boolean;
+  /** Absolute five-minute return, percent. Production rejects missing returns too. */
+  maxPriceMoveM5?: number;
   /** Entry gate: pool age at least this ... */
   minAgeMs: number;
   /** ... and at most this ... */
@@ -124,11 +126,16 @@ export function isOneSided(c: Candidate, gate: PoolGate): boolean {
 export function scoreOf(c: Candidate, nowMs: number, gate: PoolGate): number {
   const age = Math.max(0, nowMs - c.createdAtMs);
   const bonus = Math.max(0, gate.maxAgeMs - age) / gate.maxAgeMs;
-  return c.txM5 * (1 - (imbalanceOf(c) ?? 0)) * (1 + (gate.neutral ? 0 : gate.youthWeight) * bonus);
+  const driftPenalty = gate.neutral && gate.maxPriceMoveM5 !== undefined ? 1 + Math.abs(c.priceChangeM5 ?? 0) : 1;
+  return c.txM5 * (1 - (imbalanceOf(c) ?? 0)) * (1 + (gate.neutral ? 0 : gate.youthWeight) * bonus) / driftPenalty;
 }
 
 export function neutralFailure(c: Candidate | undefined, gate: PoolGate, minimum: number): string | null {
   if (!c) return 'flow statistics unavailable';
+  if (gate.maxPriceMoveM5 !== undefined) {
+    if (!Number.isFinite(c.priceChangeM5)) return 'five-minute price change unavailable';
+    if (Math.abs(c.priceChangeM5!) > gate.maxPriceMoveM5) return `five-minute price move ${c.priceChangeM5}% exceeds +/-${gate.maxPriceMoveM5}%`;
+  }
   const flow = imbalanceOf(c);
   if (flow === null || !Number.isFinite(c.buys) || !Number.isFinite(c.sells) || c.buys! < 0 || c.sells! < 0 || c.buys! + c.sells! !== c.txM5) return 'flow statistics unavailable';
   if (c.txM5 < minimum) return `txM5 ${c.txM5} < ${minimum}`;

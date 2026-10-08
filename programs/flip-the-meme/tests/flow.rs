@@ -502,6 +502,19 @@ fn samples(first_slot: u64, prices: &[u64]) -> Vec<PriceSample> {
     prices.iter().enumerate().map(|(i, &price)| PriceSample { slot: first_slot + i as u64, price }).collect()
 }
 
+fn certificate_ixs(id: u64, round: &Round, kind: u8, values: Vec<PriceSample>, attestor: &Keypair) -> Vec<Instruction> {
+    let message = flip_the_meme::attestation::message(&round_pda(id), round, kind, &values);
+    let mut data = vec![1u8, 0];
+    for field in [16u16, u16::MAX, 80, u16::MAX, 112, message.len() as u16, u16::MAX] { data.extend_from_slice(&field.to_le_bytes()); }
+    data.extend_from_slice(attestor.sign_message(&message).as_ref());
+    data.extend_from_slice(attestor.pubkey().as_ref());
+    data.extend_from_slice(&message);
+    let proof = Instruction { program_id: anchor_lang::prelude::pubkey!("Ed25519SigVerify111111111111111111111111111"), accounts: vec![], data };
+    let accounts = acc::AttestedPrice { round: round_pda(id), oracle: oracle_pda(), instructions: solana_instructions_sysvar::ID };
+    let price = if kind == 0 { ix(accounts, ixs::SetStrikeAttested { samples: values }) } else { ix(accounts, ixs::SettleAttested { samples: values }) };
+    vec![proof, price]
+}
+
 fn assert_err<T>(res: Result<T, String>, needle: &str) {
     match res {
         Ok(_) => panic!("expected failure containing {needle}"),
@@ -1557,20 +1570,32 @@ fn a_required_attestor_must_sign_every_price() {
     let r = env.round(0);
     env.warp(r.strike_end);
     let strike = |attestor: Option<Pubkey>| price_ix(0, &admin.pubkey(), attestor, ixs::SetStrike { samples: samples(100, &[1_000; 6]) });
-    assert_err(env.send_admin(strike(None)), "AttestorRequired");
+    assert_err(env.send_admin(strike(None)), "DetachedPriceRequired");
     let impostor = Keypair::new();
-    assert_err(env.send_attested(strike(Some(impostor.pubkey())), &impostor), "InvalidAttestor");
+    assert_err(env.send_attested(strike(Some(impostor.pubkey())), &impostor), "DetachedPriceRequired");
     let mut unsigned = strike(Some(attestor.pubkey()));
     unsigned.accounts[4].is_signer = false;
     assert_err(env.send_admin(unsigned), "AccountNotSigner");
-    env.send_attested(strike(Some(attestor.pubkey())), &attestor).unwrap();
+    assert_err(env.send_attested(strike(Some(attestor.pubkey())), &attestor), "DetachedPriceRequired");
+    let free_payer = Keypair::new();
+    env.svm.airdrop(&free_payer.pubkey(), SOL).unwrap();
+    let mut wrong = certificate_ixs(0, &r, 0, samples(100, &[1_000; 6]), &impostor);
+    assert_err(env.send(wrong.clone(), &free_payer, &[&free_payer]), "AttestationInvalid");
+    wrong = certificate_ixs(0, &r, 0, samples(100, &[1_000; 6]), &attestor);
+    wrong[1].data[20] ^= 1;
+    assert_err(env.send(wrong, &free_payer, &[&free_payer]), "AttestationInvalid");
+    let valid = certificate_ixs(0, &r, 0, samples(100, &[1_000; 6]), &attestor);
+    assert_err(env.send(vec![valid[1].clone()], &free_payer, &[&free_payer]), "AttestationInvalid");
+    env.send(valid, &free_payer, &[&free_payer]).unwrap();
     assert_eq!((env.round(0).status, env.round(0).strike_price), (RoundStatus::Live, 1_000));
 
     env.warp(r.exit_end);
     let settle = |attestor: Option<Pubkey>| price_ix(0, &admin.pubkey(), attestor, ixs::Settle { samples: samples(200, &[1_100; 6]) });
-    assert_err(env.send_admin(settle(None)), "AttestorRequired");
-    assert_err(env.send_attested(settle(Some(impostor.pubkey())), &impostor), "InvalidAttestor");
-    env.send_attested(settle(Some(attestor.pubkey())), &attestor).unwrap();
+    assert_err(env.send_admin(settle(None)), "DetachedPriceRequired");
+    assert_err(env.send_attested(settle(Some(impostor.pubkey())), &impostor), "DetachedPriceRequired");
+    let valid = certificate_ixs(0, &r, 1, samples(200, &[1_100; 6]), &attestor);
+    env.send(valid.clone(), &free_payer, &[&free_payer]).unwrap();
+    assert_err(env.send(valid, &free_payer, &[&free_payer]), "NotDue");
     assert_eq!((env.round(0).status, env.round(0).outcome), (RoundStatus::Final, Outcome::Up));
 }
 
@@ -1588,7 +1613,7 @@ fn an_attestor_outage_ends_in_the_normal_refund_and_unmatched_rounds_need_no_att
     env.bet(1, &c, Side::Up, 5 * CSOL).unwrap();
     // Round 0 is matched and the attestor never signs its price.
     env.warp(env.round(0).strike_end);
-    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "AttestorRequired");
+    assert_err(env.set_strike(0, &admin, samples(100, &[1_000; 6])), "DetachedPriceRequired");
     // Round 1 has no matched bank: it ends NotActivated at the strike, no price, no attestor.
     let r1 = env.round(1);
     env.warp(r1.strike_end);
@@ -2583,8 +2608,8 @@ fn rotating_the_price_authority_mid_round_locks_out_the_old_key_and_the_new_one_
 
     // The old key (with the attestor) prices the strike.
     env.warp(r.strike_end);
-    let strike = price_ix(0, &admin.pubkey(), Some(attestor.pubkey()), ixs::SetStrike { samples: samples(100, &[1_000; 6]) });
-    env.send_attested(strike, &attestor).unwrap();
+    let strike = certificate_ixs(0, &r, 0, samples(100, &[1_000; 6]), &attestor);
+    env.send(strike, &admin, &[&admin]).unwrap();
     assert_eq!((env.round(0).status, env.round(0).strike_price), (RoundStatus::Live, 1_000));
 
     // Mid-round the admin hands the price role to another key; the attestor stays.
@@ -2598,10 +2623,11 @@ fn rotating_the_price_authority_mid_round_locks_out_the_old_key_and_the_new_one_
     assert_err(env.send_admin(settle(&admin.pubkey(), None)), "Unauthorized");
     // ... and the new key alone is not enough while the attestor is required.
     let new = new_authority.insecure_clone();
-    assert_err(env.send(vec![settle(&new.pubkey(), None)], &new, &[&new]), "AttestorRequired");
+    assert_err(env.send(vec![settle(&new.pubkey(), None)], &new, &[&new]), "DetachedPriceRequired");
     assert_eq!(env.round(0).status, RoundStatus::Live);
     // New key plus the same attestor settle the round that the old key opened.
-    env.send(vec![settle(&new.pubkey(), Some(attestor.pubkey()))], &new, &[&new, &attestor]).unwrap();
+    let settle = certificate_ixs(0, &r, 1, samples(200, &[1_100; 6]), &attestor);
+    env.send(settle, &new, &[&new]).unwrap();
     let s = env.round(0);
     assert_eq!((s.status, s.outcome, s.strike_price, s.exit_price), (RoundStatus::Final, Outcome::Up, 1_000, 1_100));
     env.claim(0, &a.owner.pubkey()).unwrap();

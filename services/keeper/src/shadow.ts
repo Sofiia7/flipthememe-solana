@@ -74,13 +74,13 @@ export function summarize(rows: readonly ShadowRow[], nowMs: number, minutes: nu
   return { windowMinutes: minutes, rounds, ...counts, upShare: upShare(counts.up, counts.down) };
 }
 
-/** Symmetric momentum veto: at least ten priced minutes, 80% in one direction, last 30 minutes. */
+/** Symmetric momentum veto: at least ten priced minutes, 60% in one direction, last 30 minutes. */
 export function directionalBias(rows: readonly Pick<ShadowRow, 'pool' | 'opensAt' | 'dir'>[], pool: string, nowMs: number): string | null {
   const recent = rows.filter((r) => r.pool === pool && r.opensAt * 1000 >= nowMs - 30 * 60_000 && r.opensAt * 1000 <= nowMs && (r.dir === 'up' || r.dir === 'down')).sort((a, b) => a.opensAt - b.opensAt).slice(-20);
   if (recent.length < 10) return null;
   const up = recent.filter((r) => r.dir === 'up').length;
   const down = recent.length - up;
-  return Math.max(up, down) / recent.length >= 0.8 ? `observed momentum ${up} UP / ${down} DOWN in ${recent.length} priced minutes` : null;
+  return Math.max(up, down) / recent.length >= 0.6 ? `observed momentum ${up} UP / ${down} DOWN in ${recent.length} priced minutes` : null;
 }
 
 /** A row of shadow.jsonl, or null when the object is not one. */

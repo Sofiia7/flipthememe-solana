@@ -198,7 +198,7 @@ fn write_vectors() {
         InvalidRoundTime, InvalidRoundId, NotDue, NotFinal, AlreadyClaimed, FeeTooHigh, BankTooLargeForPool, InvalidSamples,
         Paused, Unauthorized, InvalidAccount, NotFillWindow, NothingToFill, NotSweepable, NotClosable, Insolvent, NotClaimed,
         HouseRoundCapExceeded, HouseDailyCapExceeded, AttestorRequired, InvalidAttestor, StrikeWindowClosed, RoundTooLong,
-        SettleDeadlineTooFar, MaxBankBelowMin, SessionStillActive, RoundOpensTooFar,
+        SettleDeadlineTooFar, MaxBankBelowMin, SessionStillActive, RoundOpensTooFar, AttestationInvalid, DetachedPriceRequired,
     ];
 
     let config = Config {

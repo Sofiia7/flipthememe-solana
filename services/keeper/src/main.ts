@@ -195,7 +195,7 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
-      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, momentumMinMinutes: 10, momentumMaxShare: 0.8 },
+      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.6 },
       ...sched.status(),
       houseBudget: {
         day: house.day,

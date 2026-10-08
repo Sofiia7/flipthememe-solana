@@ -178,6 +178,16 @@ describe('beats', () => {
 
 describe('neutral production ranking', () => {
   const neutral = { ...DEFAULT_GATE, neutral: true, youthWeight: 0, maxImbalance: 0.3 };
+  test('the price drift gate rejects unknown prices and either direction of momentum', () => {
+    const gate = { ...neutral, maxPriceMoveM5: 1 };
+    const balanced = withFlow(pool(1, 0, HOUR), 50, 50);
+    for (const priceChangeM5 of [undefined, -1.01, 1.01]) {
+      assert.deepEqual(rankCandidates([{ ...balanced, priceChangeM5 }], NOW, gate), []);
+    }
+    for (const priceChangeM5 of [-1, 0, 1]) {
+      assert.equal(rankCandidates([{ ...balanced, priceChangeM5 }], NOW, gate).length, 1);
+    }
+  });
   test('activity wins across ages; youth and fallback rung give no advantage', () => {
     const young = withFlow(pool(1, 0, 20 * MINUTE_MS), 40, 40);
     const mature = withFlow(pool(2, 0, 48 * HOUR), 100, 100);

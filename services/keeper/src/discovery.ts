@@ -57,7 +57,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 type Tracked = { pool: Address; createdAtMs: number; score: number; refreshedAtMs: number };
 type Numbers = { candidate: Candidate; atMs: number };
-type Flow = { buys: number; sells: number };
+type Flow = { buys: number; sells: number; priceChangeM5?: number };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const count = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
@@ -74,7 +74,10 @@ export function flowsOf(body: unknown): Map<Address, Flow> {
     const m5 = transactions && isRecord(transactions.m5) ? transactions.m5 : null;
     const buys = m5 ? count(m5.buys) : null;
     const sells = m5 ? count(m5.sells) : null;
-    if (buys !== null && sells !== null) out.set(attributes.address as Address, { buys, sells });
+    const changes = isRecord(attributes.price_change_percentage) ? attributes.price_change_percentage : null;
+    const raw = changes?.m5;
+    const move = typeof raw === 'number' || typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+    if (buys !== null && sells !== null) out.set(attributes.address as Address, { buys, sells, ...(Number.isFinite(move) ? { priceChangeM5: move } : {}) });
   }
   return out;
 }
@@ -226,7 +229,7 @@ export class PoolDiscovery {
   /** `c` with the buys and sells noted for its pool, when there are any. */
   private withFlow(c: PoolCandidate): Candidate {
     const flow = this.flows.get(c.pool);
-    return flow ? { ...c, buys: flow.buys, sells: flow.sells } : c;
+    return flow ? { ...c, ...flow } : c;
   }
 
   /** Adds pools to the tracked set (from a `new_pools` page or the trending list; also used by the dry-run script). */

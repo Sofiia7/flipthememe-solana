@@ -19,6 +19,8 @@ export type KeeperConfig = {
   attestUrl: string | null;
   /** ATTEST_TOKEN: shared secret sent as a bearer token to the attestor. Never logged. */
   attestToken: string | null;
+  /** Temporary compatibility for the previous program, before its upgrade. */
+  legacyPrices: boolean;
   /** TREASURY: an address only (the program pays it at sweep_fees; nothing here signs for it). */
   treasury: Address | null;
   /** CLOSE_AFTER_SECS: paid positions are closed this long after their round's exit_end (closer.ts). */
@@ -129,6 +131,7 @@ export function loadPoolGate(env: Env): PoolGate {
     youthWeight: parseNumber('POOL_YOUTH_WEIGHT', text(env, 'POOL_YOUTH_WEIGHT'), DEFAULT_GATE.youthWeight),
   };
   if (gate.neutral) {
+    gate.maxPriceMoveM5 = parseNumber('POOL_MAX_PRICE_MOVE_M5', text(env, 'POOL_MAX_PRICE_MOVE_M5'), 1);
     gate.youthWeight = 0;
     if (text(env, 'POOL_MAX_IMBALANCE') === undefined) gate.maxImbalance = 0.3;
   }
@@ -186,6 +189,7 @@ export function loadConfig(env: Env = process.env, cwd: string = process.cwd()):
     houseKeypairPath: keyPath('HOUSE_KEYPAIR'),
     attestUrl: attestUrl === undefined ? null : httpUrl('ATTEST_URL', attestUrl).replace(/\/+$/, ''),
     attestToken: attestToken ?? null,
+    legacyPrices: text(env, 'LEGACY_PRICES') === 'true',
     treasury: treasury === undefined ? null : (treasury as Address),
     // A demo may shorten it, but never below the program's one-hour minimum.
     closeAfterSecs: effectiveCloseAfter(BigInt(parseNumber('CLOSE_AFTER_SECS', text(env, 'CLOSE_AFTER_SECS'), Number(CLOSE_AFTER_SECS), { integer: true }))),

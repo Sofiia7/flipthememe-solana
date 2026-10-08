@@ -77,7 +77,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   // What the upgrade runbook sets up: on-chain caps as the keeper defaults, no attestor required.
   chain.houseLimits = { roundCap: 50_000_000n, dailyCap: 2n * SOL, day: BigInt(Math.floor(Date.now() / 86_400_000)), spent: 0n, bump: 253 };
   chain.oracle = { attestor: NO_ATTESTOR, required: false, bump: 252 };
-  const cfg = loadConfig({ STATE_FILE: join(dir, 'state.json'), HOUSE_PACE_DIVISOR: '0', ...opts.env }, dir);
+  const cfg = loadConfig({ STATE_FILE: join(dir, 'state.json'), HOUSE_PACE_DIVISOR: '0', LEGACY_PRICES: 'true', ...opts.env }, dir);
   const state = new StateStore(cfg.stateFile, Date.now());
   const store = new ObservationStore();
   const logs: LogFields[] = [];

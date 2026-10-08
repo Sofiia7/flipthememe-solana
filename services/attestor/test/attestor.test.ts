@@ -134,6 +134,20 @@ async function strikeTx(s: Setup, roundId: bigint, samples: PriceSample[], feePa
 const body = (r: { body: Record<string, unknown> }) => r.body as { signature?: string; attestor?: string; reason?: string; error?: string };
 
 describe('sampler', () => {
+  test('public certificates use our own full window and survive eviction without changing the message', async () => {
+    const s = await setup(T0 + 70_000);
+    const round = makeRound(10n, OPENS, HIGGS_POOL);
+    s.devnet.add(round);
+    await s.core.tick();
+    await runUntil(s, Number(round.strikeEnd) * 1000 + 2_000);
+    const first = await s.core.certificate('10', 'strike');
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.ok(Array.isArray(first.body.samples) && first.body.samples.length >= 5);
+    const again = await s.core.certificate('10', 'strike');
+    assert.deepEqual(again.body, first.body);
+    const core = new AttestorCore({ sql: s.sql, alarms: s.alarms, env: { ATTESTOR_SECRET }, now: s.clock.now, devnet: new Failover([{ name: 'test', rpc: s.devnet.rpc() }], s.clock.now), mainnet: new Failover([{ name: 'test', rpc: s.mainnet.rpc() }], s.clock.now) });
+    assert.deepEqual((await core.certificate('10', 'strike')).body, first.body);
+  });
   test('sleeps until a window, reads about once a second through it, then sleeps again', async () => {
     const s = await setup(T0 + 70_000);
     const round = s.devnet.add(makeRound(10n, OPENS, HIGGS_POOL));

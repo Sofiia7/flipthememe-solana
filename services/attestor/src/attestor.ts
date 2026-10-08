@@ -38,13 +38,14 @@ import {
   observePrice,
   oracleAddress,
   roundAddress,
+  priceMessage,
   type ConfigAccount,
   type OracleConfigAccount,
   type PoolRef,
   type PriceSample,
   type RoundAccount,
 } from '@flipthememe/client';
-import { getBase58Decoder, getBase64Encoder, type Address } from '@solana/kit';
+import { getBase58Decoder, getBase64Encoder, getBase64Decoder, type Address } from '@solana/kit';
 import {
   ROUND_ACCOUNT_INDEX,
   Refusal,
@@ -286,6 +287,11 @@ export class AttestorCore {
       updated_ms INTEGER NOT NULL,
       PRIMARY KEY (round, kind)
     ) WITHOUT ROWID`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS price_certificates (
+      round INTEGER NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL,
+      samples TEXT NOT NULL, signature TEXT, created_ms INTEGER NOT NULL,
+      PRIMARY KEY (round, kind)
+    ) WITHOUT ROWID`);
   }
 
   /** The first configuration error (a var that is not usable), or null. */
@@ -462,6 +468,7 @@ export class AttestorCore {
   private prune(now: number): void {
     this.sql.exec('DELETE FROM samples WHERE at_ms < ?', now - RETAIN_MS);
     this.sql.exec('DELETE FROM attest_windows WHERE updated_ms < ?', now - ATTEST_RETAIN_MS);
+    this.sql.exec('DELETE FROM price_certificates WHERE created_ms < ?', now - ATTEST_RETAIN_MS);
     this.prunedAt = now;
   }
 
@@ -499,6 +506,10 @@ export class AttestorCore {
   /** The round the instruction prices (account ROUND_ACCOUNT_INDEX), read from devnet now, at its PDA. */
   private async findRound(request: AttestRequest): Promise<RoundAccount> {
     const address = request.accounts[ROUND_ACCOUNT_INDEX] as Address;
+    return this.readRound(address);
+  }
+
+  private async readRound(address: Address): Promise<RoundAccount> {
     let accounts: readonly unknown[];
     try {
       // One budget for every endpoint tried: the keeper's own timeout for this call is longer.
@@ -523,6 +534,42 @@ export class AttestorCore {
       throw new Refusal('round_not_found', `account ${address} holds round ${round.id} but is not its PDA`);
     }
     return round;
+  }
+
+  /** Public immutable certificate from our own window, independent of a keeper or fee payer. */
+  async certificate(id: string, kind: 'strike' | 'exit'): Promise<Result> {
+    if (!/^(0|[1-9][0-9]{0,15})$/.test(id) || !Number.isSafeInteger(Number(id))) return failure(400, 'bad_request', 'invalid round id');
+    try {
+      const round = await this.readRound(await this.roundPda(BigInt(id)));
+      const now = this.now();
+      const window = windowOf(round, kind);
+      if (now < window.endMs + SAMPLE_MARGIN_MS) return failure(425, 'not_due', 'the sampling window has not finished');
+      if (now > Number(round.settleDeadline) * 1000 || (kind === 'strike' && now >= Number(round.exitStart) * 1000)) return failure(410, 'expired', 'the certificate can no longer be submitted');
+      const key = await this.key();
+      // The row is inserted BEFORE awaiting a signature: concurrent requests and eviction
+      // can never select another observation set for this round and window.
+      let row = this.sql.exec('SELECT message, samples, signature FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as { message: string; samples: string; signature: string | null } | undefined;
+      if (!row) {
+        const observations = ownReadsInside(this.ownSamples(window), window);
+        const unique = new Map<string, PriceSample>();
+        for (const o of observations) if (!unique.has(o.slot.toString())) unique.set(o.slot.toString(), { slot: o.slot, price: o.price });
+        const samples = [...unique.values()].sort((a, b) => a.slot < b.slot ? -1 : 1).slice(0, 16);
+        const json = JSON.stringify(samples.map((s) => ({ slot: s.slot.toString(), price: s.price.toString() })));
+        const bytes = await priceMessage(round, kind, samples);
+        this.sql.exec('INSERT OR IGNORE INTO price_certificates (round, kind, message, samples, signature, created_ms) VALUES (?, ?, ?, ?, NULL, ?)', Number(id), kind, getBase64Decoder().decode(bytes), json, now);
+        row = this.sql.exec('SELECT message, samples, signature FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as typeof row;
+      }
+      if (!row) throw new Error('certificate storage failed');
+      if (!row.signature) {
+        const signature = base58.decode(await key.sign(decodeBase64(row.message)!));
+        this.sql.exec('UPDATE price_certificates SET signature = ? WHERE round = ? AND kind = ? AND signature IS NULL', signature, Number(id), kind);
+        row.signature = signature;
+      }
+      return { status: 200, body: { roundId: id, kind, attestor: key.address, samples: JSON.parse(row.samples), signature: row.signature, message: row.message } };
+    } catch (error) {
+      if (error instanceof Refusal) return failure(422, error.reason, error.message);
+      return failure(503, 'unavailable', 'price certificate unavailable; try again');
+    }
   }
 
   /**
@@ -713,6 +760,7 @@ export class AttestorCore {
       }));
     const body: Record<string, unknown> = {
       attestor,
+      priceMode: 'detached-canonical',
       ...(keyError ? { keyError } : {}),
       ...(configError ? { configError } : {}),
       toleranceBps: 'bps' in this.tolerance ? this.tolerance.bps : null,

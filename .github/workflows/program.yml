@@ -1,0 +1,29 @@
+name: Reproducible program
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  program:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Two clean builds in the pinned Anchor image
+        run: bash programs/flip-the-meme/build-verifiable.sh
+      - name: Install the host Rust compiler for LiteSVM
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Test exactly the reproducible binary
+        run: |
+          mkdir -p target/deploy
+          cp dist/program/a/flip_the_meme.so target/deploy/flip_the_meme.so
+          cargo +1.98.1 test --locked --manifest-path programs/flip-the-meme/Cargo.toml
+      - uses: actions/upload-artifact@v7
+        with:
+          name: verified-program
+          path: |
+            dist/program/a/flip_the_meme.so
+            dist/program/a/flip_the_meme.json
+            dist/program/SHA256SUMS
+            dist/program/source-commit.txt
+            dist/program/build-image.txt

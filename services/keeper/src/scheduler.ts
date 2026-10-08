@@ -63,6 +63,7 @@ import { RoundLog, roundRow } from './roundlog.ts';
 import type { SolanaRpc } from './rpc.ts';
 import type { PoolSelector } from './selector.ts';
 import type { StateStore } from './state.ts';
+import { certificateInstructions } from './certificate.ts';
 import { createDue, nextStep, roundAhead, type StepKind } from './steps.ts';
 
 /** Rounds read every tick: ids next_round_id - ROUND_WINDOW .. next_round_id. */
@@ -143,6 +144,7 @@ export type SchedulerDeps = {
   houseSigner?: KeyPairSigner;
   /** Present when ATTEST_URL is set. */
   attestor?: AttestorClient | null;
+  certificates?: typeof certificateInstructions;
   closer?: PositionCloser;
   /** rounds.jsonl: a line per swept round (humans, wallets, outcome); absent = no such record. */
   roundLog?: RoundLog | null;
@@ -167,6 +169,7 @@ export class Scheduler {
   private readonly priceSigner: KeyPairSigner;
   private readonly houseSigner: KeyPairSigner;
   private readonly attestor: AttestorClient | null;
+  private readonly certificates: typeof certificateInstructions;
   private readonly closer: PositionCloser;
   private readonly cfg: KeeperConfig;
   private readonly state: StateStore;
@@ -205,6 +208,7 @@ export class Scheduler {
     this.priceSigner = deps.priceSigner ?? deps.signer;
     this.houseSigner = deps.houseSigner ?? deps.signer;
     this.attestor = deps.attestor ?? null;
+    this.certificates = deps.certificates ?? certificateInstructions;
     this.closer = deps.closer ?? new PositionCloser({ rpc: deps.rpc, signer: deps.signer, logger: deps.logger, closeAfterSecs: deps.cfg.closeAfterSecs });
     this.cfg = deps.cfg;
     this.state = deps.state;
@@ -524,6 +528,14 @@ export class Scheduler {
     if (!oracle) {
       this.warn('oracle', { event: 'oracle_missing', hint: 'run scripts/init-oracle.ts after the program upgrade' });
       return;
+    }
+    if (oracle.required && priced && !this.cfg.legacyPrices) {
+      const url = this.attestor?.url;
+      if (!url) throw new Error('ATTEST_URL is required for public price certificates');
+      return this.actWith(round.id, step, async () => {
+        const instructions = await this.certificates(url, round, step === 'strike' ? 'strike' : 'exit', oracle.attestor);
+        return sendInstructions(this.rpc, this.signer, instructions);
+      }, { ...extra, priceMode: 'detached-canonical' });
     }
     const build = step === 'strike' ? setStrike : settle;
     const unattested = () => build({ priceAuthority: this.priceSigner, roundId: round.id, samples });
