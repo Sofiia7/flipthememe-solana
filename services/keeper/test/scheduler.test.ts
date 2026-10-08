@@ -19,6 +19,8 @@ import {
   positionAddress,
   roundAddress,
   vaultAddress,
+  attestedPriceInstructions,
+  ED25519_PROGRAM,
   type PositionAccount,
   type PriceObservation,
 } from '@flipthememe/client';
@@ -54,6 +56,7 @@ type HarnessOptions = {
   priceSigner?: KeyPairSigner;
   houseSigner?: KeyPairSigner;
   attestor?: AttestorClient;
+  certificates?: ConstructorParameters<typeof Scheduler>[0]['certificates'];
   /** Builds the position closer (default: the scheduler's own, first scan a minute after start). */
   closer?: (chain: FakeChain, signer: KeyPairSigner, logs: LogFields[]) => PositionCloser;
   /** Environment of loadConfig on top of the test's own (the house budget is not spread over the day here). */
@@ -89,6 +92,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     priceSigner: opts.priceSigner,
     houseSigner: opts.houseSigner,
     attestor: opts.attestor,
+    certificates: opts.certificates,
     closer: opts.closer?.(chain, signer, logs),
     roundLog: opts.roundLog,
     cfg,
@@ -421,7 +425,35 @@ describe('scheduler: October 2026 upgrade', () => {
     assert.deepEqual(Object.keys(h.chain.signed[strikeAt]?.signatures ?? {}), [h.signer.address, price.address]);
   });
 
-  test('attested strike: the attestor co-signs; accounts are config, round, price authority, oracle, attestor', async () => {
+  test('canonical strike relays the public proof with only the fee payer; a certificate outage sends nothing', async () => {
+    const att = await fakeAttestor();
+    let unavailable = false;
+    const calls: string[] = [];
+    const h = await harness({
+      env: { LEGACY_PRICES: 'false' }, attestor: makeClient(att.fetch),
+      certificates: async (url, round, kind, key) => {
+        calls.push(`${url}/${round.id}/${kind}`);
+        if (unavailable) throw new Error('certificate unavailable');
+        return attestedPriceInstructions(round, kind, [{ slot: 1n, price: 100n }], key, '1'.repeat(64));
+      },
+    });
+    h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
+    const now = MINUTE + 30;
+    h.chain.rounds.set(8n, played(now));
+    await tick(h, now);
+    assert.deepEqual(calls, ['https://attest.example/8/strike']);
+    assert.equal(att.seen.length, 0, 'never calls legacy transaction co-signing');
+    assert.equal(h.chain.sent[0]?.[0]?.program, ED25519_PROGRAM);
+    assert.deepEqual(h.chain.sent[0]?.[1]?.accounts.slice(0, 2), [await roundAddress(8n), await oracleAddress()]);
+    assert.deepEqual(Object.keys(h.chain.signed[0]!.signatures), [h.signer.address]);
+    unavailable = true;
+    h.chain.rounds.delete(8n);
+    h.chain.rounds.set(7n, { ...played(now), id: 7n });
+    await tick(h, now + 1);
+    assert.equal(h.chain.sent.length, 1, 'no fallback to privileged or unsigned price');
+  });
+
+  test('legacy rollout compatibility: the attestor co-signs; accounts are config, round, price authority, oracle, attestor', async () => {
     const att = await fakeAttestor();
     const h = await harness({ attestor: makeClient(att.fetch) });
     h.chain.oracle = { attestor: att.address, required: true, bump: 252 };

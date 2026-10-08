@@ -24,7 +24,8 @@ import { awaySummary, type AwayItem, type AwaySummary } from './away';
 import { challengeActive, createChallengeStore, type Challenge } from './challenge';
 import { HISTORY_CAP, createHistoryStore, mergeHistory, reconcileHistory, type HistoryEntry, type HistoryRecord } from './history';
 import { collectInPlay } from './reminders';
-import { EMPTY_LEDGER, scoreOf, updateLedger, type DuelLedger, type DuelScore } from './rivalScore';
+import type { DuelScore } from './rivalScore';
+import { useRivalScore } from './useRivalScore';
 import { useAskPermissionAfterFirstBet, useResultReminders } from './useResultReminders';
 
 export { sessionStatusOf, type SessionStatus } from '../wallet/sessionList';
@@ -430,18 +431,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [challenge, arena],
   );
 
-  // The score against the friend of the challenge: the arena only reads the last few rounds, so the
-  // duels seen since the app opened are kept per wallet and friend (in memory, state/rivalScore.ts).
-  const duels = useRef<{ key: string; ledger: DuelLedger; score: DuelScore | null }>({ key: '', ledger: EMPTY_LEDGER, score: null });
-  const rivalScore = useMemo(() => {
-    const by = activeChallenge?.by ?? null;
-    if (!owner || !by || by === owner) return null;
-    const key = `${owner}:${by}`;
-    if (duels.current.key !== key) duels.current = { key, ledger: EMPTY_LEDGER, score: null };
-    const next = updateLedger(duels.current.ledger, arena.rounds, arena.positions, owner, by);
-    if (next !== duels.current.ledger) duels.current = { key, ledger: next, score: scoreOf(next) };
-    return duels.current.score;
-  }, [owner, activeChallenge, arena.rounds, arena.positions]);
+  const rivalScore = useRivalScore(owner, activeChallenge?.by ?? null, arena.rounds, arena.positions);
 
   // Local "did your call win?" notifications for my rounds in play, when the app goes to the background.
   const inPlay = useMemo(

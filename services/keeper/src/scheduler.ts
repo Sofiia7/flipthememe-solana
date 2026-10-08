@@ -531,7 +531,10 @@ export class Scheduler {
     }
     if (oracle.required && priced && !this.cfg.legacyPrices) {
       const url = this.attestor?.url;
-      if (!url) throw new Error('ATTEST_URL is required for public price certificates');
+      if (!url) {
+        this.warn('attest-url', { event: 'attestor_required_no_url', round: round.id, step, attestor: oracle.attestor, hint: 'set ATTEST_URL' });
+        return;
+      }
       return this.actWith(round.id, step, async () => {
         const instructions = await this.certificates(url, round, step === 'strike' ? 'strike' : 'exit', oracle.attestor);
         return sendInstructions(this.rpc, this.signer, instructions);

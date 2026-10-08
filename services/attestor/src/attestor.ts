@@ -289,7 +289,7 @@ export class AttestorCore {
     ) WITHOUT ROWID`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS price_certificates (
       round INTEGER NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL,
-      samples TEXT NOT NULL, signature TEXT, created_ms INTEGER NOT NULL,
+      samples TEXT NOT NULL, signature TEXT, attestor TEXT NOT NULL, created_ms INTEGER NOT NULL,
       PRIMARY KEY (round, kind)
     ) WITHOUT ROWID`);
   }
@@ -548,7 +548,7 @@ export class AttestorCore {
       const key = await this.key();
       // The row is inserted BEFORE awaiting a signature: concurrent requests and eviction
       // can never select another observation set for this round and window.
-      let row = this.sql.exec('SELECT message, samples, signature FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as { message: string; samples: string; signature: string | null } | undefined;
+      let row = this.sql.exec('SELECT message, samples, signature, attestor FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as { message: string; samples: string; signature: string | null; attestor: Address } | undefined;
       if (!row) {
         const observations = ownReadsInside(this.ownSamples(window), window);
         const unique = new Map<string, PriceSample>();
@@ -556,16 +556,17 @@ export class AttestorCore {
         const samples = [...unique.values()].sort((a, b) => a.slot < b.slot ? -1 : 1).slice(0, 16);
         const json = JSON.stringify(samples.map((s) => ({ slot: s.slot.toString(), price: s.price.toString() })));
         const bytes = await priceMessage(round, kind, samples);
-        this.sql.exec('INSERT OR IGNORE INTO price_certificates (round, kind, message, samples, signature, created_ms) VALUES (?, ?, ?, ?, NULL, ?)', Number(id), kind, getBase64Decoder().decode(bytes), json, now);
-        row = this.sql.exec('SELECT message, samples, signature FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as typeof row;
+        this.sql.exec('INSERT OR IGNORE INTO price_certificates (round, kind, message, samples, signature, attestor, created_ms) VALUES (?, ?, ?, ?, NULL, ?, ?)', Number(id), kind, getBase64Decoder().decode(bytes), json, key.address, now);
+        row = this.sql.exec('SELECT message, samples, signature, attestor FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as typeof row;
       }
       if (!row) throw new Error('certificate storage failed');
       if (!row.signature) {
+        if (row.attestor !== key.address) throw new Error('attestor rotated before signing');
         const signature = base58.decode(await key.sign(decodeBase64(row.message)!));
         this.sql.exec('UPDATE price_certificates SET signature = ? WHERE round = ? AND kind = ? AND signature IS NULL', signature, Number(id), kind);
         row.signature = signature;
       }
-      return { status: 200, body: { roundId: id, kind, attestor: key.address, samples: JSON.parse(row.samples), signature: row.signature, message: row.message } };
+      return { status: 200, body: { roundId: id, kind, attestor: row.attestor, samples: JSON.parse(row.samples), signature: row.signature, message: row.message } };
     } catch (error) {
       if (error instanceof Refusal) return failure(422, error.reason, error.message);
       return failure(503, 'unavailable', 'price certificate unavailable; try again');

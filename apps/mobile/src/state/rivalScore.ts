@@ -2,7 +2,7 @@
 // counts when we both hold a position in it, on opposite sides, and it finished Up or Down: whoever's
 // side won takes the point. Rounds where we called the same side, or that ended in a refund, are not a
 // duel and count for nobody. The arena only reads the last few rounds, so the app keeps what it has seen
-// in a small ledger (per wallet and rival, in memory for the session). Pure TypeScript (no React Native
+// in a small ledger (persisted per wallet and rival on this device). Pure TypeScript (no React Native
 // imports) for node:test.
 import { Outcome, RoundStatus, Side } from '@flipthememe/client';
 
@@ -12,6 +12,29 @@ export type DuelLedger = ReadonlyMap<bigint, DuelWinner>;
 export const EMPTY_LEDGER: DuelLedger = new Map();
 /** Rounds remembered per rival; the oldest go first. */
 export const LEDGER_CAP = 200;
+
+export const duelStorageKey = (me: string, rival: string) => `ftm:duels:v1:${me}:${rival}`;
+
+export function encodeLedger(ledger: DuelLedger): string {
+  return JSON.stringify([...ledger].map(([id, winner]) => [id.toString(), winner]));
+}
+
+/** Corrupt local data never supplies points or prevents the arena from opening. */
+export function decodeLedger(raw: string | null): DuelLedger {
+  if (!raw) return EMPTY_LEDGER;
+  try {
+    const rows: unknown = JSON.parse(raw);
+    if (!Array.isArray(rows) || rows.length > LEDGER_CAP) return EMPTY_LEDGER;
+    const ledger = new Map<bigint, DuelWinner>();
+    for (const row of rows) {
+      if (!Array.isArray(row) || row.length !== 2 || typeof row[0] !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(row[0]) || (row[1] !== 'you' && row[1] !== 'them')) return EMPTY_LEDGER;
+      const id = BigInt(row[0]);
+      if (id > 18446744073709551615n || ledger.has(id)) return EMPTY_LEDGER;
+      ledger.set(id, row[1]);
+    }
+    return ledger;
+  } catch { return EMPTY_LEDGER; }
+}
 
 type RoundLike = { id: bigint; account: { status: number; outcome: number } };
 type PlayerLike = { account: { authority: string; side: number; isHouse: boolean } };

@@ -45,6 +45,7 @@ import { PixelText } from '../ui/PixelText';
 import { ExtraRoundLine, MyRoundPanel, NextRoundBar, OpenRoundPanel } from '../ui/RoundPanel';
 import { TokenHeader } from '../ui/TokenHeader';
 import { RoundProgress } from '../ui/RoundProgress';
+import { DailyRecord } from '../ui/DailyRecord';
 import { TopUpSheet } from '../ui/TopUpSheet';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { RENT_FALLBACK, maxWinProfit } from '../wallet/topUpPlan';
@@ -364,11 +365,7 @@ export function ArenaScreen() {
           </View>
         </View>
         {dayText ? (
-          <View style={[styles.dayRing, { borderColor: dayColor }]} accessibilityLabel={dayText}>
-            <Text style={[styles.dayText, { color: dayColor }]} numberOfLines={1}>
-              {dayText}
-            </Text>
-          </View>
+          <DailyRecord text={dayText} won={day.won} finished={day.finished} color={dayColor} />
         ) : null}
       </View>
 

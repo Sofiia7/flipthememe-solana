@@ -3,7 +3,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Outcome, RoundStatus, Side } from '@flipthememe/client';
-import { EMPTY_LEDGER, LEDGER_CAP, duelWinner, scoreLine, scoreOf, updateLedger } from '../state/rivalScore.ts';
+import { EMPTY_LEDGER, LEDGER_CAP, decodeLedger, duelStorageKey, encodeLedger, duelWinner, scoreLine, scoreOf, updateLedger } from '../state/rivalScore.ts';
+
+test('duels survive serialization without counting a round twice; wallet pairs are isolated', () => {
+  const ledger = new Map([[18446744073709551615n, 'you' as const], [1n, 'them' as const]]);
+  assert.deepEqual(decodeLedger(encodeLedger(ledger)), ledger);
+  assert.notEqual(duelStorageKey('me', 'friend'), duelStorageKey('friend', 'me'));
+  for (const raw of ['invalid', '{}', '[["1","you"],["1","them"]]', '[["18446744073709551616","you"]]', '[["2","admin"]]']) assert.equal(decodeLedger(raw).size, 0);
+});
 
 const ME = 'ME11111111111111111111111111111111111111111';
 const RIVAL = 'RIVAL1111111111111111111111111111111111111';

@@ -157,7 +157,7 @@ export async function handle(request: Request, api: AttestorApi, env: HttpEnv = 
       if (!/^(0|[1-9][0-9]{0,15})$/.test(id) || (kind !== 'strike' && kind !== 'exit')) return answer(failure(400, 'bad_request', 'round and kind=strike|exit are required'));
       if (!api.certificate) return answer(failure(503, 'unavailable', 'certificates unavailable'));
       const key = new Request(`${url.origin}${pathname}?round=${id}&kind=${kind}`);
-      const hit = await ctx.cache?.match(key);
+      const hit = await ctx.cache?.match(key).catch(() => undefined);
       if (hit) return hit;
       const result = await api.certificate(id, kind);
       const response = answer(result, result.status === 200 ? { 'cache-control': 'public, max-age=5' } : {});
