@@ -15,6 +15,8 @@ for pass in a b; do
       anchor --version
       rustup toolchain install 1.98.1 --profile minimal
       rustup default 1.98.1
+      # Anchor consults CARGO_TARGET_DIR, not workspace/target, before syncing ids.
+      mkdir -p /tmp/target/deploy
       cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml --sbf-out-dir /out --tools-version v1.52 --arch v0 -- --locked
       anchor idl build --program-name flip_the_meme --out /out/flip_the_meme.json -- --locked
     '

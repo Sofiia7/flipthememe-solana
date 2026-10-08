@@ -1586,6 +1586,21 @@ fn a_required_attestor_must_sign_every_price() {
     assert_err(env.send(wrong, &free_payer, &[&free_payer]), "AttestationInvalid");
     let valid = certificate_ixs(0, &r, 0, samples(100, &[1_000; 6]), &attestor);
     assert_err(env.send(vec![valid[1].clone()], &free_payer, &[&free_payer]), "AttestationInvalid");
+      let mut zero_signatures = valid.clone();
+      zero_signatures[0].data[0] = 0;
+      assert_err(env.send(zero_signatures, &free_payer, &[&free_payer]), "AttestationInvalid");
+      let mut other_pool = env.round(0);
+      other_pool.pool = Pubkey::new_unique();
+      assert_err(env.send(certificate_ixs(0, &other_pool, 0, samples(100, &[1_000; 6]), &attestor), &free_payer, &[&free_payer]), "AttestationInvalid");
+      let mut other_window = env.round(0);
+      other_window.strike_end += 1;
+      assert_err(env.send(certificate_ixs(0, &other_window, 0, samples(100, &[1_000; 6]), &attestor), &free_payer, &[&free_payer]), "AttestationInvalid");
+      let mut other_round = certificate_ixs(1, &r, 0, samples(100, &[1_000; 6]), &attestor);
+      other_round[1] = valid[1].clone();
+      assert_err(env.send(other_round, &free_payer, &[&free_payer]), "AttestationInvalid");
+      let mut other_kind = certificate_ixs(0, &r, 1, samples(100, &[1_000; 6]), &attestor);
+      other_kind[1] = valid[1].clone();
+      assert_err(env.send(other_kind, &free_payer, &[&free_payer]), "AttestationInvalid");
     env.send(valid, &free_payer, &[&free_payer]).unwrap();
     assert_eq!((env.round(0).status, env.round(0).strike_price), (RoundStatus::Live, 1_000));
 
