@@ -1,5 +1,5 @@
 /**
- * Production enables PoolGate.neutral in loadConfig: rank by balanced activity across all ages,
+ * Optional strict mode enables PoolGate.neutral in loadConfig: rank by balanced activity across all ages,
  * reject missing flow / one-sided flow / low activity, and apply retention checks before the hold.
  * The age ladder below is retained only for the explicit POOL_NEUTRAL=false compatibility mode.
  * Which PumpSwap pool the arena plays, as pure functions over GeckoTerminal numbers (the SOL depth

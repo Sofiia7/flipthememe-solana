@@ -50,7 +50,7 @@ services:
       # Neutral choice: the one-sided flow gate and the weight of the youth bonus in the score.
       POOL_MAX_IMBALANCE: ${POOL_MAX_IMBALANCE:-}
       POOL_MAX_PRICE_MOVE_M5: ${POOL_MAX_PRICE_MOVE_M5:-1}
-      POOL_NEUTRAL: ${POOL_NEUTRAL:-true}
+      POOL_NEUTRAL: ${POOL_NEUTRAL:-false}
       POOL_YOUTH_WEIGHT: ${POOL_YOUTH_WEIGHT:-}
       # Token check at selection: mint and freeze authority, Token-2022 extensions, top holder outside the pool.
       TOKEN_CHECK: ${TOKEN_CHECK:-}

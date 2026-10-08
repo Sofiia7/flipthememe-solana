@@ -1,6 +1,6 @@
 # FlipTheMeme keeper: deploy
 
-**Neutral selection (8 October correction).** Production defaults to `POOL_NEUTRAL=true`, disables trending discovery and forces the youth score bonus to zero. Age is not a ranking priority: balanced activity wins across the old age rungs. New pools need at least ten minutes of age, the configured activity minimum (50 trades/5 minutes by default), a complete buys/sells split, and flow imbalance at most 0.3 (65/35). Current pools need at least 20 trades/5 minutes and the same flow limit; these checks bypass the ten-minute hold, including during partial discovery failures. Missing usable statistics reject a pool. Both new and current pools must have a reported five-minute price change within +/-1%; missing drift data rejects them. A pool must complete ten priced shadow minutes before real rounds begin. Up to three candidates are observed in parallel; an already prepared candidate takes priority, and a ready healthy current market is never replaced with an unprepared one. While it warms up, the keeper retains a healthy current pool even after the normal hold expires; failing flow, drift, depth or momentum checks still drops it. The last 20 directional shadow minutes in the last 30 minutes also veto a pool when at least ten exist and at least 80% go in either direction. That veto survives restarts through `shadow.jsonl`. A vetoed current pool is replaced, or dropped if nothing qualifies; new rounds wait, while existing rounds keep being priced, settled and refunded. `status.json.selectionPolicy` records the effective settings. Old UP-heavy samples remain in the 200-minute statistics until they age out; this policy is a selection fix, not a promise that subsequent outcomes will be exactly 50/50. `POOL_NEUTRAL=false` explicitly restores the compatibility age ladder; `POOL_OVERRIDE` is still an explicit operator override of selection.
+**Continuous rounds (8 October).** Production uses `POOL_NEUTRAL=false`, `POOL_YOUTH_WEIGHT=0`, with trending discovery disabled. Balanced flow is a ranking preference, rather than a requirement that leaves the arena empty. Shadow warmup, observed UP/DOWN imbalance and five-minute drift never stop new rounds. The current valid pool keeps serving while discovery finds a replacement; switching needs no warmup. Token checks, quote-depth checks and canonical price certificates remain enabled. Set `POOL_NEUTRAL=true` only to opt into the experimental strict filtering and ten-minute shadow warmup, accepting gaps when no market passes. The public shadow statistics remain actual observations, not a target of 50/50.
 
 One container, `ftm-sol-keeper`, on a Linux VPS with Docker Compose (the host may run other compose
 projects too). It only makes outbound connections (devnet RPC, mainnet RPC, GeckoTerminal): no
@@ -23,7 +23,7 @@ Placeholders used below:
 
 The deployed program and keeper must use the same price protocol. `LEGACY_PRICES=true` is only for the previous program during a coordinated upgrade. Pause new bets, finish or refund existing rounds, deploy the verified program, then set `LEGACY_PRICES=false` and recreate the keeper container before resuming. The upgraded required-oracle program rejects priced legacy instructions; this flag cannot bypass it.
 
-In canonical mode the keeper obtains the public attestor certificate, verifies its context and signature locally, then relays it. A certificate outage does not fall back to keeper-selected samples. Any funded payer can also use [the standalone relay CLI](../../../docs/price-certificates.md). `status.json.priceProtocol` reports the effective mode. Production neutral settings include `POOL_MAX_PRICE_MOVE_M5=1` and the ten-minute shadow warmup above.
+In canonical mode the keeper obtains the public attestor certificate, verifies its context and signature locally, then relays it. A certificate outage does not fall back to keeper-selected samples. Any funded payer can also use [the standalone relay CLI](../../../docs/price-certificates.md). `status.json.priceProtocol` reports the effective mode. The optional strict mode includes `POOL_MAX_PRICE_MOVE_M5=1` and ten priced shadow minutes; continuous production does not block on either.
 
 ## Before the first deploy
 
@@ -388,7 +388,7 @@ empty value means the keeper's own default):
 | `POOL_KEEP_MIN_TX_M5` | `20` | after the hold, fewer trades in 5 minutes replace the current pool |
 | `POOL_KEEP_MAX_AGE_MIN` | `180` | after the hold, an older fresh pool is replaced |
 | `POOL_MAX_IMBALANCE` | `0.5` | one-sided flow gate: `\|buys - sells\| > this * txM5` ranks a candidate behind the balanced ones (0 to 1) |
-| `POOL_YOUTH_WEIGHT` | `1` | weight of the youth bonus in the score; `0` = no bonus |
+| `POOL_YOUTH_WEIGHT` | `0` | weight of the youth bonus in the score; `0` = no bonus |
 | `TOKEN_CHECK` | `true` | token check at selection (authorities, Token-2022 extensions, top holder); `false` / `off` skips it |
 | `HOLDER_MAX_PCT` | `20` | the biggest holder outside the pool may have this percent of the supply (above 0, at most 100) |
 | `TOKEN_CHECK_TTL_MIN` | `30` | minutes a token verdict is kept per mint |

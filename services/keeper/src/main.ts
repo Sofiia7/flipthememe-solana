@@ -198,7 +198,7 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
-      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.8, warmupRequired: true },
+      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: cfg.poolGate.neutral ? 10 : null, momentumMaxShare: cfg.poolGate.neutral ? 0.8 : null, warmupRequired: !!cfg.poolGate.neutral },
       priceProtocol: cfg.legacyPrices ? 'legacy-cosign' : 'detached-canonical',
       marketReadiness: pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, now) : null,
       observingPools: selector.watching.map(p => ({ pool: p.pool, readiness: shadow.readiness(p.pool, now) })),
@@ -255,7 +255,7 @@ async function main(): Promise<void> {
   const loops: Loop[] = [
     every('market-status', 120_000, 12_000, errors, async () => {
       const pool = selector.current;
-      await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, Date.now()) : null, sched.snapshot?.config?.paused ?? false, selector.watching.length));
+      await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, cfg.poolGate.neutral ? pool ? shadow.readiness(pool.pool, Date.now()) : selector.watching.map(p => shadow.bias(p.pool, Date.now())).find(Boolean) ?? null : null, sched.snapshot?.config?.paused ?? false, selector.watching.length));
     }),
     every('leaderboard', 120_000, 45_000, errors, async () => { await leaderboard?.tick(shadow.summary(Date.now())); }),
     every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),
