@@ -121,3 +121,11 @@ describe('the script', () => {
     assert.throws(() => execFileSync(process.execPath, [script, '--days', 'soon'], { encoding: 'utf8', stdio: 'pipe' }), (e: { status?: number }) => e.status === 2);
   });
 });
+
+
+test('candidate observation does not inflate selected-market statistics', () => {
+  const stats = computeShadowStats([{ opensAt: 100, dir: 'up', rung: 'fresh' }, { opensAt: 100, dir: 'down', rung: 'fresh', observedOnly: true }]);
+  assert.equal(stats.rounds, 1);
+  assert.equal(stats.down, 0);
+  assert.equal(stats.upShare, 1);
+});

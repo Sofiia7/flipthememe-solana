@@ -126,6 +126,7 @@ export function computeShadowStats(rows: readonly Row[], sinceSecs: number | nul
   let first: number | null = null;
   let last: number | null = null;
   for (const row of rows) {
+    if (row.observedOnly === true) continue;
     const dir = row.dir;
     if (dir !== 'up' && dir !== 'down' && dir !== 'tie' && dir !== 'unpriced') continue;
     if (!inPeriod(row, sinceSecs)) continue;
