@@ -3,6 +3,7 @@ import { AccessibilityInfo, Animated, Easing, StyleSheet, Text, View } from 'rea
 import type { TimerView } from '../chain/phase';
 import { formatCountdown, type DeltaView } from '../lib/format';
 import { C, FONT_CAP, MONO } from '../theme';
+import { PixelText } from './PixelText';
 
 /** The system "remove animations" setting; the timer pulse stays off while it is on. */
 function useReduceMotion(): boolean {
@@ -77,12 +78,7 @@ export function ArenaClock({ timer, side }: { timer: TimerView; side: ClockSide 
           {timerLabel(timer)}
         </Text>
         <Animated.View style={[styles.beat, { transform: [{ scale: beat }] }]}>
-          <Text
-            style={[styles.clock, { textShadowColor: urgent ? C.neonRed : color }, urgent && { color: C.neonRed }]}
-            maxFontSizeMultiplier={FONT_CAP}
-          >
-            {seconds !== null ? formatCountdown(seconds) : timer.kind === 'confirming' ? '...' : '--:--'}
-          </Text>
+          <PixelText text={seconds !== null ? formatCountdown(seconds) : timer.kind === 'confirming' ? '...' : '--:--'} size={4} color={urgent ? C.neonRed : C.white} />
         </Animated.View>
       </View>
       {side ? (

@@ -1,6 +1,7 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import type { Tab } from '../state/AppProvider';
-import { C, FONT_CAP } from '../theme';
+import { C } from '../theme';
+import { PixelText } from './PixelText';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'arena', label: 'ARENA' },
@@ -19,14 +20,13 @@ export function TabBar({ tab, onChange, bottomInset }: { tab: Tab; onChange: (ta
           <Pressable
             key={t.id}
             accessibilityRole="tab"
+            accessibilityLabel={t.label}
             accessibilityState={{ selected: active }}
             onPress={() => onChange(t.id)}
             style={styles.item}
           >
             <View style={[styles.marker, active && styles.markerActive]} />
-            <Text style={[styles.label, active && styles.labelActive]} maxFontSizeMultiplier={FONT_CAP}>
-              {t.label}
-            </Text>
+            <PixelText text={t.label} size={1.5} color={active ? C.white : C.dim} fit />
           </Pressable>
         );
       })}

@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { cellsToPath, textCells } from '../lib/pixelFont';
@@ -14,6 +14,7 @@ export const PixelText = memo(function PixelText({
   glow,
   shadow,
   style,
+  fit = false,
 }: {
   text: string;
   size?: number;
@@ -21,7 +22,9 @@ export const PixelText = memo(function PixelText({
   glow?: string;
   shadow?: string;
   style?: StyleProp<ViewStyle>;
+  fit?: boolean;
 }) {
+  const [available, setAvailable] = useState(0);
   const ratio = PixelRatio.get();
   const px = Math.max(1, Math.round(size * ratio)) / ratio;
   const { width, height, d, shadowD } = useMemo(() => {
@@ -32,9 +35,10 @@ export const PixelText = memo(function PixelText({
   // One font pixel of padding on every side (two on the right and bottom for the shadow) keeps the glow unclipped.
   const vw = width + 3;
   const vh = height + 3;
+  const scale = fit && available > 0 ? Math.min(px, Math.floor(available / vw * ratio) / ratio) : px;
   return (
-    <View style={[{ width: vw * px, height: vh * px }, style]} accessible accessibilityLabel={text}>
-      <Svg width={vw * px} height={vh * px} viewBox={`0 0 ${vw} ${vh}`}>
+    <View style={[fit ? { width: '100%', height: vh * scale, alignItems: 'center' } : { width: vw * px, height: vh * px }, style]} onLayout={fit ? (e) => setAvailable(e.nativeEvent.layout.width) : undefined} accessible accessibilityLabel={text}>
+      <Svg width={vw * scale} height={vh * scale} viewBox={`0 0 ${vw} ${vh}`}>
         {glow ? <Path d={d} fill="none" stroke={glow} strokeWidth={1.6} strokeOpacity={0.16} strokeLinejoin="round" /> : null}
         {glow ? <Path d={d} fill="none" stroke={glow} strokeWidth={0.8} strokeOpacity={0.32} strokeLinejoin="round" /> : null}
         {shadow ? <Path d={shadowD} fill={shadow} /> : null}

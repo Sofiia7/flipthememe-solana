@@ -9,6 +9,7 @@ import { faceFromBytes, type Expression } from '../face/faceModel';
 import { formatCountdown, formatSol } from '../lib/format';
 import { HouseFace, PixelFace } from '../PixelFace';
 import { C, FONT_CAP, MONO } from '../theme';
+import { PixelText } from './PixelText';
 
 const MAX_CHIPS = 5;
 
@@ -72,7 +73,7 @@ export function SideColumn({
   return (
     <View style={[styles.column, hasMe && { borderColor: color, backgroundColor: up ? 'rgba(53,223,108,0.08)' : 'rgba(251,96,124,0.08)' }]}>
       <View style={styles.colHead}>
-        <Text style={[styles.sideName, { color }]}>{up ? 'UP ▲' : 'DOWN ▼'}</Text>
+        <PixelText text={up ? 'UP' : 'DOWN'} size={1.8} color={color} />
         <Text style={styles.total}>
           {formatSol(total)}
           <Text style={styles.unit}> SOL</Text>
@@ -122,7 +123,7 @@ export function SideColumn({
 }
 
 const STAGE: Record<InFlightStage, { text: string; color: string }> = {
-  fixing: { text: 'LOCKING START', color: C.neonYellow },
+  fixing: { text: 'PREPARING', color: C.neonYellow },
   live: { text: 'LIVE', color: C.neonGreen },
   settling: { text: 'RESULT SOON', color: C.neonPurple },
 };
@@ -290,7 +291,7 @@ export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { ro
       <Pulse color={urgent ? C.neonRed : C.neonYellow} size={6} />
       <Text style={styles.nextText}>
         NEXT #{roundId.toString()}
-        {token ? <Text style={styles.nextToken}> ${token.toUpperCase()}</Text> : null} · {opens ? 'opens in' : 'bet by'}{' '}
+        {token ? <Text style={styles.nextToken}> ${token.toUpperCase()}</Text> : null} · {opens ? 'opens in' : 'entry closes in'}{' '}
         <Text style={[styles.nextClock, urgent && { color: C.neonRed }]}>{formatCountdown(secondsLeft)}</Text>
       </Text>
     </View>

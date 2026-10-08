@@ -44,6 +44,7 @@ import { NeonButton } from '../ui/NeonButton';
 import { PixelText } from '../ui/PixelText';
 import { ExtraRoundLine, MyRoundPanel, NextRoundBar, OpenRoundPanel } from '../ui/RoundPanel';
 import { TokenHeader } from '../ui/TokenHeader';
+import { RoundProgress } from '../ui/RoundProgress';
 import { TopUpSheet } from '../ui/TopUpSheet';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { RENT_FALLBACK, maxWinProfit } from '../wallet/topUpPlan';
@@ -165,7 +166,7 @@ export function ArenaScreen() {
       ? {
           range: [chainToLocalMs(chartRound.account.strikeStart, offsetSec), chainToLocalMs(chartRound.account.strikeEnd, offsetSec)] as const,
           label:
-            chartStrike.kind === 'pending' ? `START PRICE IN ${formatCountdown(chartStrike.secondsLeft)}` : chartStrike.kind === 'fixing' ? 'LOCKING START' : '',
+            chartStrike.kind === 'pending' ? 'REFERENCE SOON' : chartStrike.kind === 'fixing' ? 'REFERENCE' : '',
           strong: chartStrike.kind === 'pending' || chartStrike.kind === 'fixing',
         }
       : null;
@@ -184,9 +185,9 @@ export function ArenaScreen() {
       if (st.kind === 'fixed') {
         const p = priceOf(deltaRound.account.pool, atMs);
         const delta = p ? deltaView(st.strike, p.price) : null;
-        if (p && delta) side = { kind: 'delta', delta, label: `${id} VS START PRICE`, stale: p.stale };
-      } else if (st.kind === 'pending') side = { kind: 'note', text: `START PRICE IN ${formatCountdown(st.secondsLeft)}`, label: id };
-      else if (st.kind === 'fixing') side = { kind: 'note', text: 'LOCKING START', label: id };
+        if (p && delta) side = { kind: 'delta', delta, label: `${id} VS REFERENCE`, stale: p.stale };
+      } else if (st.kind === 'pending') side = { kind: 'note', text: formatCountdown(st.secondsLeft), label: 'REFERENCE MEASUREMENT IN' };
+      else if (st.kind === 'fixing') side = { kind: 'note', text: sec < Number(deltaRound.account.strikeEnd) ? 'MEASURING' : 'CONFIRMING', label: 'REFERENCE PRICE' };
     }
     return { timer, side };
   };
@@ -387,18 +388,22 @@ export function ArenaScreen() {
 
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? null} nowMs={secMs} />
 
+          {focus ?? inOpen ? (
+            <RoundProgress round={(focus ?? inOpen)!.round} position={(focus ?? inOpen)!.position} nowSec={nowSec} />
+          ) : null}
+
           <PriceChart
             points={stageFeed.points}
             nowMs={secMs}
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}
-            strikeLabel={chartRound ? `START #${chartRound.id}` : undefined}
+            strikeLabel={chartRound ? `REFERENCE #${chartRound.id}` : undefined}
             pairLabel={`${symbol ? symbol.toUpperCase() : 'TOKEN'} / SOL`}
             strikeWindow={strikeWindow}
             exitWindow={
               chartRound ? [chainToLocalMs(chartRound.account.exitStart, offsetSec), chainToLocalMs(chartRound.account.exitEnd, offsetSec)] : null
             }
-            cutoffMs={open && open.account.pool === stageFeed.pool ? chainToLocalMs(open.account.cutoffAt, offsetSec) : null}
+            cutoffMs={!focus && open && open.account.pool === stageFeed.pool ? chainToLocalMs(open.account.cutoffAt, offsetSec) : null}
             stale={priceStale && stageFeed.points.length > 0}
             emptyText={
               stageFeed.pool ? (stageFeed.error ? `Price source unreachable: ${stageFeed.error}` : 'Reading the live price...') : 'Waiting for the first round'
@@ -441,7 +446,7 @@ export function ArenaScreen() {
           )}
           {/* One button family: the invitation to my live round is the purple NeonButton (as in the dock), the open invitation a quiet ghost. */}
           {challengeFocus ? (
-            <NeonButton title="CHALLENGE A FRIEND" kind="purple" busy={sharing} onPress={() => challenge(challengeFocus, true)} />
+            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} />
           ) : inviteRound ? (
             <Btn small kind="ghost" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
           ) : null}
@@ -464,6 +469,7 @@ export function ArenaScreen() {
       </View>
 
       <View style={styles.dock}>
+        {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
         {panel.kind === 'mine' && open ? (
           <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} token={open.account.tokenMint !== tokenMint ? openSymbol : null} />
         ) : null}
@@ -694,7 +700,7 @@ const styles = StyleSheet.create({
   help: {
     width: 30,
     height: 30,
-    borderRadius: 15,
+    borderRadius: 0,
     borderWidth: 2,
     borderColor: C.neonPurple,
     alignItems: 'center',
@@ -702,6 +708,7 @@ const styles = StyleSheet.create({
     boxShadow: `0 0 8px ${C.neonPurple}88`,
   },
   helpText: { color: C.white, fontSize: 15, fontWeight: '900' },
+  nextExplanation: { color: C.accentText, fontSize: 12, lineHeight: 17 },
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
   stage: { flex: 1, overflow: 'hidden' },

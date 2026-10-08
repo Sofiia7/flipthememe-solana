@@ -28,6 +28,7 @@ export function Btn({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       accessibilityState={{ disabled: off, busy }}
       onPress={off ? undefined : onPress}
       style={({ pressed }) => [
@@ -41,9 +42,7 @@ export function Btn({
     >
       {busy ? <ActivityIndicator size="small" color={palette.ink} /> : null}
       <View style={styles.btnTexts}>
-        <Text style={[styles.btnText, small && styles.btnTextSmall, { color: palette.ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
-          {title}
-        </Text>
+        <PixelText text={title} size={small ? 1.5 : 2} color={palette.ink} fit />
         {subtitle ? (
           <Text style={[styles.btnSub, { color: palette.ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             {subtitle}
@@ -130,7 +129,7 @@ const styles = StyleSheet.create({
   btnSmall: { paddingVertical: 8, paddingHorizontal: 10, minHeight: 36, borderWidth: 1 },
   btnOff: { opacity: 0.4 },
   btnPressed: { transform: [{ translateY: 1 }], opacity: 0.85 },
-  btnTexts: { alignItems: 'center' },
+  btnTexts: { alignItems: 'center', flex: 1 },
   btnText: { fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
   btnTextSmall: { fontSize: 11 },
   btnSub: { fontSize: 11, fontWeight: '700', marginTop: 1, opacity: 0.85 },

@@ -1,13 +1,14 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { C, FONT_CAP, GRAD, MONO } from '../theme';
-import { Gradient } from './Gradient';
+import { C, FONT_CAP, MONO } from '../theme';
+import { PixelText } from './PixelText';
 
 export type NeonKind = 'up' | 'down' | 'gold' | 'purple';
 
 const INK: Record<NeonKind, string> = { up: '#062b12', down: '#33040f', gold: '#2a1a00', purple: C.white };
 const GLOW: Record<NeonKind, string> = { up: C.neonGreen, down: C.neonRed, gold: C.neonYellow, purple: C.neonPurple };
+const FILL: Record<NeonKind, string> = { up: C.up, down: C.down, gold: C.gold, purple: '#7434c8' };
 
-/** Chunky gradient button with a neon glow; `badge` sits in the top right corner (the "x1.96" on UP / DOWN). */
+/** Flat arcade button with pixel lettering and a stepped bevel; badge shows the payout multiplier. */
 export function NeonButton({
   title,
   subtitle,
@@ -39,31 +40,23 @@ export function NeonButton({
       onPress={off ? undefined : onPress}
       style={({ pressed }) => [
         styles.wrap,
-        !off && { boxShadow: `0 0 14px ${GLOW[kind]}88` },
+        { borderColor: GLOW[kind] },
         off && styles.off,
         pressed && !off && styles.pressed,
         style,
       ]}
     >
-      <Gradient colors={GRAD[kind]} style={[styles.fill, big && styles.fillBig]}>
-        <View style={styles.row}>
+      <View style={[styles.fill, { backgroundColor: FILL[kind] }, big && styles.fillBig]}>
+        <View style={[styles.row, { width: '100%' }]}>
           {busy ? <ActivityIndicator size="small" color={ink} /> : null}
-          <Text
-            style={[styles.title, big && styles.titleBig, big && title.length > 8 && styles.titleLong, { color: ink }]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.6}
-            maxFontSizeMultiplier={FONT_CAP}
-          >
-            {title}
-          </Text>
+          <View style={{ flex: 1 }}><PixelText text={title} size={big && title.length < 9 ? 3 : 2} color={ink} fit /></View>
         </View>
         {subtitle ? (
           <Text style={[styles.subtitle, { color: ink }]} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
             {subtitle}
           </Text>
         ) : null}
-      </Gradient>
+      </View>
       {badge ? (
         <View style={styles.badge}>
           <Text style={styles.badgeText} maxFontSizeMultiplier={FONT_CAP}>
@@ -78,14 +71,11 @@ export function NeonButton({
 const styles = StyleSheet.create({
   wrap: { borderWidth: 2, borderColor: 'rgba(255,255,255,0.55)' },
   off: { opacity: 0.38 },
-  pressed: { transform: [{ scale: 0.97 }] },
-  fill: { minHeight: 50, paddingVertical: 9, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  pressed: { transform: [{ translateY: 2 }] },
+  fill: { minHeight: 50, borderTopWidth: 3, borderLeftWidth: 3, borderRightWidth: 3, borderBottomWidth: 4, borderTopColor: '#ffffff55', borderLeftColor: '#ffffff33', borderRightColor: '#00000033', borderBottomColor: '#00000066', paddingVertical: 9, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center' },
   fillBig: { minHeight: 56, paddingVertical: 5 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
-  title: { fontSize: 16, fontWeight: '900', letterSpacing: 0.8 },
-  titleBig: { fontSize: 24, letterSpacing: 0.5 },
-  titleLong: { fontSize: 20 },
-  subtitle: { fontSize: 11, fontWeight: '900', fontFamily: MONO, marginTop: 1, opacity: 0.85 },
+  subtitle: { fontSize: 12, fontWeight: '700', fontFamily: MONO, marginTop: 2 },
   badge: { position: 'absolute', top: -2, right: -2, backgroundColor: C.bg, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 5, paddingVertical: 1 },
   badgeText: { color: C.neonYellow, fontSize: 11, fontWeight: '900', fontFamily: MONO },
 });

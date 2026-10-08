@@ -128,7 +128,7 @@ function PriceChartView({
   const sy = strikeValue !== null ? y(strikeValue) : null;
   const split = sy !== null ? splitLinesAtLevel(segments, sy) : null;
   const ticks = [-60_000, 0].map((offset) => ({ ms: nowMs + offset, label: offset === 0 ? 'now' : '-1m' }));
-  const strikeTag = strikeLabel ?? 'START PRICE';
+  const strikeTag = strikeLabel ?? 'REFERENCE';
   const tagW = monoTextWidth(strikeTag, LABEL) + 8;
   const tagY = sy !== null ? (sy - TAG_H - 3 < 2 ? sy + 3 : sy - TAG_H - 3) : 0;
   // The BET BY label and the "now" tick share the bottom edge: the tick yields when the two would touch.

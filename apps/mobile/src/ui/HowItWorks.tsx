@@ -57,7 +57,7 @@ const RULES: { icon: ReactNode; text: string }[] = [
         <Glyph text="30s" color={C.neonYellow} size={12} />
       </Icon>
     ),
-    text: 'Start price is fixed 30 s after entry closes. You call the next minute. Result in about 2 min.',
+    text: 'After entry closes, we average a reference price (the yellow line), then a final price. UP wins above that line; DOWN wins below. Equal prices mean a refund. Result in about 2 min.',
   },
   {
     icon: (

@@ -5,6 +5,7 @@ import { explorer } from '../config';
 import { useTokenInfo } from '../chain/useTokenInfo';
 import { formatUsdCompact, poolAgeLabel, shortAddress } from '../lib/format';
 import { C, FONT_CAP, MONO } from '../theme';
+import { PixelText } from './PixelText';
 
 /** Width of one character of the 11sp monospace meta line, in dp at the default font size. */
 const META_CHAR_W = 6.7;
@@ -59,9 +60,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
       )}
       <View style={styles.texts} onLayout={onTextsLayout}>
         <View style={styles.titleRow}>
-          <Text style={styles.symbol} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
-            ${symbol}
-          </Text>
+          <View style={{ flexShrink: 1, maxWidth: '100%', flex: 1 }}><PixelText text={`$${symbol}`} size={3} color={C.white} fit /></View>
           {info?.name ? (
             <Text style={styles.name} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
               {info.name}
