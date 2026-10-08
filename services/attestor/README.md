@@ -1,5 +1,15 @@
 # FlipTheMeme price attestor
 
+The canonical protocol publishes one immutable certificate per round and measurement window through public `GET /v1/attestation?round=<id>&kind=strike|exit`. The attestor measures mainnet PumpSwap pools independently, filters observations inside the exact window before deduplicating slots, and fixes the samples in SQLite before signing. Any funded devnet payer can relay the certificate with a native Ed25519 verification instruction to `set_strike_attested` or `settle_attested`.
+
+The program binds the certificate to its program ID, round PDA, pool, window, kind and complete samples. Required-oracle rounds refuse the old priced instructions after upgrade. There is no keeper subset, drift tolerance or keeper coverage threshold in canonical pricing. Fewer than five certified observations produce an unpriceable refund; an unavailable certificate eventually permits `refund_expired`.
+
+The maintainer still controls the attestor and the program upgrade authority. A compromised attestor key can certify a false price: public relaying removes the keeper submission monopoly, not oracle trust. See [the protocol, trust boundary and relay CLI](../../docs/price-certificates.md).
+
+## Legacy co-signing reference
+
+The following describes the authenticated transaction co-signing endpoint retained for compatibility with the previous program. Its tolerance and coverage rules do not describe the canonical certificate endpoint.
+
 A second, independent signer for `set_strike` (the strike price, shown as START PRICE in the app)
 and `settle`: one Cloudflare Worker with one SQLite-backed Durable Object, on infrastructure apart
 from the keeper. It finds the rounds on devnet

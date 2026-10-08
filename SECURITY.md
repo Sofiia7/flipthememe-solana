@@ -26,7 +26,7 @@ Most interesting to us: ways to take or lock another player's funds, to get a pr
 
 ## How to report
 
-Use GitHub private vulnerability reporting for this repository:
+The owner plans to open this repository for the competition. While it remains private, the public reporting link below is not an available reporting channel. Once the repository is public and GitHub Private vulnerability reporting is enabled, use:
 
 https://github.com/Sofiia7/flipthememe-solana/security/advisories/new
 

@@ -1,7 +1,7 @@
 {
-  // Price attestor: the second signer of set_strike and settle, on infrastructure apart from the keeper.
-  // It samples each round's PumpSwap pool on mainnet by itself during the strike and exit windows and
-  // co-signs a price only when the keeper's samples agree with its own. See README.md.
+  // Price attestor: independently samples each round's mainnet PumpSwap pool.
+  // Public certificates serve canonical pricing; the authenticated transaction co-signing
+  // endpoint remains for compatibility with the previous program. See README.md.
   //
   // Secrets (wrangler secret put NAME, value on stdin):
   //   ATTESTOR_SECRET  required: base58 of the attestor's 64-byte Solana secret key, or of its 32-byte seed
