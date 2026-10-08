@@ -50,3 +50,6 @@ This removes the keeper's sample selection and submission monopoly. It does not 
 prices trustless: the devnet program cannot independently read mainnet, and the attestor and its
 RPC providers remain trusted for observations and availability. Withholding a certificate leads
 to the permissionless deadline refund and house forfeiture, rather than an operator-chosen price.
+Unlike the previous two-key co-signing path, the certificate key alone authorizes a price. Its
+compromise can therefore authorize false prices without also compromising the keeper. This is
+the trust tradeoff of removing the keeper from settlement; it is not a decentralized oracle.

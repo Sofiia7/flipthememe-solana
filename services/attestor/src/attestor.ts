@@ -550,7 +550,9 @@ export class AttestorCore {
       // can never select another observation set for this round and window.
       let row = this.sql.exec('SELECT message, samples, signature, attestor FROM price_certificates WHERE round = ? AND kind = ?', Number(id), kind).toArray()[0] as { message: string; samples: string; signature: string | null; attestor: Address } | undefined;
       if (!row) {
-        const observations = ownReadsInside(this.ownSamples(window), window);
+        // Filter the time window before deduplication: an earlier margin read of the
+        // same confirmed slot must not hide the first read made inside the window.
+        const observations = this.ownSamples(window).filter((o) => o.price > 0n && o.atMs >= window.startMs && o.atMs < window.endMs);
         const unique = new Map<string, PriceSample>();
         for (const o of observations) if (!unique.has(o.slot.toString())) unique.set(o.slot.toString(), { slot: o.slot, price: o.price });
         const samples = [...unique.values()].sort((a, b) => a.slot < b.slot ? -1 : 1).slice(0, 16);

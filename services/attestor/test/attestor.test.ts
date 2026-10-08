@@ -140,9 +140,13 @@ describe('sampler', () => {
     s.devnet.add(round);
     await s.core.tick();
     await runUntil(s, Number(round.strikeEnd) * 1000 + 2_000);
+      const boundary = Number(round.strikeStart) * 1000;
+      s.sql.exec('INSERT INTO samples (pool, at_ms, slot, price, strike_round) VALUES (?, ?, ?, ?, ?)', round.pool, boundary - 1, 999999, '123', 10);
+      s.sql.exec('INSERT INTO samples (pool, at_ms, slot, price, strike_round) VALUES (?, ?, ?, ?, ?)', round.pool, boundary + 1, 999999, '123', 10);
     const first = await s.core.certificate('10', 'strike');
     assert.equal(first.status, 200, JSON.stringify(first.body));
     assert.ok(Array.isArray(first.body.samples) && first.body.samples.length >= 5);
+      assert.ok((first.body.samples as { slot: string }[]).some((s) => s.slot === '999999'), 'inside-window read survives a preceding margin read of its slot');
     const again = await s.core.certificate('10', 'strike');
     assert.deepEqual(again.body, first.body);
     const core = new AttestorCore({ sql: s.sql, alarms: s.alarms, env: { ATTESTOR_SECRET }, now: s.clock.now, devnet: new Failover([{ name: 'test', rpc: s.devnet.rpc() }], s.clock.now), mainnet: new Failover([{ name: 'test', rpc: s.mainnet.rpc() }], s.clock.now) });
