@@ -263,7 +263,7 @@ export class PoolSelector {
     }
     // Retain up to four measured backups; use the remaining checks to explore the wider universe.
     const retained = this.watching.flatMap(p => ranked.find(r => r.candidate.pool === p.pool) ?? []).slice(0, 4);
-    const rest = ranked.filter(r => r.candidate.pool !== current?.pool && !retained.some(k => k.candidate.pool === r.candidate.pool));
+    const rest = ranked.filter(r => r.candidate.pool !== current?.pool && !(typeof currentReserve === 'bigint' && r.candidate.baseMint === current?.baseMint) && !retained.some(k => k.candidate.pool === r.candidate.pool));
     const pivot = rest.length ? this.reserveCursor % rest.length : 0;
     const exploring = [...rest.slice(pivot), ...rest.slice(0, pivot)];
     this.reserveCursor += 2;
@@ -278,13 +278,28 @@ export class PoolSelector {
       if (typeof reserve === 'bigint') prepared.set(pool, { r, reserve });
       else this.reserveRejected.set(pool, nowMs + (this.unsafe.has(pool) ? TOKEN_CACHE_TTL_MS : 60_000));
     }
+    const seenMints = new Set<Address>();
     const choices = [...prepared.values()].map(p => ({ ...p, quality: marketQuality(p.r.candidate, this.marketSample(p.r.candidate.pool, nowMs)) }))
-      .sort((a,b) => a.quality.tier - b.quality.tier || a.quality.risk - b.quality.risk || b.r.score - a.r.score);
+      .sort((a,b) => a.quality.tier - b.quality.tier || a.quality.risk - b.quality.risk || b.r.score - a.r.score)
+      .filter(p => {
+        const c = p.r.candidate;
+        if (typeof currentReserve === 'bigint' && c.baseMint === current?.baseMint && c.pool !== current.pool) return false;
+        if (seenMints.has(c.baseMint)) return false;
+        seenMints.add(c.baseMint);
+        return true;
+      });
     this.reserveInventory = new Map(choices.slice(0, 6).map(p => [p.r.candidate.pool, p.r]));
     this.watching = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, baseMint: p.r.candidate.baseMint, name: p.r.candidate.name, rung: RUNG_NAMES[p.r.rung] }));
     this.reserveStatus = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, name: p.r.candidate.name, tier: p.quality.tier, risk: round1(p.quality.risk), prepared: p.quality.prepared, up: p.quality.sample.up, down: p.quality.sample.down }));
     const best = choices[0];
-    if (current && currentReserve === 'unreadable') return; // An outage does not invalidate a known pool.
+    if (current && currentReserve === 'unreadable') {
+      if (this.reservePrice(current.pool, nowMs) !== null) return;
+      if (best) {
+        this.handover = { r: best.r, reserve: best.reserve, expires: nowMs + 90_000, reason: 'fresh reserve; active price source unavailable' };
+        this.activateReserve(nowMs);
+      }
+      return;
+    }
     if (current && typeof currentReserve === 'bigint') {
       const mine = choices.find(p => p.r.candidate.pool === current.pool);
       if (!best || best.r.candidate.pool === current.pool) return;

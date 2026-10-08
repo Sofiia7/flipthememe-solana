@@ -545,3 +545,23 @@ test('expired handover cannot switch using a no longer validated reserve',async(
   live=DEEP;h.selector.activateReserve(NOW+91_000);
   assert.equal(h.selector.current?.pool,testAddress(1));
 });
+
+
+test('reserve diversifies base tokens rather than treating two pools of the same coin as independent markets',async()=>{
+  const same={...calm(2),baseMint:calm(1).baseMint};
+  const initial={...selection(1,3,NOW-MINUTE),baseMint:calm(1).baseMint};
+  const h=harness([calm(1),same,calm(3)],{gate:balancedGate,initial,marketSample:p=>p===testAddress(1)?sample(16,4):sample(5,5)});
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(3));
+  assert.equal(h.selector.watching.some(p=>p.pool===testAddress(2)),false);
+  assert.equal(new Set(h.selector.watching.map(p=>p.baseMint)).size,h.selector.watching.length);
+});
+
+
+test('an unreadable current pool with a stale feed hands over to a freshly priced safe reserve',async()=>{
+  const h=harness([calm(1),calm(2)],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:()=>sample(5,5),reservePrice:p=>p===testAddress(1)?null:DEEP});
+  h.reserves.delete(testAddress(1));
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(2));
+  assert.equal(h.changes.some(p=>p===null),false);
+});
