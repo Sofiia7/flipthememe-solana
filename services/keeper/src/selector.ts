@@ -92,6 +92,7 @@ const round1 = (value: number): number => Math.round(value * 10) / 10;
 
 export class PoolSelector {
   private readonly marketBias: (pool: Address, nowMs: number) => string | null;
+  private readonly marketWarming: (pool: Address, nowMs: number) => boolean;
   current: Selection | null;
   private readonly source: CandidateSource;
   private readonly chain: PoolChain;
@@ -114,11 +115,13 @@ export class PoolSelector {
     minBank: () => bigint;
     initial: Selection | null;
     marketBias?: (pool: Address, nowMs: number) => string | null;
+    marketWarming?: (pool: Address, nowMs: number) => boolean;
     /** Every new selection or rung; null when the current pool is dropped. */
     onChange: (s: Selection | null) => void;
   }) {
     this.source = opts.source;
     this.marketBias = opts.marketBias ?? (() => null);
+    this.marketWarming = opts.marketWarming ?? (() => false);
     this.chain = opts.chain;
     this.gate = opts.gate;
     this.logger = opts.logger;
@@ -168,7 +171,7 @@ export class PoolSelector {
       const reserve = await deepEnough(current.pool);
       if (typeof reserve === 'bigint') {
         this.current = { ...current, quoteReserve: reserve, reserveAtMs: Date.now() };
-        if (nowMs - current.selectedAtMs < this.gate.holdMs || !complete) return;
+        if (nowMs - current.selectedAtMs < this.gate.holdMs || !complete || this.marketWarming(current.pool, nowMs)) return;
         const stats = candidates.find((c) => c.pool === current.pool);
         const failure = keepFailure(stats, current.rung, nowMs, this.gate);
         if (failure === null && stats) {

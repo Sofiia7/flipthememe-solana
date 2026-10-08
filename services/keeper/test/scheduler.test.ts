@@ -57,6 +57,7 @@ type HarnessOptions = {
   houseSigner?: KeyPairSigner;
   attestor?: AttestorClient;
   certificates?: ConstructorParameters<typeof Scheduler>[0]['certificates'];
+  marketReady?: ConstructorParameters<typeof Scheduler>[0]['marketReady'];
   /** Builds the position closer (default: the scheduler's own, first scan a minute after start). */
   closer?: (chain: FakeChain, signer: KeyPairSigner, logs: LogFields[]) => PositionCloser;
   /** Environment of loadConfig on top of the test's own (the house budget is not spread over the day here). */
@@ -93,6 +94,7 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     houseSigner: opts.houseSigner,
     attestor: opts.attestor,
     certificates: opts.certificates,
+    marketReady: opts.marketReady,
     closer: opts.closer?.(chain, signer, logs),
     roundLog: opts.roundLog,
     cfg,
@@ -131,6 +133,19 @@ async function byRound(h: Harness, id: bigint): Promise<SentInstruction[][]> {
 }
 
 describe('scheduler', () => {
+  test('an unobserved market never accepts a round; a ready one can open normally', async () => {
+    let reason: string | null = 'observing market: 9/10 priced shadow minutes';
+    const h = await harness({ marketReady: () => reason });
+    const now = MINUTE + 50;
+    h.store.add(POOL, obs(now * 1000 - 400, 1));
+    await tick(h, now);
+    assert.equal(h.chain.sent.length, 0);
+    assert.ok(h.logs.some((l) => l.reason === reason));
+    reason = null;
+    h.store.add(POOL, obs((now + 60) * 1000 - 400, 2));
+    await tick(h, now + 60);
+    assert.equal(only(h).name, 'createRound');
+  });
   test('creates the next minute round 10 s before it opens, sized by the pool depth, once', async () => {
     const h = await harness();
     const now = MINUTE + 50;
@@ -439,6 +454,7 @@ describe('scheduler: October 2026 upgrade', () => {
     });
     h.chain.oracle = { attestor: att.address, required: true, bump: 252 };
     const now = MINUTE + 30;
+    h.chain.config!.priceAuthority = ADMIN_ELSEWHERE;
     h.chain.rounds.set(8n, played(now));
     await tick(h, now);
     assert.deepEqual(calls, ['https://attest.example/8/strike']);

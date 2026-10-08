@@ -145,6 +145,7 @@ export type SchedulerDeps = {
   /** Present when ATTEST_URL is set. */
   attestor?: AttestorClient | null;
   certificates?: typeof certificateInstructions;
+  marketReady?: (pool: string, nowMs: number) => string | null;
   closer?: PositionCloser;
   /** rounds.jsonl: a line per swept round (humans, wallets, outcome); absent = no such record. */
   roundLog?: RoundLog | null;
@@ -170,6 +171,7 @@ export class Scheduler {
   private readonly houseSigner: KeyPairSigner;
   private readonly attestor: AttestorClient | null;
   private readonly certificates: typeof certificateInstructions;
+  private readonly marketReady: (pool: string, nowMs: number) => string | null;
   private readonly closer: PositionCloser;
   private readonly cfg: KeeperConfig;
   private readonly state: StateStore;
@@ -209,6 +211,7 @@ export class Scheduler {
     this.houseSigner = deps.houseSigner ?? deps.signer;
     this.attestor = deps.attestor ?? null;
     this.certificates = deps.certificates ?? certificateInstructions;
+    this.marketReady = deps.marketReady ?? (() => null);
     this.closer = deps.closer ?? new PositionCloser({ rpc: deps.rpc, signer: deps.signer, logger: deps.logger, closeAfterSecs: deps.cfg.closeAfterSecs });
     this.cfg = deps.cfg;
     this.state = deps.state;
@@ -294,7 +297,8 @@ export class Scheduler {
         continue;
       }
       if (step.kind === 'wait') continue;
-      if (!this.authorized(step.kind, config)) continue;
+      const canonical = !this.cfg.legacyPrices && snap.oracle?.required === true && isActivated(round.rawUp, round.rawDown, round.minBank);
+      if (!this.authorized(step.kind, config, canonical)) continue;
       const kind = step.kind;
       due.push({ priority: PRIORITY[kind], id, lane: `round:${id}`, stepKey: `${kind}:${id}`, run: () => this.run(kind, round, snap, config) });
     }
@@ -421,7 +425,7 @@ export class Scheduler {
     return [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
-  private authorized(kind: StepKind, config: ConfigAccount): boolean {
+  private authorized(kind: StepKind, config: ConfigAccount, canonical: boolean): boolean {
     if (kind === 'fill' && config.paused) {
       // The program refuses house_fill while the arena is paused (Paused, 6015): no point asking.
       this.warn('house-paused', { event: 'house_fill_paused', note: 'config is paused: no house fills' });
@@ -431,7 +435,7 @@ export class Scheduler {
       this.warn('house', { event: 'keeper_not_house_authority', houseAuthority: config.houseAuthority, houseKey: this.houseSigner.address });
       return false;
     }
-    if ((kind === 'strike' || kind === 'settle') && config.priceAuthority !== this.priceSigner.address) {
+    if (!canonical && (kind === 'strike' || kind === 'settle') && config.priceAuthority !== this.priceSigner.address) {
       this.warn('price', { event: 'keeper_not_price_authority', priceAuthority: config.priceAuthority, priceKey: this.priceSigner.address });
       return false;
     }
@@ -590,6 +594,11 @@ export class Scheduler {
     const pool = this.selector.current;
     if (!pool) {
       this.warn('no-pool', { event: 'create_skipped', reason: 'no pool selected yet' });
+      return;
+    }
+    const notReady = this.marketReady(pool.pool, nowMs);
+    if (notReady) {
+      this.warn('market-ready', { event: 'create_skipped', reason: notReady, pool: pool.pool });
       return;
     }
     // Without a live price feed the round would end unpriceable and cost players the refund fee.

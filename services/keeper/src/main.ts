@@ -148,6 +148,7 @@ async function main(): Promise<void> {
     override: cfg.poolOverride,
     initial,
     marketBias: (pool, nowMs) => cfg.poolGate.neutral ? shadow.bias(pool, nowMs) : null,
+    marketWarming: (pool, nowMs) => cfg.poolGate.neutral && shadow.readiness(pool, nowMs) !== null && shadow.bias(pool, nowMs) === null,
     minBank: () => scheduler?.snapshot?.config?.minBank ?? DEVNET_PARAMS.minBank,
     onChange: (s) => {
       state.state.pool = s ? { pool: s.pool, baseMint: s.baseMint, name: s.name, selectedAtMs: s.selectedAtMs, rung: s.rung, fallback: s.fallback } : null;
@@ -169,6 +170,7 @@ async function main(): Promise<void> {
     priceSigner: roles.price,
     houseSigner: roles.house,
     attestor,
+    marketReady: (pool, nowMs) => cfg.poolGate.neutral ? shadow.readiness(pool, nowMs) : null,
     cfg,
     state,
     selector,
@@ -195,7 +197,9 @@ async function main(): Promise<void> {
       updatedAt: new Date(now).toISOString(),
       startedAt: new Date(startMs).toISOString(),
       keeper: signer.address,
-      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.6 },
+      selectionPolicy: { neutral: cfg.poolGate.neutral, trending: false, youthWeight: cfg.poolGate.youthWeight, maxImbalance: cfg.poolGate.maxImbalance, maxPriceMoveM5: cfg.poolGate.maxPriceMoveM5, momentumMinMinutes: 10, momentumMaxShare: 0.6, warmupRequired: true },
+      priceProtocol: cfg.legacyPrices ? 'legacy-cosign' : 'detached-canonical',
+      marketReadiness: pool && cfg.poolGate.neutral ? shadow.readiness(pool.pool, now) : null,
       ...sched.status(),
       houseBudget: {
         day: house.day,

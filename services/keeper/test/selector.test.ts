@@ -34,6 +34,7 @@ function harness(
     complete?: boolean;
     gate?: PoolGate;
     marketBias?: (pool: Address, nowMs: number) => string | null;
+    marketWarming?: (pool: Address, nowMs: number) => boolean;
     /** The token check by pool number: a verdict, or an Error that is thrown (the RPC failed). Pools not listed pass. Absent: no token check at all. */
     tokens?: [number, TokenVerdict | Error][];
   } = {},
@@ -81,6 +82,7 @@ function harness(
     chain,
     gate: opts.gate ?? DEFAULT_GATE,
     marketBias: opts.marketBias,
+    marketWarming: opts.marketWarming,
     logger: (f) => logs.push(f),
     override: opts.override ?? null,
     minBank: () => MIN_BANK,
@@ -98,6 +100,15 @@ const last = (h: Harness): LogFields | undefined => h.logs[h.logs.length - 1];
 
 describe('neutral selector rejects momentum before the hold and during incomplete discovery', () => {
   const gate = { ...DEFAULT_GATE, neutral: true, maxImbalance: 0.3, youthWeight: 0 };
+  test('a healthy market finishes its warmup before a busier pool can replace it; bad flow still drops it', async () => {
+    const list = [withFlow(candidate(1, 0, 30 * MINUTE), 40, 40), withFlow(candidate(2, 0, 48 * HOUR), 100, 100)];
+    const h = harness(list, { gate, initial: selection(1, 0, NOW - HOUR), marketWarming: () => true });
+    await h.selector.refresh(NOW);
+    assert.equal(h.selector.current?.pool, testAddress(1));
+    h.source.result.candidates = [withFlow(candidate(1, 0, 30 * MINUTE), 90, 10), list[1]!];
+    await h.selector.refresh(NOW + MINUTE);
+    assert.equal(h.selector.current?.pool, testAddress(2));
+  });
   test('a one-sided current pool is replaced by a balanced mature pool immediately', async () => {
     const h = harness([withFlow(candidate(1, 0, 30 * MINUTE), 90, 10), withFlow(candidate(2, 0, 48 * HOUR), 50, 50)], { gate, initial: selection(1, 0, NOW - MINUTE), complete: false });
     await h.selector.refresh(NOW);

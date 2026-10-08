@@ -9,7 +9,7 @@ import { roundTimes, windowMean, type PriceObservation } from '@flipthememe/clie
 import { JsonlFile } from '../src/jsonl.ts';
 import type { LogFields } from '../src/log.ts';
 import { ObservationStore, windowSamples } from '../src/observations.ts';
-import { ShadowBook, directionalBias, parseShadowRow, summarize, upShare, type ShadowPool, type ShadowRow } from '../src/shadow.ts';
+import { ShadowBook, directionalBias, marketReadiness, parseShadowRow, summarize, upShare, type ShadowPool, type ShadowRow } from '../src/shadow.ts';
 import { testAddress } from './pool-fixtures.ts';
 
 const dirs: string[] = [];
@@ -29,6 +29,10 @@ test('observed momentum veto is symmetric, needs ten priced minutes, excludes ol
   assert.match(directionalBias(rows(6, 4), POOL, now)!, /6 UP \/ 4 DOWN/);
   assert.match(directionalBias(rows(4, 6), POOL, now)!, /4 UP \/ 6 DOWN/);
   assert.equal(directionalBias(rows(5, 5), POOL, now), null);
+  assert.match(marketReadiness(rows(4, 5), POOL, now)!, /9\/10/);
+  assert.equal(marketReadiness(rows(5, 5), POOL, now), null);
+  assert.match(marketReadiness(rows(8, 2), POOL, now)!, /observed momentum/);
+  assert.match(marketReadiness(rows(5, 5), OTHER, now)!, /0\/10/);
   assert.equal(directionalBias(rows(9, 0), POOL, now), null);
   assert.equal(directionalBias(rows(10, 0), OTHER, now), null);
   assert.equal(directionalBias(rows(10, 0), POOL, now + 40 * 60_000), null);

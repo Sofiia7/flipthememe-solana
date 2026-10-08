@@ -83,6 +83,13 @@ export function directionalBias(rows: readonly Pick<ShadowRow, 'pool' | 'opensAt
   return Math.max(up, down) / recent.length >= 0.6 ? `observed momentum ${up} UP / ${down} DOWN in ${recent.length} priced minutes` : null;
 }
 
+/** Observe an unfamiliar pool before accepting calls, rather than funding its first biased minutes. */
+export function marketReadiness(rows: readonly Pick<ShadowRow, 'pool' | 'opensAt' | 'dir'>[], pool: string, nowMs: number): string | null {
+  const priced = rows.filter((r) => r.pool === pool && r.opensAt * 1000 >= nowMs - 30 * 60_000 && r.opensAt * 1000 <= nowMs && (r.dir === 'up' || r.dir === 'down')).length;
+  if (priced < 10) return `observing market: ${priced}/10 priced shadow minutes`;
+  return directionalBias(rows, pool, nowMs);
+}
+
 /** A row of shadow.jsonl, or null when the object is not one. */
 export function parseShadowRow(raw: Record<string, unknown>): ShadowRow | null {
   const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -173,6 +180,10 @@ export class ShadowBook {
 
   bias(pool: string, nowMs: number): string | null {
     return directionalBias(this.rows, pool, nowMs);
+  }
+
+  readiness(pool: string, nowMs: number): string | null {
+    return marketReadiness(this.rows, pool, nowMs);
   }
 
   private evaluate(round: Pending, nowMs: number): void {
