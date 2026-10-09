@@ -332,11 +332,11 @@ function SessionLine({
         {when} · one-tap bets up to {formatSol(row.maxPerBet)} each
       </Text>
       <View style={styles.between}>
-        <Text style={styles.meta}>{sessionUsageText(row, sessionLimitedBelow(SESSION_RULES), formatSol)}</Text>
+        <Text style={[styles.meta, styles.sessionUsage]}>{sessionUsageText(row, sessionLimitedBelow(SESSION_RULES), formatSol)}</Text>
         {row.revocable ? (
-          <Btn kind="danger" small title={checking ? 'CHECKING' : 'REVOKE'} busy={checking || spinning} disabled={disabled} onPress={onRevoke} />
+          <Btn style={styles.sessionAction} kind="danger" small title={checking ? 'CHECKING' : 'REVOKE'} busy={checking || spinning} disabled={disabled} onPress={onRevoke} />
         ) : closable ? (
-          <Btn kind="ghost" small title={closeChecking ? 'CHECKING' : 'CLOSE'} busy={closeChecking || closeSpinning} disabled={closeDisabled} onPress={onClose} />
+          <Btn style={styles.sessionAction} kind="ghost" small title={closeChecking ? 'CHECKING' : 'CLOSE'} busy={closeChecking || closeSpinning} disabled={closeDisabled} onPress={onClose} />
         ) : null}
       </View>
     </View>
@@ -366,6 +366,8 @@ const styles = StyleSheet.create({
   chevronOpen: { transform: [{ rotate: '-135deg' }], marginBottom: 0, marginTop: 3 },
   session: { borderWidth: 1, borderColor: C.borderSoft, backgroundColor: C.panelDeep, padding: 8, gap: 3 },
   sessionMine: { borderColor: C.accent },
+  sessionUsage: { flex: 1, minWidth: 0 },
+  sessionAction: { width: 120, maxWidth: '45%', flexShrink: 0 },
   device: { color: C.white, fontSize: 12, fontWeight: '900', fontFamily: MONO, flexShrink: 1 },
   meta: { color: C.subtle, fontSize: 11, fontFamily: MONO },
   warn: { color: C.warn, fontSize: 11 },
