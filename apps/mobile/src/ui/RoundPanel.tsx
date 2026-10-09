@@ -94,7 +94,7 @@ export function SideColumn({
                 <HouseFace size={big ? 34 : 28} />
               ) : (
                 <View style={mine ? [styles.meRing, { borderColor: color, boxShadow: `0 0 10px ${color}` }] : null}>
-                  <PixelFace face={faceFromBytes(p.account.face)} size={mine ? (big ? 52 : 40) : big ? 34 : 28} expression={mine ? myExpression : undefined} />
+                  <PixelFace face={faceFromBytes(p.account.face)} size={mine ? 36 : 28} expression={mine ? myExpression : undefined} />
                 </View>
               )}
               {mine ? (
@@ -224,8 +224,8 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
     <View style={[styles.panel, styles.panelOpen]}>
       <View style={styles.head}>
         <View style={styles.headLeft}>
-          <Text style={styles.title}>{round ? `ROUND #${round.id.toString()} ·` : 'NEXT ROUND ·'}</Text>
-          <Text style={[styles.stageText, { color: upcoming ? C.subtle : C.neonYellow }]}>{upcoming || !round ? 'OPENS SOON' : 'OPEN'}</Text>
+          <Text style={styles.title}>{round ? `${positions.some(p => p.account.authority === me && !p.account.isHouse) ? 'YOUR BET' : 'ROUND'} #${round.id.toString()} ·` : 'NEXT ROUND ·'}</Text>
+          <Text style={[styles.stageText, { color: upcoming ? C.subtle : C.neonYellow }]}>{upcoming || !round ? 'OPENS SOON' : positions.some(p => p.account.authority === me && !p.account.isHouse) ? 'SAVED' : 'OPEN'}</Text>
         </View>
         {pulse ? (
           <Text style={styles.pulse} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
@@ -325,7 +325,7 @@ const styles = StyleSheet.create({
   sideName: { fontSize: 15, fontWeight: '900' },
   total: { color: C.white, fontFamily: MONO, fontWeight: '900', fontSize: 15 },
   unit: { color: C.subtle, fontSize: 9, fontWeight: '800' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'flex-end' },
+  chips: { flexDirection: 'row', flexWrap: 'nowrap', gap: 6, alignItems: 'flex-end', overflow: 'hidden' },
   chip: { alignItems: 'center', gap: 2 },
   meRing: { borderWidth: 2, padding: 1 },
   youTag: { color: C.bg, fontSize: 9, fontWeight: '900', paddingHorizontal: 4, fontFamily: MONO },

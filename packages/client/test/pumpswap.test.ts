@@ -19,6 +19,7 @@ import {
   fetchTopPumpSwapPools,
   loadPool,
   observePrice,
+  observePrices,
   priceOf,
   quoteReserveLamports,
   readTokenAmount,
@@ -224,6 +225,20 @@ describe('loadPool', () => {
 });
 
 describe('observePrice', () => {
+  test('a batched read uses one slot and isolates an invalid neighbouring pair', async () => {
+    const response=structuredClone(VAULTS_JSON);
+    response.result.value.push(...structuredClone(VAULTS_JSON.result.value));
+    const { rpc,calls }=scriptedRpc(()=>response);
+    const invalid={...HIGGS_REF,pool:address('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'),baseMint:WSOL_MINT};
+    const rows=await observePrices(rpc,[HIGGS_REF,invalid],()=>123);
+    const good=rows.get(HIGGS_POOL);
+    assert.ok(good && !(good instanceof Error));
+    assert.equal(good.slot,453526171n);
+    assert.equal(good.atMs,123);
+    assert.ok(rows.get(invalid.pool) instanceof Error);
+    assert.equal(calls.length,1);
+    assert.equal((calls[0].params[0] as unknown[]).length,4);
+  });
   test('reads both vaults in one call and stamps the context slot and arrival time', async () => {
     const { rpc, calls } = scriptedRpc(() => VAULTS_JSON);
     const observation = await observePrice(rpc, HIGGS_REF, () => 1_759_653_000_123);

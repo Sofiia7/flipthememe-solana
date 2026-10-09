@@ -1,4 +1,4 @@
-import { marketQuality, type MarketSample } from './market-reserve.ts';
+import { marketQuality, reserveOrder, type MarketSample } from './market-reserve.ts';
 /**
  * Token choice, once a minute (rules and defaults in poolgate.ts, candidates from discovery.ts):
  *
@@ -101,6 +101,7 @@ export class PoolSelector {
   private readonly reservePrice: (pool: Address, nowMs: number) => bigint | null;
   private handover: { r: Ranked; reserve: bigint; expires: number; reason: string } | null = null;
   private reserveInventory = new Map<Address, Ranked>();
+  private watchStarted = new Map<string, number>();
   reserveStatus: { pool: Address; name: string; tier: number; risk: number; prepared: boolean; up: number; down: number }[] = [];
   current: Selection | null;
   /** Observe candidates together so a rejected pool does not reset all market preparation. */
@@ -256,13 +257,14 @@ export class PoolSelector {
       ranked.push({ ...r, candidate: { ...r.candidate, buys: undefined, sells: undefined, priceChangeM5: undefined } });
     }
     const prepared = new Map<Address, { r: Ranked; reserve: bigint }>();
+    const invalidWatch = new Set<Address>();
     let currentReserve: bigint | null | 'unreadable' = null;
     if (current) {
       currentReserve = await this.qualify(current.pool, true);
       if (typeof currentReserve === 'bigint') this.current = { ...current, quoteReserve: currentReserve, reserveAtMs: nowMs };
     }
-    // Retain up to four measured backups; use the remaining checks to explore the wider universe.
-    const retained = this.watching.flatMap(p => ranked.find(r => r.candidate.pool === p.pool) ?? []).slice(0, 4);
+    // Recheck all five backups before exploration; their ten-minute measurement must survive refreshes.
+    const retained = this.watching.flatMap(p => ranked.find(r => r.candidate.pool === p.pool) ?? []).filter(r => r.candidate.pool !== current?.pool);
     const rest = ranked.filter(r => r.candidate.pool !== current?.pool && !(typeof currentReserve === 'bigint' && r.candidate.baseMint === current?.baseMint) && !retained.some(k => k.candidate.pool === r.candidate.pool));
     const pivot = rest.length ? this.reserveCursor % rest.length : 0;
     const exploring = [...rest.slice(pivot), ...rest.slice(0, pivot)];
@@ -276,7 +278,10 @@ export class PoolSelector {
       if (++checks > MAX_DEPTH_CHECKS) break;
       const reserve = await this.qualify(pool, false);
       if (typeof reserve === 'bigint') prepared.set(pool, { r, reserve });
-      else this.reserveRejected.set(pool, nowMs + (this.unsafe.has(pool) ? TOKEN_CACHE_TTL_MS : 60_000));
+      else {
+        if (reserve === null) invalidWatch.add(pool);
+        this.reserveRejected.set(pool, nowMs + (this.unsafe.has(pool) ? TOKEN_CACHE_TTL_MS : 60_000));
+      }
     }
     const seenMints = new Set<Address>();
     const choices = [...prepared.values()].map(p => ({ ...p, quality: marketQuality(p.r.candidate, this.marketSample(p.r.candidate.pool, nowMs)) }))
@@ -288,10 +293,14 @@ export class PoolSelector {
         seenMints.add(c.baseMint);
         return true;
       });
-    this.reserveInventory = new Map(choices.slice(0, 6).map(p => [p.r.candidate.pool, p.r]));
-    this.watching = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, baseMint: p.r.candidate.baseMint, name: p.r.candidate.name, rung: RUNG_NAMES[p.r.rung] }));
-    this.reserveStatus = choices.slice(0, 6).map(p => ({ pool: p.r.candidate.pool, name: p.r.candidate.name, tier: p.quality.tier, risk: round1(p.quality.risk), prepared: p.quality.prepared, up: p.quality.sample.up, down: p.quality.sample.down }));
-    const best = choices[0];
+    // An unreadable check cannot authorize a handover, but need not discard ongoing measurements.
+    const observationOnly = retained.filter(r => !prepared.has(r.candidate.pool) && !invalidWatch.has(r.candidate.pool) && !this.unsafe.has(r.candidate.pool)).map(r => ({ r, reserve: 0n, quality: marketQuality(r.candidate, this.marketSample(r.candidate.pool, nowMs)) }));
+    const watching = reserveOrder([...choices, ...observationOnly].map(p => ({ ...p, pool: p.r.candidate.pool, priced: p.quality.sample.priced })), this.watchStarted, nowMs, current?.pool ?? null);
+    this.watchStarted = new Map(watching.map(p => [p.pool, this.watchStarted.get(p.pool) ?? nowMs]));
+    this.reserveInventory = new Map(watching.map(p => [p.r.candidate.pool, p.r]));
+    this.watching = watching.map(p => ({ pool: p.r.candidate.pool, baseMint: p.r.candidate.baseMint, name: p.r.candidate.name, rung: RUNG_NAMES[p.r.rung] }));
+    this.reserveStatus = watching.map(p => ({ pool: p.r.candidate.pool, name: p.r.candidate.name, tier: p.quality.tier, risk: round1(p.quality.risk), prepared: p.quality.prepared, up: p.quality.sample.up, down: p.quality.sample.down }));
+    const best = choices.find(p => watching.some(w => w.pool === p.r.candidate.pool));
     if (current && currentReserve === 'unreadable') {
       if (this.reservePrice(current.pool, nowMs) !== null) return;
       if (best) {

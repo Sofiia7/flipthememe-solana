@@ -45,7 +45,7 @@ function useBeat(active: boolean, second: number | null): Animated.Value {
 function timerLabel(timer: TimerView): string {
   switch (timer.kind) {
     case 'entry':
-      return `#${timer.roundId} BET BY`;
+      return `#${timer.roundId} ${timer.mine ? 'BET SAVED · ENTRY CLOSES' : 'BET BY'}`;
     case 'result':
       return `#${timer.roundId} RESULT IN`;
     case 'confirming':

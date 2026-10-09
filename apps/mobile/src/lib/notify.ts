@@ -7,6 +7,8 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requireOptionalNativeModule } from 'expo';
 import { permissionStep, type PermissionState, type Reminder } from '../state/reminders';
+import type { Face } from '../face/faceModel';
+import { notificationFace } from './notificationFace';
 
 type Notifications = typeof import('expo-notifications');
 
@@ -84,7 +86,7 @@ export async function askNotificationPermissionOnce(): Promise<void> {
 let generation = 0;
 
 /** Replaces every scheduled reminder with `list` (nothing is scheduled without the permission). */
-export async function scheduleReminders(list: readonly Reminder[]): Promise<void> {
+export async function scheduleReminders(list: readonly Reminder[], face?: Face): Promise<void> {
   const mine = ++generation;
   try {
     const n = notifications();
@@ -98,7 +100,7 @@ export async function scheduleReminders(list: readonly Reminder[]): Promise<void
       if (mine !== generation) return;
       await n.scheduleNotificationAsync({
         identifier: r.key,
-        content: { title: r.title, body: r.body, data: { roundId: r.roundId.toString() } },
+        content: { title: r.title, body: r.body, data: { roundId: r.roundId.toString(), ...(face ? { ftmFacePixels: notificationFace(face) } : {}) } },
         trigger: { type: n.SchedulableTriggerInputTypes.DATE, date: new Date(r.fireAtMs), channelId: RESULT_CHANNEL_ID },
       });
     }

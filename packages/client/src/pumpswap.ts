@@ -249,6 +249,22 @@ export async function observePrice(
 }
 
 /** SOL depth of the pool: the wSOL amount in the quote vault, in lamports. */
+/** Read several pool pairs in one confirmed RPC response; a broken pair does not poison its neighbours. */
+export async function observePrices(rpc: Rpc<GetMultipleAccountsApi>, refs: readonly PoolRef[], now: () => number = Date.now): Promise<Map<Address, PriceObservation | Error>> {
+  if (refs.length > 40) throw new Error('price batch exceeds 40 pools');
+  if (!refs.length) return new Map();
+  const { context, value } = await rpc.getMultipleAccounts(refs.flatMap(ref => [ref.baseVault, ref.quoteVault]), { encoding: 'base64', commitment: 'confirmed' }).send();
+  if (value.length !== refs.length * 2) throw new Error('price batch account count mismatch');
+  const atMs = now();
+  return new Map<Address, PriceObservation | Error>(refs.map((ref, i): readonly [Address, PriceObservation | Error] => {
+    try {
+      const baseAmount = readVault(value[2*i], ref.baseVault, ref.baseMint, 'base');
+      const quoteAmount = readVault(value[2*i+1], ref.quoteVault, ref.quoteMint, 'quote');
+      return [ref.pool, { atMs, slot: context.slot, baseAmount, quoteAmount, price: priceOf(baseAmount, quoteAmount) }] as const;
+    } catch (error) { return [ref.pool, error instanceof Error ? error : new Error(String(error))] as const; }
+  }));
+}
+
 export async function quoteReserveLamports(
   rpc: Rpc<GetAccountInfoApi>,
   ref: PoolRef,

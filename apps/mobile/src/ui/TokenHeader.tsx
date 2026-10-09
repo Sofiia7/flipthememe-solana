@@ -60,12 +60,7 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
       )}
       <View style={styles.texts} onLayout={onTextsLayout}>
         <View style={styles.titleRow}>
-          <View style={{ flexShrink: 1, maxWidth: '100%', flex: 1 }}><PixelText text={`$${symbol}`} size={3} color={C.white} fit /></View>
-          {info?.name ? (
-            <Text style={styles.name} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
-              {info.name}
-            </Text>
-          ) : null}
+          <View style={{ flexShrink: 1, maxWidth: '100%', flex: 1 }}><PixelText text={`$${symbol}`} size={2.6} color={C.white} fit style={{ alignItems: 'flex-start' }} /></View>
         </View>
         <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={FONT_CAP}>
           {meta || 'busy pump.fun coin'}

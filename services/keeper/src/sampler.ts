@@ -11,7 +11,7 @@
  * Two reads that come back with the same slot (concurrent reads, a slot that lasts longer than the tick)
  * are stored once.
  */
-import { loadPool, observePrice, type PoolRef, type PriceObservation } from '@flipthememe/client';
+import { loadPool, observePrice, observePrices, type PoolRef, type PriceObservation } from '@flipthememe/client';
 import type { Address } from '@solana/kit';
 import type { Logger } from './log.ts';
 import { ObservationStore } from './observations.ts';
@@ -63,6 +63,7 @@ export class Sampler {
   private readonly mainnet: Pick<FailoverRpc, 'call'>;
   private readonly logger: Logger;
   private readonly observe: (rpc: SolanaRpc, ref: PoolRef) => Promise<PriceObservation>;
+  private readonly batch: typeof observePrices | null;
   private readonly timeoutMs: number;
   private readonly maxInFlight: number;
   private readonly lastErrorLogAt = new Map<string, number>();
@@ -86,6 +87,7 @@ export class Sampler {
     this.store = opts.store;
     this.logger = opts.logger;
     this.observe = opts.observe ?? ((rpc, ref) => observePrice(rpc, ref));
+    this.batch = opts.observe ? null : observePrices;
     this.timeoutMs = opts.timeoutMs ?? SAMPLE_TIMEOUT_MS;
     this.maxInFlight = opts.maxInFlight ?? MAX_READS_IN_FLIGHT;
   }
@@ -95,6 +97,23 @@ export class Sampler {
    * in flight is left for the next tick. A failed pool is logged at most every 30 s.
    */
   tick(pools: Iterable<Address>): void {
+    const unique = [...new Set(pools)];
+    if (this.batch) {
+      const available = unique.filter(pool => (this.inFlight.get(pool) ?? 0) < this.maxInFlight).slice(0, 40);
+      if (available.length) {
+        for (const pool of available) this.inFlight.set(pool, (this.inFlight.get(pool) ?? 0) + 1);
+        const read = this.readBatch(available).finally(() => {
+          for (const pool of available) {
+            const left = (this.inFlight.get(pool) ?? 1) - 1;
+            if (left > 0) this.inFlight.set(pool, left); else this.inFlight.delete(pool);
+          }
+          this.running.delete(read);
+        });
+        this.running.add(read);
+      }
+      this.store.prune(Date.now());
+      return;
+    }
     for (const pool of new Set(pools)) {
       if ((this.inFlight.get(pool) ?? 0) >= this.maxInFlight) continue;
       this.inFlight.set(pool, (this.inFlight.get(pool) ?? 0) + 1);
@@ -112,6 +131,24 @@ export class Sampler {
   /** Resolves when every read started so far has finished (shutdown, tests). */
   async idle(): Promise<void> {
     while (this.running.size > 0) await Promise.allSettled([...this.running]);
+  }
+
+  private async readBatch(pools: Address[]): Promise<void> {
+    const loaded = await Promise.allSettled(pools.map(pool => this.refs.get(pool)));
+    const refs = loaded.flatMap(r => r.status === 'fulfilled' ? [r.value] : []);
+    try {
+      const observations = await this.mainnet.call('observePrices', rpc => within(this.batch!(rpc, refs), this.timeoutMs));
+      for (const [pool, observation] of observations) {
+        if (observation instanceof Error) { this.logger({ event: 'sample_failed', pool, error: shortError(observation) }); continue; }
+        if (this.store.hasSlot(pool, observation.slot)) this.duplicateSlots++; else this.store.add(pool, observation);
+      }
+    } catch (error) {
+      const now = Date.now();
+      if (now - (this.lastErrorLogAt.get('batch') ?? 0) >= 30_000) {
+        this.lastErrorLogAt.set('batch', now);
+        this.logger({ event: 'sample_failed', pools, error: shortError(error) });
+      }
+    }
   }
 
   private async read(pool: Address): Promise<void> {

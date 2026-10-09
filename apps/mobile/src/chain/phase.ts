@@ -5,6 +5,12 @@ import type { PositionAccount, RoundAccount } from '@flipthememe/client';
 
 export type RoundRef = { id: bigint; account: RoundAccount };
 
+/** The last accepted bet owns the whole stage, including before its entry closes. */
+export function latestCall<T extends RoundRef>(rounds: readonly T[], nowSec: number): T | null {
+  return rounds.filter(r => r.account.status !== RoundStatus.Final && nowSec <= Number(r.account.exitEnd) + OVERDUE_SECS)
+    .reduce<T | null>((latest, r) => !latest || r.id > latest.id ? r : latest, null);
+}
+
 export type RoundGroups<T extends RoundRef> = {
   /** Accepting entries now: opensAt <= now < cutoffAt. */
   open: T | null;

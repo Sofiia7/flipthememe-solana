@@ -7,6 +7,7 @@ import { chainToLocalMs } from '../chain/useChainClock';
 import { askNotificationPermissionOnce, cancelReminders, scheduleReminders } from '../lib/notify';
 import type { BetPhase } from '../session/useBetting';
 import { planReminders, type InPlayCall } from './reminders';
+import type { Face } from '../face/faceModel';
 
 /** The pause after the bet is confirmed before the system dialog appears, so the YOU'RE IN card is seen first. */
 const PERMISSION_DELAY_MS = 1_500;
@@ -16,9 +17,9 @@ const PERMISSION_DELAY_MS = 1_500;
  * background, one reminder per call is scheduled for 15 s after its exit window ends; when it comes
  * back (or starts) they are all cancelled: the results show themselves.
  */
-export function useResultReminders(calls: readonly InPlayCall[], offsetSec: number): void {
-  const latest = useRef({ calls, offsetSec });
-  latest.current = { calls, offsetSec };
+export function useResultReminders(calls: readonly InPlayCall[], offsetSec: number, face: Face): void {
+  const latest = useRef({ calls, offsetSec, face });
+  latest.current = { calls, offsetSec, face };
   useEffect(() => {
     // Reminders left over from before the app was closed would arrive for results already seen.
     void cancelReminders();
@@ -26,8 +27,8 @@ export function useResultReminders(calls: readonly InPlayCall[], offsetSec: numb
       if (state === 'active') {
         void cancelReminders();
       } else if (state === 'background') {
-        const { calls: inPlay, offsetSec: offset } = latest.current;
-        void scheduleReminders(planReminders({ calls: inPlay, nowMs: Date.now(), toLocalMs: (sec) => chainToLocalMs(sec, offset) }));
+        const { calls: inPlay, offsetSec: offset, face: reminderFace } = latest.current;
+        void scheduleReminders(planReminders({ calls: inPlay, nowMs: Date.now(), toLocalMs: (sec) => chainToLocalMs(sec, offset) }), reminderFace);
       }
     });
     return () => subscription.remove();

@@ -299,7 +299,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (myRaw.owner === owner) {
       const unresolved = myRaw.positions
         .filter((p) => p.round && p.round.account.status !== RoundStatus.Final)
-        .sort((a, b) => ((a.round?.id ?? 0n) < (b.round?.id ?? 0n) ? -1 : 1))[0];
+        .sort((a, b) => ((a.round?.id ?? 0n) > (b.round?.id ?? 0n) ? -1 : 1))[0];
       myPool = unresolved?.round?.account.pool ?? null;
     }
     return { chartPool, myPool: myPool && myPool !== chartPool ? myPool : null };
@@ -438,7 +438,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => collectInPlay({ positions: chainPositions, pending: pendingOfOwner, rounds: arena.rounds }),
     [chainPositions, pendingOfOwner, arena.rounds],
   );
-  useResultReminders(inPlay, offsetSec);
+  useResultReminders(inPlay, offsetSec, face);
   useAskPermissionAfterFirstBet(betting.bet.phase);
 
   const value = useMemo<AppValue>(

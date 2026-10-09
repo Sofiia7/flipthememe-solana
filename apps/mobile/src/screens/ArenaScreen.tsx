@@ -1,7 +1,7 @@
 import { useMarketStatus } from '../chain/useMarketStatus';
 import { waitingView } from '../lib/marketStatus';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { RoundStatus, Side } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
@@ -15,6 +15,7 @@ import {
   selectChartRound,
   selectPanel,
   selectTimer,
+  latestCall,
   standingNow,
   strikeState,
   type RoundGroups,
@@ -94,10 +95,8 @@ export function ArenaScreen() {
   const [intent, setIntent] = useState<BetIntent | null>(null);
   const chatter = useBoolStore(chatterOn);
   const chatterShown = chatter.loaded && chatter.value;
-  // The chart takes the spare height of taller phones, a little less when the X lane is on. On a Seeker
-  // that leaves my round in play and its CHALLENGE A FRIEND above the dock, even under a one-line note.
-  const { height: screenHeight } = useWindowDimensions();
-  const chartHeight = Math.round(Math.min(220, Math.max(140, screenHeight * (chatterShown ? 0.175 : 0.2))));
+  // The chart receives the stage's spare height after the token, timer, players and invitation.
+  const [chartHeight, setChartHeight] = useState(140);
 
   // The rules stay behind the "?" in the header: nothing opens by itself on the first launch.
   useEffect(() => {
@@ -137,11 +136,12 @@ export function ArenaScreen() {
     () => [...mine.values()].filter((m) => m.round.account.status !== RoundStatus.Final).sort((a, b) => (a.round.id < b.round.id ? -1 : 1)),
     [mine],
   );
-  const myRounds = myUnresolved.map((m) => m.round);
+  const latest = latestCall(myUnresolved.map(m => m.round), nowSec);
+  const myRounds = latest ? [latest] : [];
 
   const open = groups.open;
   const panel = selectPanel({ nowSec, open, upcoming: groups.upcoming, myUnresolved: myRounds });
-  const focus = panel.kind === 'mine' ? (mine.get(panel.round.id) ?? null) : null;
+  const focus = latest ? mine.get(latest.id) ?? null : null;
 
   // Prices: the charted pool, or my round's pool when the token rotated since I bet.
   const feedFor = (pool: string): PoolFeed | null => (feed.pool === pool ? feed : myFeed.pool === pool ? myFeed : null);
@@ -335,7 +335,7 @@ export function ArenaScreen() {
   };
 
   // My round in play can be shared too; the dock offers it for a call in the open round instead.
-  const challengeFocus = panel.kind === 'mine' && focus && owner && panel.stage !== 'settling' && !inOpen ? focus : null;
+  const challengeFocus = focus && owner && nowSec < Number(focus.round.account.exitEnd) ? focus : null;
   // Outside a bet the same place invites a friend to play. The link names no side, only me (wallet and
   // name for their RIVAL tag) and the round open now, so their app shows where to meet.
   const inviteRound = challengeFocus || inOpen ? null : (open ?? groups.upcoming);
@@ -377,7 +377,7 @@ export function ArenaScreen() {
       {chatterShown && tokenMint ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
 
       <View style={styles.stage}>
-        <ScrollView contentContainerStyle={styles.page}>
+        <View style={styles.page}>
           {arena.error && (arenaStaleSec === null || arenaStaleSec > 10) ? (
             <Banner tone="error" text={`Devnet unreachable (${arena.error}).${arenaStaleSec !== null ? ` Data ${arenaStaleSec} s old.` : ''}`} />
           ) : arenaStaleSec !== null && arenaStaleSec > 10 ? (
@@ -390,6 +390,7 @@ export function ArenaScreen() {
 
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? preview.pool} nowMs={secMs} />
 
+          <View style={styles.chartSpace} onLayout={e => setChartHeight(Math.max(60, Math.floor(e.nativeEvent.layout.height)))}>
           <PriceChart
             points={stageFeed.points}
             nowMs={secMs}
@@ -407,6 +408,7 @@ export function ArenaScreen() {
               stageFeed.pool ? (stageFeed.error ? `Price source unreachable: ${stageFeed.error}` : 'Reading the live price...') : waiting.title
             }
           />
+          </View>
 
           {arena.updatedAt === null ? (
             <View style={styles.loading}>
@@ -449,34 +451,17 @@ export function ArenaScreen() {
               upcoming={panel.kind !== 'open'}
             />
           ) : null}
-          {extraRounds.map((m) => (
-            <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />
-          ))}
-          {lateRounds.map((m) => (
-            <ExtraRoundLine
-              key={m.round.id.toString()}
-              round={m.round}
-              position={m.position.account}
-              standing={null}
-              late={nowSec > Number(m.round.account.settleDeadline) ? 'REFUND IN HISTORY' : 'RESULT LATE'}
-            />
-          ))}
-
-          <ResultsStrip finals={groups.finals.filter((r) => stageFeed.pool !== null && r.account.pool === stageFeed.pool)} mine={mine} />
-
-        </ScrollView>
-      </View>
-
-      {/* Keep the invitation visible even when an alert or extra round makes the stage scroll. */}
-      {challengeFocus || inviteRound ? (
-        <View style={styles.friendDock}>
+          {challengeFocus || inviteRound ? (
+        <View>
           {challengeFocus ? (
-            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, true)} style={styles.friend} />
+            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt))} style={styles.friend} />
           ) : inviteRound ? (
             <Btn small kind="ghost" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
           ) : null}
         </View>
-      ) : null}
+          ) : null}
+        </View>
+      </View>
 
       <View style={styles.dock}>
         {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
@@ -525,7 +510,7 @@ export function ArenaScreen() {
               </Text>{' '}
               {formatSol(inOpen.position.account.stake)} SOL
             </Text>
-            <NeonButton title="CHALLENGE A FRIEND" kind="purple" busy={sharing} onPress={() => challenge(inOpen, false)} />
+            <Text style={styles.nextExplanation}>Bet saved · waiting for the reference price</Text>
           </View>
         ) : topUpReason && !pendingHere ? (
           <>
@@ -608,7 +593,11 @@ export function ArenaScreen() {
         call={intent && !intent.committed && open?.id === intent.roundId ? { side: intent.side, text: intentText(intent, sideName, formatSol) } : null}
       />
       <HowItWorksSheet visible={howOpen} onClose={closeHow} context={
-        howOpen && (focus ?? inOpen) ? <RoundProgress round={(focus ?? inOpen)!.round} position={(focus ?? inOpen)!.position} nowSec={nowSec} /> : null
+        howOpen ? <View style={{ gap: 8 }}>
+          {focus ? <RoundProgress round={focus.round} position={focus.position} nowSec={nowSec} /> : null}
+          {myUnresolved.filter(m => m.round.id !== focus?.round.id).map(m => <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />)}
+          <ResultsStrip finals={groups.finals.filter(r => r.account.pool === stageFeed.pool)} mine={mine} />
+        </View> : null
       } />
     </View>
   );
@@ -724,9 +713,9 @@ const styles = StyleSheet.create({
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
   stage: { flex: 1, overflow: 'hidden' },
-  page: { paddingHorizontal: 14, paddingTop: 6, paddingBottom: 16, gap: 8 },
+  page: { flex: 1, paddingHorizontal: 14, paddingTop: 6, paddingBottom: 6, gap: 6 },
+  chartSpace: { flex: 1, minHeight: 60, maxHeight: 220 },
   friend: { minHeight: 32, paddingVertical: 6 },
-  friendDock: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
   loadingText: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   results: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
