@@ -161,7 +161,7 @@ export function ArenaScreen() {
   // keeper moved the next rounds to another token: the strike line I bet on stays on screen.
   const preview = usePoolPrice(!focus && !feed.pool && market && nowMs - Date.parse(market.updatedAt) <= 240_000 ? market.pool?.pool ?? null : null);
   const stagePool = focus?.round.account.pool ?? feed.pool ?? preview.pool;
-  const stageFeed: PoolFeed = stagePool !== feed.pool && myFeed.pool === stagePool ? myFeed : feed.pool ? feed : preview;
+  const stageFeed: PoolFeed = stagePool === myFeed.pool ? myFeed : stagePool === feed.pool ? feed : stagePool === preview.pool ? preview : { pool: stagePool, ref: null, points: [], latest: null, error: null };
   // The chart follows my round, else the latest live round on this pool.
   const chartRound = selectChartRound({ pool: stageFeed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
   const chartStrike = chartRound ? strikeState(chartRound.account, nowSec) : null;

@@ -294,7 +294,7 @@ export class PoolSelector {
         return true;
       });
     // An unreadable check cannot authorize a handover, but need not discard ongoing measurements.
-    const observationOnly = retained.filter(r => !prepared.has(r.candidate.pool) && !invalidWatch.has(r.candidate.pool) && !this.unsafe.has(r.candidate.pool)).map(r => ({ r, reserve: 0n, quality: marketQuality(r.candidate, this.marketSample(r.candidate.pool, nowMs)) }));
+    const observationOnly = retained.filter(r => !choices.some(p => p.r.candidate.baseMint === r.candidate.baseMint) && !invalidWatch.has(r.candidate.pool) && !this.unsafe.has(r.candidate.pool)).map(r => ({ r, reserve: 0n, quality: marketQuality(r.candidate, this.marketSample(r.candidate.pool, nowMs)) }));
     const watching = reserveOrder([...choices, ...observationOnly].map(p => ({ ...p, pool: p.r.candidate.pool, priced: p.quality.sample.priced })), this.watchStarted, nowMs, current?.pool ?? null);
     this.watchStarted = new Map(watching.map(p => [p.pool, this.watchStarted.get(p.pool) ?? nowMs]));
     this.reserveInventory = new Map(watching.map(p => [p.r.candidate.pool, p.r]));

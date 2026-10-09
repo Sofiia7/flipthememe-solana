@@ -6,7 +6,7 @@ export function marketQuality(c: Candidate, sample: MarketSample) {
   const balanced = flow !== null && flow <= 0.3 && drift !== null && drift <= 1;
   const prepared = sample.priced >= 10;
   // Five measured minutes already give actionable warning; warming is not a licence for 5/5.
-  const biased = sample.priced >= 5 && sample.dominantShare! >= 0.8;
+  const biased = sample.priced >= 5 && sample.dominantShare! >= 0.7;
   const tier = balanced && !biased ? prepared ? 0 : 1 : 2;
   const risk = (sample.priced >= 5 ? (sample.dominantShare! - 0.5) * 10 : 1) + (flow ?? 1) * 3 + Math.min(drift ?? 10, 10) / 2;
   return { tier, risk, prepared, biased, sample };

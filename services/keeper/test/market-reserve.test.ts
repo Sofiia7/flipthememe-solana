@@ -6,7 +6,7 @@ import { DEFAULT_GATE, rankCandidates, rungOf } from '../src/poolgate.ts';
 import { candidate, withFlow, NOW, HOUR } from './pool-fixtures.ts';
 const c={...withFlow(candidate(1,0,48*HOUR),50,50),priceChangeM5:0.1};
 test('five one-sided outcomes are penalized before the ten-minute readiness threshold',()=>{
-  for (const [up,down] of [[5,0],[0,5],[7,1],[1,7]]) {
+  for (const [up,down] of [[5,0],[0,5],[7,1],[1,7],[7,3],[3,7]]) {
     const quality=marketQuality(c,{up,down,priced:up+down,dominantShare:Math.max(up,down)/(up+down)});
     assert.equal(quality.tier,2);
     assert.equal(quality.biased,true);
