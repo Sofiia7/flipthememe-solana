@@ -565,3 +565,11 @@ test('an unreadable current pool with a stale feed hands over to a freshly price
   assert.equal(h.selector.current?.pool,testAddress(2));
   assert.equal(h.changes.some(p=>p===null),false);
 });
+
+test('measured balanced outcomes beat misleading low-drift flow proxies during the hold',async()=>{
+  const reserve={...calm(2),buys:95,sells:5,priceChangeM5:4};
+  const h=harness([calm(1),reserve],{gate:balancedGate,initial:selection(1,3,NOW-MINUTE),marketSample:p=>p===testAddress(1)?sample(11,4):sample(5,5)});
+  await h.selector.refresh(NOW);
+  assert.equal(h.selector.current?.pool,testAddress(2));
+  assert.equal(h.changes.some(p=>p===null),false);
+});

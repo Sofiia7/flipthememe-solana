@@ -12,6 +12,14 @@ test('five one-sided outcomes are penalized before the ten-minute readiness thre
     assert.equal(quality.biased,true);
   }
 });
+test('measured neutral directions beat a biased pool even when the flow proxy prefers the biased pool',()=>{
+  const biased=marketQuality(c,{up:11,down:4,priced:15,dominantShare:11/15});
+  const neutral=marketQuality({...c,buys:95,sells:5,priceChangeM5:4},{up:5,down:5,priced:10,dominantShare:.5});
+  assert.equal(biased.tier,2);
+  assert.equal(neutral.tier,2);
+  assert.ok(neutral.risk>biased.risk);
+  assert.ok(neutral.evidenceRank<biased.evidenceRank);
+});
 test('warming reserves survive better ranked newcomers until measured or their bounded lease expires',()=>{
   const previous=new Map([['active',NOW],...['a','b','c','d','e'].map(p=>[p,NOW] as const)]);
   const ranked=['new','active','a','b','c','d','e'].map(pool=>({pool,priced:3}));

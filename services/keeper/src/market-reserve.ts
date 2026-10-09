@@ -9,7 +9,9 @@ export function marketQuality(c: Candidate, sample: MarketSample) {
   const biased = sample.priced >= 5 && sample.dominantShare! >= 0.7;
   const tier = balanced && !biased ? prepared ? 0 : 1 : 2;
   const risk = (sample.priced >= 5 ? (sample.dominantShare! - 0.5) * 10 : 1) + (flow ?? 1) * 3 + Math.min(drift ?? 10, 10) / 2;
-  return { tier, risk, prepared, biased, sample };
+  // Real directional outcomes outrank buy/sell proxies: a low-drift pool can still win UP every minute.
+  const evidenceRank = prepared && !biased ? 0 : sample.priced >= 5 && !biased ? 1 : biased ? 3 : balanced ? 2 : 4;
+  return { tier, risk, prepared, biased, evidenceRank, sample };
 }
 
 /** Keep safe warming markets long enough to measure instead of replacing all backups every minute. */

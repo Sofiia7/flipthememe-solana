@@ -285,7 +285,7 @@ export class PoolSelector {
     }
     const seenMints = new Set<Address>();
     const choices = [...prepared.values()].map(p => ({ ...p, quality: marketQuality(p.r.candidate, this.marketSample(p.r.candidate.pool, nowMs)) }))
-      .sort((a,b) => a.quality.tier - b.quality.tier || a.quality.risk - b.quality.risk || b.r.score - a.r.score)
+      .sort((a,b) => a.quality.evidenceRank - b.quality.evidenceRank || a.quality.tier - b.quality.tier || a.quality.risk - b.quality.risk || b.r.score - a.r.score)
       .filter(p => {
         const c = p.r.candidate;
         if (typeof currentReserve === 'bigint' && c.baseMint === current?.baseMint && c.pool !== current.pool) return false;
@@ -312,9 +312,9 @@ export class PoolSelector {
     if (current && typeof currentReserve === 'bigint') {
       const mine = choices.find(p => p.r.candidate.pool === current.pool);
       if (!best || best.r.candidate.pool === current.pool) return;
-      const betterQuality = !mine || best.quality.tier < mine.quality.tier || (mine.quality.tier === 2 && best.quality.risk + 0.5 < mine.quality.risk);
+      const betterQuality = !mine || best.quality.evidenceRank < mine.quality.evidenceRank || (best.quality.evidenceRank === mine.quality.evidenceRank && (best.quality.tier < mine.quality.tier || (mine.quality.tier === 2 && best.quality.risk + 0.5 < mine.quality.risk)));
       const held = nowMs - current.selectedAtMs >= this.gate.holdMs;
-      if (betterQuality || (held && mine && best.quality.tier === mine.quality.tier && best.r.score >= mine.r.score * this.gate.switchRatio && best.quality.risk <= mine.quality.risk)) {
+      if (betterQuality || (held && mine && best.quality.evidenceRank <= mine.quality.evidenceRank && best.quality.tier === mine.quality.tier && best.r.score >= mine.r.score * this.gate.switchRatio && best.quality.risk <= mine.quality.risk)) {
         this.handover = { r: best.r, reserve: best.reserve, expires: nowMs + 90_000, reason: betterQuality ? 'better measured market; continuous handover' : 'higher balanced activity' };
         this.activateReserve(nowMs);
       }
