@@ -187,7 +187,7 @@ function getPage(c: Challenge | null, release: ReleaseMetadata | null = null): s
     description: `${PROMISE} Android app on Solana devnet.`,
     url: `${ORIGIN}/get`,
     body: `<div class="card"><div class="big">ONE MINUTE.<br>UP OR DOWN.</div><div class="sub">${PROMISE}</div></div>
-<a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>${
+<a class="btn go" href="${escapeHtml(release?.apkUrl ?? APK_URL)}">DOWNLOAD THE APK</a>${
       c
         ? `
 <a class="btn get" href="${escapeHtml(appIntent(c))}">OPEN THE ${c.side ? 'CHALLENGE' : c.by ? 'INVITE' : 'ROUND'}</a>

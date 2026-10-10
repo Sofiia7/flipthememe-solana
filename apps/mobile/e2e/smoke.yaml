@@ -7,6 +7,10 @@ appId: com.flipthememe.app
 - tapOn: "HISTORY"
 - tapOn: "LEADERS"
 - tapOn: "PROFILE"
+- scrollUntilVisible:
+    element: "EXPORT LOCAL DIAGNOSTICS"
+    direction: DOWN
+    timeout: 10000
 - assertVisible: "EXPORT LOCAL DIAGNOSTICS"
 - back
 - assertVisible: "DEVNET"

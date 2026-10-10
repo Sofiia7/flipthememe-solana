@@ -10,6 +10,14 @@ const BY = base58Encode(new Uint8Array(32).fill(7));
 const PREFIX = 'intent://round/';
 const SUFFIX = ';end';
 
+test('install metadata and download refer to the same immutable release even if latest changes', async () => {
+  const apkUrl = 'https://github.com/Sofiia7/flipthememe-apk/releases/download/build-29/FlipTheMeme.apk';
+  const body = await handle(new Request('https://sol.flipthememe.com/get'), { version: 'build-29', publishedAt: '2026-10-10T06:00:00Z', sizeBytes: 1000000, sha256: 'a'.repeat(64), releaseUrl: 'https://github.com/Sofiia7/flipthememe-apk/releases/tag/build-29', apkUrl, manifestUrl: null }).text();
+  assert.equal(href(body, 'DOWNLOAD THE APK'), apkUrl);
+  assert.match(body, /build-29/);
+  assert.ok(body.includes('a'.repeat(64)));
+});
+
 /** The href of the link labelled `label`, unescaped as a browser reads it. */
 function href(body: string, label: string): string | null {
   const m = body.match(new RegExp(`<a class="btn [a-z]+" href="([^"]*)">${label}</a>`));
