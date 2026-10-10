@@ -1,5 +1,20 @@
 # FlipTheMeme keeper: deploy
 
+## Verified operator target (10 October 2026)
+
+The existing deployment is reached from the operator workstation with SSH alias
+`openclaw-bot_TEST` (user `openclaw`, port 2222). Its project root is
+`/home/openclaw/ftm-sol-keeper`; run Compose in its `deploy/` directory. The container
+and Compose project are both `ftm-sol-keeper`. Use this existing deployment for updates.
+Keys and `.env` remain on the VPS; do not copy them into the repository or release package.
+
+Audit keeper source `49c965e` was installed on 10 October at 07:12 UTC. The verified
+bundle SHA-256 is `1cb5626a9c0a9cc3246e008bed2a1a9808e4212128e5d7910be048a8f2c908b5`;
+the file inside the running container matches. The previous bundle, Compose files and
+data are preserved in `audit-backup-20261010T071250Z` under the project root.
+The container is healthy and ranking publication works. Oracle readiness is still false
+because upstream devnet RPCs return 429/403; this rollout does not establish working sampling.
+
 **Continuous rounds with a measured reserve (8 October).** Production uses `POOL_BALANCED=true`, `POOL_NEUTRAL=false`, `POOL_YOUTH_WEIGHT=0`, with trending discovery disabled. Up to six qualified pools of distinct base tokens (including the active pool) are sampled in parallel. A prepared balanced pool replaces a biased one without a blank minute; ten directional samples measure readiness, while readiness and momentum never block round creation. With no better candidate the valid current market keeps serving. Token/quote-depth failures still fail closed. Reserve addresses are refreshed even after the new-token age window and activity discovery scans five pages. New-listing endpoint outages do not stop reserve refreshes. Qualified reserve pools survive temporary discovery outages and their token/depth checks repeat. Background price polling only runs around the ten-second measurement windows. Mature (24h+) reserves can have non-`pump` mints; every reserve still passes the same token and quote-depth checks. The optional `POOL_NEUTRAL=true` strict mode can create gaps. Actual UP/DOWN statistics remain public; no price outcome is changed or promised to be 50/50.
 
 One container, `ftm-sol-keeper`, on a Linux VPS with Docker Compose (the host may run other compose
