@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { decodePosition, decodeRound, POSITION_ACCOUNT_SIZE, PROGRAM_ID, RoundStatus, Outcome, Side, acceptedStake, positionPayout, houseContext, type PositionAccount, type RoundAccount } from '@flipthememe/client';
-import { getBase64Encoder, type KeyPairSigner } from '@solana/kit';
+import { getBase64Encoder, type Address, type KeyPairSigner } from '@solana/kit';
 import type { SolanaRpc } from './rpc.ts';
 import { writeJsonAtomic } from './state.ts';
 import type { ShadowSummary } from './shadow.ts';
@@ -57,10 +57,16 @@ export class Leaderboard {
     const now = Date.now();
     const base64 = getBase64Encoder();
     const accounts = await this.rpc.getProgramAccounts(PROGRAM_ID, { encoding: 'base64', commitment: 'confirmed', filters: [{ dataSize: BigInt(POSITION_ACCOUNT_SIZE) }] }).send();
-    const positions = accounts.map(({ account }) => decodePosition(base64.encode(account.data[0]) as Uint8Array)).filter((p) => !p.isHouse);
-    const rawPositions = new Map(accounts.map(a => [decodePosition(base64.encode(a.account.data[0]) as Uint8Array).authority + ':' + decodePosition(base64.encode(a.account.data[0]) as Uint8Array).round, a]));
-    const known = new Set(this.scores.map((s) => s.key));
-    const keys = [...new Set(positions.map((p) => p.round))];
+    const grouped = new Map<Address, { position: PositionAccount; raw: (typeof accounts)[number] }[]>();
+    for (const raw of accounts) {
+      const position = decodePosition(base64.encode(raw.account.data[0]) as Uint8Array);
+      if (position.isHouse) continue;
+      const group = grouped.get(position.round) ?? [];
+      group.push({ position, raw });
+      grouped.set(position.round, group);
+    }
+    const known = new Map(this.scores.map(s => [s.key, s]));
+    const keys = [...grouped.keys()];
     for (let i = 0; i < keys.length; i += 100) {
       const chunk = keys.slice(i, i + 100);
       const { value } = await this.rpc.getMultipleAccounts(chunk, { encoding: 'base64', commitment: 'confirmed' }).send();
@@ -69,12 +75,11 @@ export class Leaderboard {
         if (!acc) continue;
         const r = decodeRound(base64.encode(acc.data[0]) as Uint8Array);
         if (r.status !== RoundStatus.Final) continue;
-        for (const p of positions.filter((p) => p.round === chunk[j])) {
+        for (const { position: p, raw } of grouped.get(chunk[j]) ?? []) {
           const key = `${r.id}:${p.authority}`;
-          const raw = rawPositions.get(p.authority + ':' + p.round)!;
           const archive = { position: raw.pubkey, positionData: raw.account.data[0], round: chunk[j], roundData: acc.data[0] };
           if (known.has(key)) {
-            const existing = this.scores.find(s => s.key === key);
+            const existing = known.get(key);
             const currentScore = scorePosition(r, p);
             if (existing && currentScore) Object.assign(existing, currentScore);
             if (existing && !existing.face) existing.face = Buffer.from(p.face).toString('hex');
@@ -85,9 +90,10 @@ export class Leaderboard {
           }
           const score = scorePosition(r, p);
           if (!score) continue;
-          this.scores.push({ ...score, archive });
+          const captured = { ...score, archive };
+          this.scores.push(captured);
           this.dirtyOwners.add(p.authority);
-          known.add(key);
+          known.set(key, captured);
         }
       }
     }

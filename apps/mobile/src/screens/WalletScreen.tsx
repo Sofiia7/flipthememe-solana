@@ -12,6 +12,7 @@ import { useNow } from '../lib/usePolling';
 import { useApp } from '../state/AppProvider';
 import { C, MONO, T } from '../theme';
 import { Banner, Btn, ExtLink, KV, Pill, ScreenTitle } from '../ui/common';
+import { TopUpSheet } from '../ui/TopUpSheet';
 import { isChecking, type GuardedAction } from '../wallet/pendingTx';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { closeOffer, isClosable } from '../wallet/sessionClose';
@@ -45,6 +46,8 @@ export function WalletScreen() {
   const [copied, setCopied] = useState(false);
   // Everything about the device key, the sessions and test SOL lives behind one closed header.
   const [advanced, setAdvanced] = useState(false);
+  const [prepareOpen, setPrepareOpen] = useState(false);
+  const [prepareAmount, setPrepareAmount] = useState<bigint>(TOP_UP_AMOUNTS[0]);
   /** Signers the revoke in flight covers (its buttons spin). */
   const [revoking, setRevoking] = useState<readonly string[]>([]);
   /** Signers the close in flight covers. */
@@ -166,7 +169,7 @@ export function WalletScreen() {
                 title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
                 busy={wallet.busy === 'renew' || checking('renew')}
                 disabled={busy || !sessionKey}
-                onPress={() => void wallet.renewSession(available)}
+                onPress={() => setPrepareOpen(true)}
               />
             ) : null}
             <Text style={styles.sub}>{canRenew ? 'OR ADD SOL' : 'TOP UP & PLAY'}</Text>
@@ -181,7 +184,7 @@ export function WalletScreen() {
                     title={`${formatSol(a)} SOL`}
                     busy={wallet.busy === 'topup'}
                     disabled={busy || !sessionKey}
-                    onPress={() => void wallet.topUpAndPlay(a)}
+                    onPress={() => { setPrepareAmount(a); setPrepareOpen(true); }}
                     style={styles.flex}
                   />
                 ))}
@@ -299,6 +302,7 @@ export function WalletScreen() {
       <View style={styles.row}>
         <ExtLink label="Program on Explorer" url={explorer.address(PROGRAM_ID)} />
       </View>
+      <TopUpSheet visible={prepareOpen} initialAmount={prepareAmount} onClose={() => setPrepareOpen(false)} />
     </ScrollView>
   );
 }

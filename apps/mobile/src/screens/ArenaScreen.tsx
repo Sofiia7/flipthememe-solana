@@ -4,7 +4,7 @@ import { recordEvent } from '../lib/diagnostics';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { RoundStatus, Side } from '@flipthememe/client';
+import { RoundStatus, Side, acceptedStake } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
 import { useSkrNames } from '../chain/skr';
@@ -236,6 +236,9 @@ export function ArenaScreen() {
   const chips = chipStates(BET_AMOUNTS, maxAmount);
   const betAmount = effectiveAmount(amount, BET_AMOUNTS, maxAmount);
   const inOpen = open ? mine.get(open.id) : undefined;
+  const quotedAmount = owner ? betAmount : amount;
+  const upMatch = open ? acceptedStake(open.account.rawUp + quotedAmount, open.account.rawDown, Side.Up, quotedAmount) : null;
+  const downMatch = open ? acceptedStake(open.account.rawUp, open.account.rawDown + quotedAmount, Side.Down, quotedAmount) : null;
   const pendingHere = pending && open && pending.roundId === open.id ? pending : null;
   const working = betting.bet.phase === 'signing' || betting.bet.phase === 'sending' || betting.bet.phase === 'confirming';
   const secondsLeft = open ? Number(open.account.cutoffAt) - nowSec : 0;
@@ -480,6 +483,7 @@ export function ArenaScreen() {
 
       <View style={styles.dock}>
         {open && !inOpen ? <Text style={styles.nextExplanation}>BET #{String(open.id)} · {openSymbol ? `$${openSymbol}` : open.account.tokenMint.slice(0, 6)} / SOL · x{multiplier.replace(/^x/, '')} on matched stake only; excess returned. Match can change.</Text> : null}
+        {open && !inOpen && !pendingHere && upMatch !== null && downMatch !== null ? <Text style={styles.nextExplanation}>Current book estimate for {formatSol(quotedAmount)} SOL: UP plays {formatSol(upMatch)}, back {formatSol(quotedAmount - upMatch)} · DOWN plays {formatSol(downMatch)}, back {formatSol(quotedAmount - downMatch)}. Final match is set after entry.</Text> : null}
         {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
         {panel.kind === 'mine' && open ? (
           <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} token={open.account.tokenMint !== tokenMint ? openSymbol : null} />

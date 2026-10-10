@@ -237,6 +237,34 @@ test('profile stats count kept rows like chain rows', () => {
   assert.deepEqual(withKept, { rounds: 6, wins: 2, losses: 1, refunds: 1, open: 1, net: 96_000_000n - 100_000_000n + 96_000_000n });
 });
 
+test('history saves keep the newest snapshot despite overlapping requests and recover after a failed write', async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const start = new Promise<void>(resolve => { started = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const data = new Map<string, string>();
+  let calls = 0;
+  const store = createHistoryStore({
+    getItem: async key => data.get(key) ?? null,
+    setItem: async (key, value) => {
+      const call = ++calls;
+      if (call === 1) { started(); await blocked; }
+      if (call === 3) throw new Error('storage unavailable');
+      data.set(key, value);
+    },
+  });
+  const older = store.save(OWNER, [kept(1n)]);
+  const newer = store.save(OWNER, [kept(2n), kept(1n)]);
+  await start;
+  assert.equal(calls, 1, 'newer write waits instead of finishing before the older write');
+  release();
+  await Promise.all([older, newer]);
+  assert.deepEqual(await store.load(OWNER), [kept(2n), kept(1n)]);
+  await assert.rejects(store.save(OWNER, [kept(3n)]), /storage unavailable/);
+  await store.save(OWNER, [kept(4n)]);
+  assert.deepEqual(await store.load(OWNER), [kept(4n)]);
+});
+
 test('storage: versioned entry per wallet, round trip, unreadable rows dropped', async () => {
   const records = [kept(3n, { claimed: true, accepted: null, payout: null }), kept(2n)];
   assert.deepEqual(parseHistory(serializeHistory(records)), records);

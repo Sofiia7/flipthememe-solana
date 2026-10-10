@@ -33,13 +33,18 @@ export function TopUpSheet({
   visible,
   onClose,
   call = null,
+  initialAmount,
 }: {
   visible: boolean;
   onClose: () => void;
   call?: { side: number; text: string } | null;
+  initialAmount?: bigint;
 }) {
   const { wallet, my, myReady, rpc, arena, offsetSec } = useApp();
   const [amount, setAmount] = useState<bigint>(TOP_UP_AMOUNTS[0]);
+  useEffect(() => {
+    if (visible && initialAmount !== undefined && TOP_UP_AMOUNTS.some(a => a === initialAmount)) setAmount(initialAmount);
+  }, [visible, initialAmount]);
   const [started, setStarted] = useState(false);
   const [faucetTried, setFaucetTried] = useState(false);
   const [fallbackOpen, setFallbackOpen] = useState(false);
