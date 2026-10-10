@@ -8,6 +8,8 @@ import { observeSend } from '../chain/sendPhase';
 import { checkSignature, sendErrorProof, settleSendError, settledError, type TxCheck } from '../chain/txStatus';
 import { humanError } from '../lib/errors';
 import { playSound } from '../sound/sound';
+import { recordEvent } from '../lib/diagnostics';
+import { recordLatency } from '../lib/requestLog';
 import { clearPendingBet, savePendingBet, type PendingBet } from './pendingBet';
 import type { SessionKey } from './sessionKey';
 
@@ -45,6 +47,7 @@ export function useBetting(input: {
       if (busy.current) return; // double-tap guard
       if (!owner || !sessionKey) return;
       busy.current = true;
+      const startedAt = Date.now();
       setBet({ phase: 'signing', roundId, side, amount, signature: null, error: null, at: Date.now() });
       // The arcade feedback comes with the tap, not with the confirmation a second or two later
       // (playSound is silent when muted in Profile).
@@ -53,6 +56,8 @@ export function useBetting(input: {
       // Set once the bet is stored and about to go out: from then on only the chain decides its fate.
       let sent: PendingBet | null = null;
       const landed = (signature: string) => {
+        recordLatency('bet_confirmation', Date.now() - startedAt);
+        recordEvent('bet_confirmed');
         setBet((s) => (s.signature === signature ? { ...s, phase: 'confirmed', at: Date.now() } : s));
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
         onChanged();
@@ -62,9 +67,12 @@ export function useBetting(input: {
         const signed = await signLocally(rpc, sessionKey.signer, [ix]);
         const signature = getSignatureFromTransaction(signed.transaction);
         const pending: PendingBet = { owner, roundId, side, amount, signature, at: Date.now(), lastValidBlockHeight: signed.lastValidBlockHeight };
-        await savePendingBet(pending).catch(() => undefined);
+        // Do not broadcast money-changing transactions without a durable recovery record.
+        try { await savePendingBet(pending); }
+        catch { throw new Error('Cannot save transaction recovery data. Bet not sent. Free device storage and retry.'); }
         sent = pending;
         onPending(pending);
+        recordEvent('bet_sent');
         setBet((s) => ({ ...s, phase: 'sending', signature }));
         const tracked = observeSend(rpc, () => setBet((s) => (s.signature === signature ? { ...s, phase: 'confirming' } : s)));
         await sendAndConfirm(tracked, signed);
@@ -93,6 +101,7 @@ export function useBetting(input: {
           shown = settledError(tx.signature, verdict, check, error);
         }
         setBet((s) => ({ ...s, phase: 'failed', error: humanError(shown, 'bet'), at: Date.now() }));
+        recordEvent('bet_failed');
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
       } finally {
         busy.current = false;

@@ -37,14 +37,15 @@ export function LeaderboardScreen() {
     const interval = setInterval(() => setRefresh((n) => n + 1), 60_000);
     return () => { active = false; controller.abort(); clearInterval(interval); };
   }, [refresh]);
-  const stale = board && Date.now() - Date.parse(board.updatedAt) > 10 * 60_000;
+  const indexed = board?.indexedAt ? Date.parse(board.indexedAt) : NaN;
+  const stale = board && (!Number.isFinite(indexed) || indexed > Date.now() + 30_000 || Date.now() - indexed > 10 * 60_000);
   return <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefresh((n) => n + 1)} tintColor={C.accent} />}>
     <ScreenTitle text="LEADERBOARD" />
     <Text style={T.label}>LAST 7 DAYS · NET TEST SOL</Text>
     <Text style={T.subtle}>Players only. Ranked by returns minus stakes, after game fees. Network fees and account rent are excluded.</Text>
     {error ? <Text style={styles.error}>{error}</Text> : null}
     {stale ? <Text style={styles.error}>Updates are delayed. Showing the last recorded results.</Text> : null}
-    {board ? <Text style={T.dim}>Updated {new Date(board.indexedAt ?? board.updatedAt).toLocaleTimeString()} · tracking since {new Date(board.coverageSince).toLocaleDateString()}. Earlier closed bets may be missing.</Text> : null}
+    {board ? <Text style={T.dim}>Indexed {Number.isFinite(indexed) ? new Date(indexed).toLocaleTimeString() : 'not confirmed'} · tracking since {new Date(board.coverageSince).toLocaleDateString()}. Earlier closed bets may be missing.</Text> : null}
     {board?.directions ? <Text style={T.subtle}>Market sample, last {board.directions.windowMinutes} min: {board.directions.up} UP · {board.directions.down} DOWN. Outcomes are not guaranteed to be 50/50.</Text> : null}
     {board?.players.length === 0 ? <Text style={T.subtle}>No settled player bets yet.</Text> : null}
     {board?.players.map((p) => <View key={p.owner} style={[styles.row, p.owner === wallet.owner && styles.mine]}>

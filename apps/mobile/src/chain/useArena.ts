@@ -14,6 +14,7 @@ import {
   type RoundView,
 } from './fetch';
 import { shareRounds } from './roundStore';
+import { needsPositionScan } from './positionCache';
 import { rateLimitWaitMs, type SolanaRpc } from './rpc';
 
 /** Rounds read per poll: the upcoming / open one, two in flight and the latest finals. */
@@ -51,6 +52,7 @@ export function useArena(rpc: SolanaRpc, active = true): ArenaData & { refresh: 
   activeRef.current = active;
   // Players by round id. Only a new bet changes who is in a round; claims after the result change nothing the arena shows.
   const positionCache = useRef(new Map<bigint, PositionView[]>());
+  const finalSynced = useRef(new Set<bigint>());
   // Played final rounds (kept as read) and closed empty ones (null), by id: neither is read again.
   const settledRef = useRef(new Map<bigint, RoundView | null>());
 
@@ -103,6 +105,7 @@ export function useArena(rpc: SolanaRpc, active = true): ArenaData & { refresh: 
 
       const cache = positionCache.current;
       for (const id of [...cache.keys()]) if (!inWindow.has(id)) cache.delete(id);
+      for (const id of [...finalSynced.current]) if (!inWindow.has(id)) finalSynced.current.delete(id);
       await Promise.all(
         rounds.map(async (r) => {
           const a = r.account;
@@ -111,12 +114,13 @@ export function useArena(rpc: SolanaRpc, active = true): ArenaData & { refresh: 
             return;
           }
           const cached = cache.get(r.id);
-          if (cached && (cached.length >= a.positionCount || a.status === RoundStatus.Final)) return;
+          if (!needsPositionScan(cached?.length ?? null, a.positionCount, a.status === RoundStatus.Final, finalSynced.current.has(r.id))) return;
           // Another tab is open: the players wait until the arena is on screen again.
           if (!visible) return;
           const list = await fetchPositionsBy(rpc, OFFSETS.positionRound, r.address);
           list.sort((x, y) => (x.account.stake > y.account.stake ? -1 : x.account.stake < y.account.stake ? 1 : 0));
           cache.set(r.id, list);
+          if (a.status === RoundStatus.Final && list.length >= a.positionCount) finalSynced.current.add(r.id);
         }),
       );
       const positions = new Map<bigint, PositionView[]>();

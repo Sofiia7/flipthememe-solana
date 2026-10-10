@@ -149,7 +149,7 @@ describe('scheduler', () => {
   test('creates the next minute round 10 s before it opens, sized by the pool depth, once', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT));
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT, { maxBank: 40_000_000n }));
     h.store.add(POOL, obs(now * 1000 - 400, 1));
     await tick(h, now);
     const ix = only(h);
@@ -160,7 +160,7 @@ describe('scheduler', () => {
     assert.equal(readI64(ix.data, 80), BigInt(MINUTE + 60)); // opens_at: next minute boundary
     assert.equal(readI64(ix.data, 88), BigInt(MINUTE + 120)); // cutoff_at
     assert.equal(readI64(ix.data, 128), BigInt(MINUTE + 60 + 760)); // settle_deadline
-    assert.equal(readU64(ix.data, 136), 160_000_000n); // max_bank = 400 SOL / 2500
+    assert.equal(readU64(ix.data, 136), 120_000_000n); // shared pool budget: 400 SOL / 2500 minus 0.04 committed
     assert.deepEqual(ix.accounts, [await configAddress(), await roundAddress(10n), h.signer.address, SYSTEM_PROGRAM_ID]);
     assert.ok(h.logs.some((l) => l.step === 'create' && l.round === 10n && typeof l.sig === 'string'));
     // The chain has not caught up yet (the fake never applies it): no second create.
@@ -194,7 +194,7 @@ describe('scheduler', () => {
       event: 'round_skipped_shallow_pool',
       pool: POOL,
       reserve: SOL,
-      maxBank: 400_000n,
+      maxBank: 0n,
       minBank: 20_000_000n,
     });
   });
@@ -304,7 +304,7 @@ describe('scheduler', () => {
   test('at most two transactions at once, time-critical steps first', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.store.add(POOL, obs(now * 1000 - 300, 1));
+    h.store.add(POOL, { ...obs(now * 1000 - 300, 1), quoteAmount: 10_000n * SOL });
     h.chain.rounds.set(9n, makeRound(9n, BigInt(now - 65), POOL, MINT, { rawUp: 50_000_000n, positionCount: 1 })); // fill
     h.chain.rounds.set(8n, makeRound(8n, BigInt(now - 102), POOL, MINT)); // strike
     h.chain.rounds.set(7n, makeRound(7n, BigInt(now - 400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.NotActivated })); // close
@@ -1130,7 +1130,7 @@ describe('scheduler: clock drift and a second keeper', () => {
   test('a round this process created is not a sign of anything', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT));
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT, { maxBank: 40_000_000n }));
     h.store.add(POOL, obs(now * 1000 - 300, 1));
     await tick(h, now);
     assert.equal(only(h).name, 'createRound'); // round 10, opens at MINUTE + 60

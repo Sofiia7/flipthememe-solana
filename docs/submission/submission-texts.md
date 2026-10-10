@@ -1,50 +1,48 @@
-# Submission texts (draft)
+# Submission texts — audit revision, 10 October 2026
 
-Fields in [brackets] are filled in right before submitting.
+These texts describe the implementation. Replace bracketed links and attach verification for the exact public APK before submitting. A build, a devnet deployment and a physical Seeker acceptance test are separate evidence.
 
 ## Shared facts
 
-- **Name:** FlipTheMeme
-- **One-liner:** UP/DOWN calls on the next 1-minute move of a busy Solana memecoin, matched 1:1 against the other side, built for Seeker.
-- **Links:** repository https://github.com/Sofiia7/flipthememe-solana · APK [release link] · demo video [video link] · pitch deck [deck link] · program `5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz` on devnet.
-- **Network:** Solana devnet for money; Solana mainnet (read only) for prices.
+- Name: FlipTheMeme.
+- One-liner: A shared mobile arena for UP/DOWN calls on a Solana memecoin’s next one-minute TOKEN/SOL move, with a bounded stake and one-to-one matching.
+- Repository: https://github.com/Sofiia7/flipthememe-solana
+- Install page: https://sol.flipthememe.com/get
+- Demo video: [record the current APK on Seeker; add link]. Pitch: [add current deck link].
+- Money: Solana devnet test SOL. Price reads: Solana mainnet PumpSwap. Program: `5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`.
 
-## Eligibility
+## Description
 
-The Solana code base, the program, the keeper and the app were started on 10 September 2026 in this repository (its first commit is from that day). Only the round rules and the research behind them came from an earlier project on Robinhood Chain, whose code is a separate repository and is not part of this submission.
+Memecoin attention moves quickly. FlipTheMeme turns a view about a token into a small, shared UP/DOWN call without buying that token. The arena opens rounds when market and oracle checks pass. A scheduled round accepts entries for 60 seconds, waits 30 seconds, averages a ten-second reference window, then averages a ten-second exit window one minute later. A result normally arrives 100–160 seconds after entry, plus network confirmation and claim time.
 
-## Description (long form)
+The price is TOKEN/SOL, not USD. Stakes match one to one against the other side. A win returns 1.96 times the matched stake at the configured 2% fee; unmatched surplus comes back separately in the same payout. A tie, no match, unavailable price or expired settlement returns the stake under the program’s refund rules. Position rent is a separate refundable account deposit, and device transaction fees are another separate cost. The receipt shows stake, matching, total return and net change.
 
-**Problem.** New memecoins launch on Solana all day, and the first hours are where the attention is. Yet acting on a view about a hot new token usually means buying it: rug risk, slippage and a bag to watch. There is no simple way to say "this goes up in the next minute" with a bounded stake, together with other people.
+Mobile Wallet Adapter prepares a vault and a limited device session. The default is one hour, a 0.02 SOL maximum bet and a conservative turnover allowance; the player can choose longer sessions and larger limits. Turnover is permission to spend cumulatively, not a maximum loss guarantee. Existing device sessions remain active until revoked. The device key cannot withdraw, increase its limits or extend its own lifetime. A remembered first call is placed only into its original round with its original amount if it is still valid after wallet approval. Otherwise the app asks for a new call. Subsequent calls use the device key without another wallet approval.
 
-**What FlipTheMeme does.** One shared arena on your phone. Every minute a new round opens on one busy memecoin, preferably one whose PumpSwap pool is 10-120 minutes old. You call UP or DOWN on its price in SOL (TOKEN/SOL). Your stake is matched one to one against the other side: only the amount both sides cover plays, the unmatched surplus comes back without a fee, and a win pays 1.96x the matched part of your stake. A 1-minute move, result in about 2 minutes: it arrives roughly 100-160 seconds after your tap, plus confirmations, and is credited to your in-app balance. You do not buy the token.
+The app combines pixel identities carried inside positions, result receipts, streaks, a friend score, verified .skr names, challenge links, Android sharing, haptics and result reminders. The friend status comes from a confirmed on-chain position, not inferred online presence. Players can inspect multiple active calls and keep the chart, round clock and token identity on the same selected round. There are no practice predictions.
 
-**Rules shaped by research.** The rules were carried over from research on an earlier version of the project on Robinhood Chain, not on Solana: 743,127 swaps in 15 Uniswap v3 memecoin pools over 14 days (15-29 September 2026). There, a strike taken before the bet let a bot win 89% of resolved 60-second matches against a fixed-payout vault, and in simulations at 2-10 bets per hour a payout multiplier that follows the book cost ordinary players 9-22% of their accepted stake. So in FlipTheMeme:
-- the start price (the strike, shown as START PRICE in the app) is the average pool price in a 10-second window that starts 30 seconds after entry closes, so it is still unknown when anyone taps;
-- a matched 1:1 bank pays the same 1.96x whatever the book looks like, so betting both sides of a skewed book only costs the fee;
-- the matched bank is capped by the pool's SOL reserve divided by 2,500 (and by 1 SOL), which limits what one round can win relative to the pool;
-- no match, a tie, missing prices or a missed deadline return the stake in full (refunds are free since 5 October 2026);
-- the fee is 2% of the matched bank on an UP or DOWN result.
+## Oracle and custody trust
 
-The devnet timing has not been measured against bots yet, and no Solana backtest has been run.
+The active price protocol uses a detached canonical certificate. An attestor samples the mainnet pool and freezes one ordered sample list for each round/window, signs a domain-separated message bound to the program, round and window, and publishes the certificate. A keeper or another relayer can submit the same certificate; the program verifies its Ed25519 signature and computes the arithmetic mean of those signed samples. Empty canonical samples produce the protocol’s unpriceable/refund path. These are discrete observations, not a time-weighted or independently verified cross-chain oracle.
 
-**Mobile first.** Mobile Wallet Adapter is used where it matters: one approval deposits test SOL, opens a 7-day session and funds a device key; for a first-time player the wallet connects and approves in that same step. A guest's first tap on UP or DOWN is remembered and placed by itself when that approval lands, so the first call takes one wallet visit. After that every call is one tap; the device key can bet up to a per-bet limit, and the program gives it no instruction to withdraw or raise its own limit. A wallet without devnet SOL gets 0.2 test SOL from a GET TEST SOL button. Players come back to a streak, a daily line, a score against the friend they challenged, a one-tap "same call / flip it" after a result, and a local notification about 15 seconds after their round ends when they have left the app. A profile check of the Seeker Genesis Token on mainnet adds a verified SEEKER badge. Seed Vault Wallet on Seeker and Solflare work on devnet. Each player has a pixel face that rides inside every bet (8 bytes, no NFT, no extra transaction). Android Share sends a "take the other side" challenge with a round link that opens the app on that round, and outside a bet "Play with a friend" sends an invitation the same way.
+The attestor and keeper are currently operated by the project team. The attestor is a separate signing role, not an independent organization. Its key can sign false price data; the signature proves authorization and message integrity, not market truth. The upgrade authority can replace the program and remains a custody trust assumption. Claims and expired refunds are permissionless instructions, but still require a functioning RPC and a transaction fee payer. Key separation and deadline refunds reduce specific failure modes; they do not remove operator trust.
 
-**Price source and trust.** The keeper reads the PumpSwap pool's vault balances on mainnet every second. Every observation used for a strike or an exit (mainnet slot and price) is written into the devnet transaction, and the program computes the plain mean itself. The devnet program cannot read mainnet, so a second, independent signer checks every price: an attestor on Cloudflare samples the same pool on its own and co-signs a strike or exit only when the keeper's samples match its reads (exactly at shared slots, within 1.5% on the mean). The program refuses a price without that signature, and the admin key alone cannot switch the attestor off. Price, house, treasury and upgrade authority sit on separate keys. Claims do not depend on any of them, and after the deadline anyone can refund a round, so a withheld price ends in a refund, never in a wrong result.
+## Architecture and reliability
 
-**Architecture.** Anchor program on devnet (vaults, sessions, rounds, positions), a keeper crank (creates rounds, fills the short side with a house account capped on chain, posts prices, credits winners, returns position rent), and an Expo / React Native Android app that reads devnet and mainnet directly: there is no game server. Three Cloudflare Workers co-sign prices, serve shared round links and serve live X posts.
+An Anchor program holds vaults, sessions, rounds and positions. A keeper selects markets, schedules rounds, bootstraps the short side with bounded house fills, relays certificates, claims payouts and returns account rent. An Expo / React Native Android app reads the chain. Cloudflare services provide the attestor, challenge/install pages, a signed keeper index and social posts.
 
-**State.** Program deployed on devnet with 74 LiteSVM scenarios, 17 payout unit tests and a payout invariant test over random books; the TypeScript client is checked byte for byte against the program (730+ TypeScript tests across the client, keeper, attestor, Workers and the app); signed release APK built in GitHub Actions; keeper and attestor running continuously. Since the 6 October upgrades, position rent is held from the game balance and returns to it a day after the round, house fills are capped on chain, every priced round carries the attestor's signature, a strike is accepted only before the exit window opens, every round the admin schedules is bounded on chain, and a house that sits on an expired or unpriceable round forfeits its stake to the players. Before the 12 October deadline: the arena's pool choice penalises one-sided order flow, every minute also gets a "shadow" outcome so the share of UP rounds is measured rather than assumed, the house budget is spread over the UTC day, and the attestor signs one list of samples per round and window. Known devnet limits are listed in the README: both signers are run by us, the mean is not time-weighted, history is kept on the phone. [devnet rounds settled: __, counted with services/keeper/scripts/census.ts and stats.ts; rounds the keeper opened but nobody played are not counted as use]
+The audit revision adds separate liveness/readiness, fresh sampling checks, bounded RPC failover, a scheduler refusal when dependencies are unhealthy, aggregate exposure budgeting across overlapping rounds on the same pool, and archive-before-close gating. The signed archive preserves newly indexed final positions after account closure; mobile recovery currently reads the newest 500 records. It cannot reconstruct records already closed before indexing. A fresh public status publication does not make an old leaderboard scan fresh.
 
-**Next.** Solana dApp Store release, then a mainnet gate: an audit, the admin key in a multisig, the attestor run by an independent party, and round length set from measurements on Solana data. Later: SGT perks and SKR cosmetics (.skr names are in already).
+## Evidence to attach
 
-## CLOCK IN specifics
+Use the exact release manifest: commit, APK version/SHA-256, dependency lock hash, program source hashes, build URL. Separately attach deployed-program byte verification and the program test artifact. Attach the latest TypeScript test and typecheck logs and a completed physical-device matrix from `docs/android-acceptance.md`.
 
-- **Mobile integration:** Mobile Wallet Adapter (authorize, sign transactions; tested with Seed Vault Wallet on Seeker and with Solflare), device key in Android secure storage with a list of every session and one-tap revoke, Seeker ID (.skr) names next to players, Android Share with App Links, haptics, built and tested on Seeker.
-- **SKR:** not integrated in this build (planned: cosmetics paid in SKR).
+Do not claim continuous healthy operation, measured retention, anti-bot profitability, independent oracle operation or current Seeker acceptance without evidence. Earlier research was on Robinhood Chain/Uniswap v3 and is hypothesis-generating; it does not validate PumpSwap execution or Solana latency. `docs/research/solana-validation.md` defines the missing held-out replay, manipulation and economics checks. Empty/shadow rounds are observations, not user activity.
 
-## Perps and Prediction Markets specifics
+## CLOCK IN emphasis
 
-- **Market type:** short-horizon binary prediction market on the TOKEN/SOL spot price of busy memecoins, matched 1:1 peer to peer, settled on chain.
-- **Oracle:** TOKEN/SOL from the pool's vault balances on mainnet; every sample is in the settlement transaction, and an independent attestor must co-sign each strike and exit before the program accepts it.
-- **Why it fits:** it offers prediction markets on tokens whose pools are minutes to hours old, which few venues offer, resolves in about 2 minutes (roughly 100-160 seconds after a call), and pays from a matched bank; the devnet house fill is a bootstrap for one-sided rounds, not part of the mainnet design.
+Show the actual phone journey: understand TOKEN/SOL → choose a side and amount → inspect and approve session permissions → see a confirmed position → understand matching and the delayed reference → inspect the payout receipt → share and rejoin a friend → inspect and revoke sessions or withdraw. Use a three-minute video of the exact submitted APK. State MWA, secure device storage, .skr, App Links, notifications and SGT verification as implemented features; claim device compatibility only for completed acceptance runs. SKR purchases are not implemented.
+
+## Solana Perps & Prediction Markets emphasis
+
+This is a short-horizon binary spot prediction market, not leveraged perpetual futures. Its strongest differentiators are the delayed reference, fixed payout on the matched stake, visible unmatched refunds and mobile session permissions. Its largest remaining validation risks are oracle/custody trust, manipulation of young pools, thin matching, correlated overlapping exposure and operation through RPC outages. Confirm organizer eligibility before submitting to a separate competition. Mainnet requires independent review, measured PumpSwap adversarial replay, sustainable costs and a stronger authority/oracle model.

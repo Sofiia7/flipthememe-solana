@@ -1,5 +1,19 @@
 name: Reproducible program
 on:
+  pull_request:
+    paths:
+      - 'programs/**'
+      - 'packages/client/**'
+      - 'Cargo.*'
+      - 'Anchor.toml'
+      - '.github/workflows/program.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'programs/**'
+      - 'packages/client/**'
+      - 'Cargo.*'
+      - 'Anchor.toml'
   workflow_dispatch:
 permissions:
   contents: read

@@ -38,7 +38,7 @@ export function HistoryScreen() {
       ListHeaderComponent={
         <View style={styles.headBox}>
           <ScreenTitle text="HISTORY" />
-          <Text style={T.subtle}>Newest first. Payouts go to your game balance.</Text>
+          <Text style={T.subtle}>Newest first. Payouts go to your game balance. Indexed results restore from the server archive (latest 500 per wallet); earlier closed, unindexed bets may be missing.</Text>
           {my.error ? <Banner tone="warn" text={`Could not refresh: ${my.error}`} /> : null}
         </View>
       }

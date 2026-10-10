@@ -15,7 +15,7 @@ import { SESSION_SPACE } from '../wallet/sessionList';
 import type { SolanaRpc } from './rpc';
 
 export type RoundView = { id: bigint; address: Address; account: RoundAccount };
-export type PositionView = { address: Address; account: PositionAccount };
+export type PositionView = { address: Address; account: PositionAccount; lamports?: bigint };
 export type SessionView = { address: Address; account: SessionAccount };
 export type RawAccount = { data: Uint8Array; lamports: bigint };
 
@@ -56,7 +56,7 @@ export async function fetchPositionsBy(rpc: SolanaRpc, offset: number, key: Addr
   const out: PositionView[] = [];
   for (const row of rows) {
     try {
-      out.push({ address: row.pubkey, account: decodePosition(accountBytes(row.account.data)) });
+      out.push({ address: row.pubkey, account: decodePosition(accountBytes(row.account.data)), lamports: BigInt(row.account.lamports) });
     } catch {
       // Not a Position (wrong discriminator): skip.
     }

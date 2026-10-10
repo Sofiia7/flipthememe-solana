@@ -33,13 +33,17 @@ export function useRents(rpc: SolanaRpc, enabled = true): Rents | null {
       return undefined;
     }
     let alive = true;
-    load(rpc)
-      .then((r) => {
-        if (alive) setRents(r);
-      })
-      .catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = 2_000;
+    const attempt = () => {
+      void load(rpc).then((r) => { if (alive) setRents(r); }).catch(() => {
+        if (alive) { timer = setTimeout(attempt, delay); delay = Math.min(delay * 2, 30_000); }
+      });
+    };
+    attempt();
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [rpc, enabled]);
   return rents;

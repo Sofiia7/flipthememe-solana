@@ -4,6 +4,8 @@ import * as Clipboard from 'expo-clipboard';
 import { PROGRAM_ID } from '@flipthememe/client';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS, explorer } from '../config';
 import { chainNowSec } from '../chain/useChainClock';
+import { useRents } from '../chain/rent';
+import { RENT_FALLBACK } from '../wallet/topUpPlan';
 import { useSessions } from '../chain/useSessions';
 import { formatDateTime, formatDuration, formatSol, shortAddress, sol } from '../lib/format';
 import { useNow } from '../lib/usePolling';
@@ -65,6 +67,8 @@ export function WalletScreen() {
   const available = my.vault?.available ?? 0n;
   const canRenew = canRenewSession({ myReady, available, minStake, status: myStatus, keyLamports: my.keyLamports });
   const locked = my.vault?.locked ?? 0n;
+  const rents = useRents(rpc);
+  const parkedRent = my.positions.reduce((sum, p) => sum + (p.lamports ?? rents?.position ?? RENT_FALLBACK.position), 0n);
   const checking = (action: GuardedAction, target?: string) => isChecking(wallet.pendingTx, action, target);
 
   const deviceKey = sessionKey?.address ?? null;
@@ -75,6 +79,7 @@ export function WalletScreen() {
   }, [sessions.list, my.sessionAddress, my.session, deviceKey, nowSec, minStake]);
   const shownRows = rows.slice(0, MAX_SESSION_ROWS);
   const allSigners = revocableSigners(rows);
+  const aggregateAllowance = rows.filter(r => r.revocable).reduce((sum, r) => sum + (r.budget > r.spent ? r.budget - r.spent : 0n), 0n);
   const revokeChecking = checking('revoke');
   const revoke = (signers: readonly string[]) => {
     setRevoking(signers);
@@ -150,7 +155,12 @@ export function WalletScreen() {
             <Text style={T.label}>GAME BALANCE</Text>
             <KV k="Available" v={myReady ? sol(available) : '...'} tone="up" />
             <KV k="In play" v={myReady ? sol(locked) : '...'} tone="gold" />
-            <Text style={T.dim}>Winnings land here.</Text>
+            <KV k="Returnable position rent (estimate)" v={myReady ? sol(parkedRent) : '...'} />
+            <KV k="Device fee balance" v={keyLamports !== null ? sol(keyLamports) : '...'} />
+            <Text style={T.dim}>Winnings and unmatched stake return to Available. Each bet also parks about {formatSol(rents?.position ?? RENT_FALLBACK.position)} SOL in account rent. The keeper returns it after 24 hours and archive confirmation; network outages can delay it. Device fees are separate and can be returned from Advanced.</Text>
+            <KV k="All active keys: turnover left" v={sessions.list === null ? 'checking all devices...' : sol(aggregateAllowance)} />
+            <Text style={T.dim}>Turnover is not a loss budget. Every active device can use the shared available balance, within its own limits.</Text>
+            {allSigners.length > 0 ? <Btn kind="danger" small title={`REVOKE ALL KEYS (${allSigners.length})`} busy={wallet.busy === 'revoke' || revokeChecking} disabled={busy || sessions.list === null} onPress={() => revoke(allSigners)} /> : null}
             {canRenew ? (
               <Btn
                 title={checking('renew') ? 'CHECKING...' : `PLAY WITH MY ${formatSol(available)} SOL`}
@@ -184,6 +194,7 @@ export function WalletScreen() {
               disabled={busy || available <= 0n}
               onPress={() => void wallet.withdrawAll(available)}
             />
+            <Text style={T.dim}>Withdraw sends Available to your wallet after confirmation. In-play stakes wait for result/refund; parked rent returns later. No new bet is needed to withdraw.</Text>
           </View>
 
           <Pressable

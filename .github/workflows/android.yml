@@ -66,11 +66,7 @@ jobs:
           restore-keys: pnpm-store-${{ runner.os }}-
 
       - name: Install dependencies
-        run: |
-          if ! pnpm install --frozen-lockfile; then
-            echo "::warning::pnpm install --frozen-lockfile failed; retrying without the frozen lockfile"
-            pnpm install --no-frozen-lockfile
-          fi
+        run: pnpm install --frozen-lockfile
 
       - uses: actions/setup-java@v6
         with:
@@ -162,6 +158,16 @@ jobs:
           path: ${{ steps.release.outputs.path }}
           if-no-files-found: error
           retention-days: 30
+
+      - name: Bind APK to source, program and dependency manifest
+        env:
+          RELEASE_APK: ${{ steps.release.outputs.path }}
+        run: node apps/mobile/scripts/release-manifest.mjs "$RELEASE_APK" "$RUNNER_TEMP/release-manifest.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FlipTheMeme-release-manifest
+          path: ${{ runner.temp }}/release-manifest.json
+          if-no-files-found: error
 
       # ---- debug development client (no secrets; standard debug keystore) ----
       - name: Gradle assembleDebug (development client)

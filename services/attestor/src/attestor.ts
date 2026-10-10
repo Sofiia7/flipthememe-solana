@@ -26,6 +26,7 @@
  * it. Every attempt that reaches the samples counts against ATTEST_MAX_TRIES per pair
  * (`too_many_attempts`). Both live in SQLite (table attest_windows), so an eviction forgets nothing.
  */
+import { readiness } from './readiness.ts';
 import {
   PROGRAM_ID,
   configAddress,
@@ -762,6 +763,7 @@ export class AttestorCore {
         exit: this.windowHealth(windowOf(r, 'exit')),
       }));
     const body: Record<string, unknown> = {
+      readiness: readiness({ now: this.now(), refreshedAt: this.refreshedAt, oracleMatches: this.oracle !== null && this.oracle.attestor === attestor, keyOk: !keyError && !configError, windows: pendingWindows(this.rounds?.values() ?? []).map(w => ({ ...w, lastSampleAt: (this.sql.exec('SELECT MAX(at_ms) AS last FROM samples WHERE pool = ? AND at_ms >= ? AND at_ms < ?', w.pool, w.startMs, w.endMs).toArray()[0] as { last: number | null }).last })), lastSampleAt: this.lastSample?.atMs ?? totals.last }),
       attestor,
       priceMode: 'detached-canonical',
       ...(keyError ? { keyError } : {}),

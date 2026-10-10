@@ -185,10 +185,10 @@ function MatchedLine({ rawUp, rawDown, minBank, side, stake }: { rawUp: bigint; 
     return <Text style={[styles.matchedLine, { color: C.neonYellow }]}>NO MATCH - stake back</Text>;
   }
   const accepted = acceptedStake(rawUp, rawDown, side as Side, stake);
-  if (accepted === null || accepted >= stake) return null;
+  if (accepted === null) return null;
   return (
     <Text style={styles.matchedLine}>
-      {formatSol(accepted)} playing · {formatSol(stake - accepted)} back
+      Matched now {formatSol(accepted)} · excess {formatSol(stake - accepted)} back. Can change until entry closes.
     </Text>
   );
 }

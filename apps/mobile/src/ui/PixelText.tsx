@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react';
-import { PixelRatio, View, type StyleProp, type ViewStyle } from 'react-native';
+import { PixelRatio, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { cellsToPath, textCells } from '../lib/pixelFont';
 
@@ -32,6 +32,8 @@ export const PixelText = memo(function PixelText({
     return { width: t.width, height: t.height, d: cellsToPath(t.cells, 1, 1), shadowD: cellsToPath(t.cells, 2, 2) };
   }, [text]);
   if (width === 0) return null;
+  // SVG lettering cannot wrap. At enlarged system text sizes use native accessible text.
+  if (PixelRatio.getFontScale() > 1.15) return <View style={style}><Text style={{ color, fontWeight: '900', fontSize: size * 7 }}>{text}</Text></View>;
   // One font pixel of padding on every side (two on the right and bottom for the shadow) keeps the glow unclipped.
   const vw = width + 3;
   const vh = height + 3;

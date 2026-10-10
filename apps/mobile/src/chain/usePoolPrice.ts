@@ -25,6 +25,20 @@ const MAX_POOL_POINTS = 4;
 const refCache = new Map<Address, PoolRef>();
 const refLoads = new Map<Address, Promise<PoolRef>>();
 const pointCache = new Map<Address, PricePoint[]>();
+const priceLoads = new Map<Address, Promise<PricePoint>>();
+
+/** Coalesce simultaneous consumers of one pool; never invent or interpolate samples. */
+function priceFor(pool: Address, ref: PoolRef): Promise<PricePoint> {
+  const points = pointCache.get(pool);
+  const latest = points?.[points.length - 1];
+  if (latest && Date.now() - latest.atMs >= 0 && Date.now() - latest.atMs < 500) return Promise.resolve(latest);
+  let pending = priceLoads.get(pool);
+  if (!pending) {
+    pending = withMainnet(rpc => observePrice(rpc, ref)).then(o => ({ atMs: o.atMs, slot: o.slot, price: o.price })).finally(() => priceLoads.delete(pool));
+    priceLoads.set(pool, pending);
+  }
+  return pending;
+}
 
 function trim(points: PricePoint[], nowMs: number): PricePoint[] {
   const cutoff = nowMs - PRICE_HISTORY_MS;
@@ -67,8 +81,7 @@ export function usePoolPrice(pool: Address | null, active = true): PoolFeed {
     if (!pool) return;
     try {
       const ref = await poolRefFor(pool);
-      const o = await withMainnet((rpc) => observePrice(rpc, ref));
-      const point: PricePoint = { atMs: o.atMs, slot: o.slot, price: o.price };
+      const point = await priceFor(pool, ref);
       const previous = pointCache.get(pool) ?? [];
       const last = previous[previous.length - 1];
       // A response from an older slot (failover to a lagging node) would draw a step backwards.

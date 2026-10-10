@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, BackHandler, Easing, Image, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Animated, BackHandler, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { Side } from '@flipthememe/client';
+import { Side, acceptedStake } from '@flipthememe/client';
 import { classifyRounds } from '../chain/phase';
 import { useRents } from '../chain/rent';
+import { useMarketStatus } from '../chain/useMarketStatus';
 import { canRepeatBet, holdsPosition, multiplierText } from '../chain/repeatBet';
 import { chainNowSec } from '../chain/useChainClock';
 import { useSkrNames } from '../chain/skr';
@@ -25,6 +26,7 @@ import { PixelConfetti } from './Confetti';
 import { Gradient } from './Gradient';
 import { NeonButton } from './NeonButton';
 import { PixelText } from './PixelText';
+import { useReduceMotion } from './ArenaClock';
 
 /** The result of one of my rounds: a full-screen win, a short rekt, or a small refund toast. */
 export function ResultLayer({ toast, onClose, top }: { toast: Toast; onClose: () => void; top: number }) {
@@ -45,6 +47,17 @@ function useBackToClose(onClose: () => void) {
 }
 
 /** The run as it stood when this result came in: rounds up to this one only, so a result queued behind another does not count the rounds after it. */
+function useScreenReader(): boolean {
+  const [enabled, setEnabled] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    void AccessibilityInfo.isScreenReaderEnabled().then(value => { if (alive) setEnabled(value); }).catch(() => undefined);
+    const subscription = AccessibilityInfo.addEventListener('screenReaderChanged', setEnabled);
+    return () => { alive = false; subscription.remove(); };
+  }, []);
+  return enabled;
+}
+
 function useStreak(toast: Toast): Streak {
   const { history } = useApp();
   return useMemo(() => streakAsOf(history, toast.roundId), [history, toast.roundId]);
@@ -76,8 +89,10 @@ function useMultiplier(roundId: bigint): string | null {
 
 /** Counts up to `target` lamports in `ms` (bigint all the way, the last frame is exact). */
 function useCountUp(target: bigint, ms: number): bigint {
+  const reduced = useReduceMotion();
   const [value, setValue] = useState(0n);
   useEffect(() => {
+    if (reduced) { setValue(target); return; }
     let frame = 0;
     const start = Date.now();
     const step = () => {
@@ -88,7 +103,7 @@ function useCountUp(target: bigint, ms: number): bigint {
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [target, ms]);
+  }, [target, ms, reduced]);
   return value;
 }
 
@@ -109,6 +124,15 @@ function CountUpSol({ lamports }: { lamports: bigint }) {
   return <Text style={[styles.amount, { textShadowColor: C.neonGreen }]}>+{formatSol(shown)} SOL</Text>;
 }
 
+function ResultReceipt({ toast }: { toast: Toast }) {
+  const { my, history } = useApp();
+  const position = my.positions.find(p => p.round?.id === toast.roundId);
+  const round = position?.round?.account;
+  const stored = history.find(e => e.kind === 'stored' && e.roundId === toast.roundId);
+  const accepted = round ? acceptedStake(round.rawUp, round.rawDown, toast.side as Side, toast.stake) : stored?.kind === 'stored' ? stored.record.accepted : null;
+  return <Text style={{ color: C.text, fontSize: 12, textAlign: 'center' }}>Stake {formatSol(toast.stake)} · matched {accepted === null ? 'checking' : formatSol(accepted)} · unmatched back {accepted === null ? 'checking' : formatSol(toast.stake - accepted)}{ '\n' }Total return {formatSol(toast.payout)} SOL · net {formatSol(toast.payout - toast.stake, { sign: true })} SOL. Account rent returns separately.</Text>;
+}
+
 /**
  * "SAME CALL" and "FLIP IT": the same stake on the round open now, from the result overlay. Shown only
  * while chain/repeatBet.ts finds the bet one the arena would accept too; a tap places it with the device
@@ -117,6 +141,7 @@ function CountUpSol({ lamports }: { lamports: bigint }) {
 function RepeatButtons({ toast, onClose, onOffer }: { toast: Toast; onClose: () => void; /** Told whenever the offer appears or goes away. */ onOffer?: (shown: boolean) => void }) {
   const { arena, my, myReady, wallet, betting, pending, offsetSec, rpc, setTab } = useApp();
   const rents = useRents(rpc);
+  const market = useMarketStatus();
   const nowMs = useNow(500);
   const owner = wallet.owner;
   const phase = betting.bet.phase;
@@ -128,7 +153,7 @@ function RepeatButtons({ toast, onClose, onOffer }: { toast: Toast; onClose: () 
           nowSec: chainNowSec(offsetSec, nowMs),
           nowMs,
           arenaUpdatedAt: arena.updatedAt,
-          paused: arena.config?.paused ?? false,
+          paused: (arena.config?.paused ?? false) || market?.phase === 'paused',
           owner,
           myReady,
           session: my.session,
@@ -155,7 +180,9 @@ function RepeatButtons({ toast, onClose, onOffer }: { toast: Toast; onClose: () 
     setTab('arena');
     onClose();
   };
-  const amount = `${formatSol(offer.amount)} SOL`;
+  const target = arena.rounds.find(r => r.id === offer.roundId);
+  const token = target ? peekTokenInfo(target.account.tokenMint)?.symbol : null;
+  const amount = `${formatSol(offer.amount)} SOL · ${token ? '$' + token : 'TOKEN/SOL'} · #${offer.roundId}`;
   return (
     <View style={styles.row}>
       {offer.sameFits ? (
@@ -181,6 +208,7 @@ function RepeatButtons({ toast, onClose, onOffer }: { toast: Toast; onClose: () 
 }
 
 function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  const reading = useScreenReader();
   const { face, setTab, my, wallet } = useApp();
   const myName = useSkrNames(wallet.owner ? [wallet.owner] : []).get(wallet.owner ?? '') ?? null;
   // The round is final first; the keeper's claim moves the money a few seconds later.
@@ -190,6 +218,7 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   // A short phone gets a smaller face and tighter gaps so the two button rows still fit.
   const compact = height < 700;
   const pop = useRef(new Animated.Value(0)).current;
+  const reduced = useReduceMotion();
   const [sharing, setSharing] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
   const info = peekTokenInfo(toast.tokenMint);
@@ -207,15 +236,20 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   useEffect(() => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     playSound('win');
-    Animated.spring(pop, { toValue: 1, friction: 4, tension: 120, useNativeDriver: true }).start();
-  }, [pop]);
+  }, []);
+  useEffect(() => {
+    if (reduced) { pop.stopAnimation(); pop.setValue(1); return; }
+    const animation = Animated.spring(pop, { toValue: 1, friction: 4, tension: 120, useNativeDriver: true });
+    animation.start();
+    return () => animation.stop();
+  }, [pop, reduced]);
 
   // Leaves by itself after a while so a queued result is never stuck behind it.
   useEffect(() => {
-    if (sharing) return undefined;
+    if (sharing || reading) return undefined;
     const t = setTimeout(onClose, WIN_MS);
     return () => clearTimeout(t);
-  }, [sharing, onClose]);
+  }, [sharing, reading, onClose]);
 
   const share = () => {
     setSharing(true);
@@ -245,15 +279,16 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   return (
     <View style={[styles.full, { paddingTop: insets.top + 24, paddingBottom: Math.max(36, insets.bottom + 16) }]}>
       <Gradient colors={GRAD.win} style={StyleSheet.absoluteFill} />
-      <PixelConfetti count={90} seed={seed} />
-      <PixelConfetti count={50} delayMs={600} seed={seed + 1} />
-      <View style={[styles.center, compact && styles.centerCompact]}>
+      {!reduced ? <PixelConfetti count={90} seed={seed} /> : null}
+      {!reduced ? <PixelConfetti count={50} delayMs={600} seed={seed + 1} /> : null}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }}><View style={[styles.center, compact && styles.centerCompact]}>
         <Animated.View style={[styles.faceRing, { borderColor: C.neonYellow, boxShadow: `0 0 24px ${C.neonYellow}` }, { transform: [{ scale: pop }] }]}>
           <PixelFace face={face} size={compact ? 104 : 150} expression="happy" />
         </Animated.View>
         <PixelText text="YOU WON" size={titleSize} color={C.neonYellow} glow={C.neonYellow} shadow="#a1157f" />
         {streak ? <PixelText text={streak} size={streakSize} color={C.neonPink} glow={C.neonPink} shadow="#3b0a52" /> : null}
         <CountUpSol lamports={toast.payout - toast.stake} />
+        <ResultReceipt toast={toast} />
         {move ? (
           <Text style={[styles.move, { color: moveColor, textShadowColor: moveColor }]} maxFontSizeMultiplier={FONT_CAP}>
             {move.text} {move.arrow}
@@ -288,7 +323,7 @@ function WinOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
             big
           />
         </View>
-      </View>
+      </View></ScrollView>
     </View>
   );
 }
@@ -309,11 +344,13 @@ function NextRoundButton({ onPress }: { onPress: () => void }) {
 }
 
 function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) {
+  const reading = useScreenReader();
   const { face, setTab, toasts } = useApp();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const compact = height < 700;
   const shake = useRef(new Animated.Value(0)).current;
+  const reduced = useReduceMotion();
   const lost = toast.stake - toast.payout;
   // A calm line about the run, not a mocking one.
   const streak = runLabel(useStreak(toast), 'loss');
@@ -323,10 +360,15 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
   useEffect(() => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => undefined);
     playSound('loss');
-    Animated.sequence(
+  }, []);
+  useEffect(() => {
+    if (reduced) { shake.stopAnimation(); shake.setValue(0); return; }
+    const animation = Animated.sequence(
       [10, -10, 8, -8, 4, 0].map((toValue) => Animated.timing(shake, { toValue, duration: 60, easing: Easing.linear, useNativeDriver: true })),
-    ).start();
-  }, [shake]);
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [shake, reduced]);
 
   // Long enough to read the amount and the run, and held for as long as SAME CALL / FLIP IT is on it (the
   // offer takes itself away before entry closes); a result waiting behind this one does not wait for an offer.
@@ -334,9 +376,10 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
   const queued = toasts.length > 1;
   const shownAt = useRef(Date.now());
   useEffect(() => {
+    if (reading) return;
     const t = setTimeout(onClose, rektCloseDelay({ elapsedMs: Date.now() - shownAt.current, offerShown, queued }));
     return () => clearTimeout(t);
-  }, [offerShown, queued, onClose]);
+  }, [offerShown, queued, reading, onClose]);
 
   const nextRound = () => {
     setTab('arena');
@@ -355,12 +398,13 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
       >
         <Text style={styles.closeXText}>X</Text>
       </Pressable>
-      <View style={[styles.center, compact && styles.centerCompact]}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }}><View style={[styles.center, compact && styles.centerCompact]}>
         <Animated.View style={[styles.faceRing, { borderColor: C.neonRed, boxShadow: `0 0 18px ${C.neonRed}` }, { transform: [{ translateX: shake }] }]}>
           <PixelFace face={face} size={compact ? 88 : 112} expression="sad" />
         </Animated.View>
         <PixelText text="REKT" size={9} color={C.neonRed} glow={C.neonRed} shadow="#3a0614" />
         {lost > 0n ? <Text style={[styles.lost, { textShadowColor: C.neonRed }]}>-{formatSol(lost)} SOL</Text> : null}
+        <ResultReceipt toast={toast} />
         <Text style={styles.meta}>ROUND #{toast.roundId.toString()} WENT {toast.label}</Text>
         {streak ? <Text style={styles.calm}>{streak}</Text> : null}
         {duel.line ? <Text style={styles.duel}>{duel.line}</Text> : null}
@@ -370,24 +414,33 @@ function RektOverlay({ toast, onClose }: { toast: Toast; onClose: () => void }) 
         <View style={styles.row}>
           <NextRoundButton onPress={nextRound} />
         </View>
-      </View>
+      </View></ScrollView>
     </View>
   );
 }
 
 function RefundToast({ toast, onClose, top }: { toast: Toast; onClose: () => void; top: number }) {
+  const reading = useScreenReader();
   const slide = useRef(new Animated.Value(0)).current;
+  const reduced = useReduceMotion();
   useBackToClose(onClose);
   useEffect(() => {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => undefined);
-    Animated.spring(slide, { toValue: 1, friction: 7, useNativeDriver: true }).start();
+  }, []);
+  useEffect(() => {
+    if (reduced) slide.setValue(1);
+    else Animated.spring(slide, { toValue: 1, friction: 7, useNativeDriver: true }).start();
+    return () => slide.stopAnimation();
+  }, [slide, reduced]);
+  useEffect(() => {
+    if (reading) return;
     const t = setTimeout(onClose, REFUND_MS);
     return () => clearTimeout(t);
-  }, [slide, onClose]);
+  }, [reading, onClose]);
   const translateY = useMemo(() => slide.interpolate({ inputRange: [0, 1], outputRange: [-80, 0] }), [slide]);
   return (
     <Animated.View style={[styles.toastWrap, { top, transform: [{ translateY }] }]} pointerEvents="box-none">
-      <Pressable onPress={onClose} style={styles.toast} accessibilityRole="button">
+      <Pressable onPress={onClose} style={styles.toast} accessibilityRole="button" accessibilityLabel={`${toast.title}. ${toast.body}. Dismiss result`}>
         <Text style={styles.toastTitle}>{toast.title}</Text>
         <Text style={styles.toastAmount}>{toast.body}</Text>
       </Pressable>
@@ -441,8 +494,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 14,
     zIndex: 2,
-    width: 40,
-    height: 40,
+    width: 48,
+    height: 48,
     borderWidth: 1,
     borderColor: C.border,
     alignItems: 'center',

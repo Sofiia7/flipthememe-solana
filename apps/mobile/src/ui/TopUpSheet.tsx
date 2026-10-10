@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Side } from '@flipthememe/client';
 import { FAUCET_URL, SESSION_RULES, TOP_UP_AMOUNTS } from '../config';
 import { useRents } from '../chain/rent';
@@ -10,7 +10,8 @@ import { C, MONO } from '../theme';
 import { isChecking } from '../wallet/pendingTx';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { billLines, playRoute, topUpBill, walletNeed } from '../wallet/topUpFlow';
-import { RENT_FALLBACK, topUpPlan } from '../wallet/topUpPlan';
+import { RENT_FALLBACK, topUpPlan, sessionCapFor } from '../wallet/topUpPlan';
+import { SESSION_PRESETS, useSessionChoice, sessionRules, setSessionPolicy, type SessionPreset } from '../wallet/sessionPolicy';
 import { ExtLink } from './common';
 import { NeonButton } from './NeonButton';
 import { PixelText } from './PixelText';
@@ -42,6 +43,9 @@ export function TopUpSheet({
   const [started, setStarted] = useState(false);
   const [faucetTried, setFaucetTried] = useState(false);
   const [fallbackOpen, setFallbackOpen] = useState(false);
+  const policy = useSessionChoice();
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [policyBusy, setPolicyBusy] = useState(false);
   const rent = useRents(rpc, visible);
 
   const { clearResult } = wallet;
@@ -72,7 +76,7 @@ export function TopUpSheet({
   const route = playRoute(wallet.owner);
   const connected = route.kind === 'top-up';
   const walletLamports = myReady ? my.walletLamports : null;
-  const busy = wallet.busy !== null;
+  const busy = wallet.busy !== null || policyBusy || !policy.ready;
   // A sent top up or renew with no answer yet: its button waits for the chain instead of paying again.
   const topUpChecking = isChecking(wallet.pendingTx, 'topup');
   const renewChecking = isChecking(wallet.pendingTx, 'renew');
@@ -102,13 +106,19 @@ export function TopUpSheet({
   });
   // Two lines: what goes into the game, and what the network and the setup take (device key fees, new accounts, the network fee).
   const lines = billLines(plan);
-  const terms = `One-tap bets up to ${formatSol(SESSION_RULES.maxPerBet)} SOL per bet for 7 days. The device key can never withdraw.`;
+  const rules = sessionRules();
+  const terms = `One-tap bets up to ${formatSol(rules.maxPerBet)} SOL per bet. ${SESSION_PRESETS[policy.preset].label}. Top-up turnover allowance: ${formatSol(sessionCapFor(available + amount, rules))} SOL; renew without a deposit: ${formatSol(sessionCapFor(available, rules))} SOL. Turnover allowance is NOT a loss limit. A device key can bet available funds, but never withdraw. Revoke it in Wallet. Other active keys retain their own allowances.`;
+  const choosePolicy = (preset: SessionPreset, maxPerBet: bigint) => {
+    setPolicyBusy(true);
+    void setSessionPolicy(preset, maxPerBet).then(() => { setPolicyError(null); }).catch(() => setPolicyError('Cannot save session choice. Retry before approving.')).finally(() => setPolicyBusy(false));
+  };
 
   // The wallet is connected and holds less devnet SOL than this top up needs: test SOL comes first.
   const needsFunds = connected && walletLamports !== null && walletLamports < walletNeed(plan);
   const showFallbacks = fallbackOpen || (needsFunds && faucetTried);
 
   const approve = () => {
+    if (policyBusy || policyError) return;
     setStarted(true);
     void (route.kind === 'top-up' ? wallet.topUpAndPlay(amount) : wallet.connectAndPlay(amount));
   };
@@ -122,16 +132,20 @@ export function TopUpSheet({
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={busy ? () => undefined : onClose} statusBarTranslucent>
       <Pressable style={styles.backdrop} onPress={busy ? undefined : onClose} />
-      <View style={styles.sheet}>
+      <ScrollView style={{ maxHeight: '85%', backgroundColor: C.bg }} contentContainerStyle={styles.sheet}>
         <View style={styles.titleRow}>
           <PixelText text={canRenew ? 'PLAY AGAIN' : 'TOP UP & PLAY'} size={3} color={C.neonYellow} shadow="#6a3d00" />
           <Pressable onPress={busy ? undefined : onClose} hitSlop={10} style={styles.close} accessibilityRole="button" accessibilityLabel="Close">
             <Text style={styles.closeText}>X</Text>
           </Pressable>
         </View>
+        <Text style={{ color: C.white }}>SESSION PERMISSION</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>{(Object.keys(SESSION_PRESETS) as SessionPreset[]).map(p => <Pressable key={p} disabled={busy} onPress={() => choosePolicy(p, policy.maxPerBet)} accessibilityRole="button" accessibilityState={{ selected: p === policy.preset }} style={{ minHeight: 48, padding: 8, borderWidth: 1, borderColor: p === policy.preset ? C.neonYellow : C.border }}><Text style={{ color: C.white }}>{SESSION_PRESETS[p].label}</Text></Pressable>)}</View>
+        <View style={{ flexDirection: 'row', gap: 6 }}>{[20_000_000n, 50_000_000n, 100_000_000n].map(a => <Pressable key={String(a)} disabled={busy} onPress={() => choosePolicy(policy.preset, a)} accessibilityRole="button" accessibilityState={{ selected: a === policy.maxPerBet }} style={{ minHeight: 48, padding: 8, borderWidth: 1, borderColor: a === policy.maxPerBet ? C.neonYellow : C.border }}><Text style={{ color: C.white }}>Max {formatSol(a)} SOL</Text></Pressable>)}</View>
+        {policyError ? <Text style={{ color: C.danger }}>{policyError}</Text> : null}
         {call ? (
           <Text style={[styles.call, { color: call.side === Side.Up ? C.neonGreen : C.neonRed }]}>
-            {call.side === Side.Up ? '▲' : '▼'} {call.text} goes in right after
+            {call.side === Side.Up ? '▲' : '▼'} {call.text}: placed after approval only if this round is still open and this amount fits. Otherwise tap again.
           </Text>
         ) : null}
 
@@ -147,8 +161,9 @@ export function TopUpSheet({
               kind="gold"
               big
               busy={wallet.busy === 'renew' || renewChecking}
-              disabled={busy}
+              disabled={busy || policyError !== null}
               onPress={() => {
+                if (policyBusy || !policy.ready || policyError) return;
                 setStarted(true);
                 void wallet.renewSession(available);
               }}
@@ -231,7 +246,7 @@ export function TopUpSheet({
         {result ? (
           <Text style={[styles.result, { color: result.ok ? C.neonGreen : result.checking ? C.neonYellow : C.danger }]}>{result.message}</Text>
         ) : null}
-      </View>
+      </ScrollView>
     </Modal>
   );
 }
@@ -240,7 +255,7 @@ const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(5,3,12,0.72)' },
   sheet: { backgroundColor: C.bg, borderTopWidth: 2, borderColor: C.neonYellow, padding: 16, gap: 12, paddingBottom: 28 },
   titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  close: { width: 30, height: 30, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
+  close: { width: 48, height: 48, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
   closeText: { color: C.subtle, fontSize: 13, fontWeight: '900', fontFamily: MONO },
   // The call that was tapped and goes in after the approval.
   call: { fontSize: 14, fontWeight: '900', fontFamily: MONO },

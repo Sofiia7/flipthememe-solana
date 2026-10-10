@@ -36,7 +36,7 @@ export function TabBar({ tab, onChange, bottomInset }: { tab: Tab; onChange: (ta
 
 const styles = StyleSheet.create({
   bar: { flexDirection: 'row', backgroundColor: '#0c0a18', borderTopWidth: 1, borderTopColor: C.borderSoft },
-  item: { flex: 1, alignItems: 'center', paddingTop: 6, paddingBottom: 6, gap: 5 },
+  item: { flex: 1, minHeight: 48, alignItems: 'center', paddingTop: 6, paddingBottom: 6, gap: 5 },
   marker: { width: 22, height: 3, backgroundColor: 'transparent' },
   markerActive: { backgroundColor: C.accent },
   // C.dim is 5.8:1 on this bar, above the 4.5:1 AA line for small text.

@@ -23,6 +23,8 @@ import { useWalletActions, type WalletActions } from '../wallet/useWalletActions
 import { awaySummary, type AwayItem, type AwaySummary } from './away';
 import { challengeActive, createChallengeStore, type Challenge } from './challenge';
 import { HISTORY_CAP, createHistoryStore, mergeHistory, reconcileHistory, type HistoryEntry, type HistoryRecord } from './history';
+import { fetchRemoteHistory } from './remoteHistory';
+import { recordEvent } from '../lib/diagnostics';
 import { collectInPlay } from './reminders';
 import type { DuelScore } from './rivalScore';
 import { useRivalScore } from './useRivalScore';
@@ -191,14 +193,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setKept(null);
     if (!owner) return undefined;
     let alive = true;
-    historyStore
-      .load(owner)
-      .catch(() => [] as HistoryRecord[])
-      .then((records) => {
-        if (alive) setKept({ owner, records });
-      });
+    const controller = new AbortController();
+    const localReady = historyStore.load(owner).catch(() => [] as HistoryRecord[]).then(records => {
+      if (alive) setKept({ owner, records });
+    });
+    const restore = async () => {
+      await localReady;
+      try {
+        const remote = await fetchRemoteHistory(owner, controller.signal);
+        if (!alive || !remote.length) return;
+        setKept(current => {
+          if (!current || current.owner !== owner) return current;
+          const merged = new Map(remote.map(r => [r.position, r]));
+          for (const r of current.records) if (!merged.get(r.position)?.claimed || r.claimed) merged.set(r.position, r);
+          const records = [...merged.values()].sort((a, b) => a.roundId > b.roundId ? -1 : a.roundId < b.roundId ? 1 : 0).slice(0, HISTORY_CAP);
+          return { owner, records };
+        });
+      } catch { /* local results remain visible; retry while this wallet is open */ }
+    };
+    void restore();
+    const retry = setInterval(() => { void restore(); }, 60_000);
     return () => {
       alive = false;
+      controller.abort();
+      clearInterval(retry);
     };
   }, [owner]);
   useEffect(() => {
@@ -206,8 +224,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = reconcileHistory(kept.records, myRaw.positions, { cap: HISTORY_CAP, nowMs: Date.now() });
     if (next === kept.records) return;
     setKept({ owner, records: next });
-    void historyStore.save(owner, next).catch(() => undefined);
   }, [myReady, owner, myRaw.positions, kept]);
+  useEffect(() => {
+    if (!kept || !kept.records.length || kept.owner !== owner) return;
+    void historyStore.save(kept.owner, kept.records).catch(() => { recordEvent('storage_failed'); setPendingNote('History could not be saved on this device. Free storage and reopen; the server archive may restore indexed results.'); });
+  }, [kept, owner]);
 
   // Pending bet: shown as pending (never as a placed bet) until its Position account exists, and
   // dropped only when its signature proves it refused or expired (never on a transport error).
@@ -364,6 +385,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fresh.push(resultToast(p.account.side, p.account.stake, p.account.claimed, p.account.payout, round, chainNow()));
     }
     if (fresh.length > 0) {
+      for (const _ of fresh) recordEvent('result');
       setToasts((prev) => [...prev, ...fresh]);
       // Seen here, so not news on the next launch.
       saveAck(owner, fresh.reduce((m, t) => (t.roundId > m ? t.roundId : m), 0n));
@@ -392,6 +414,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const link = parseRoundLink(url);
       if (!link) return;
       const next: Challenge = { ...link, at: Date.now() };
+      recordEvent('invite_opened');
       challengeTouched.current = true;
       setChallenge(next);
       setTab('arena');

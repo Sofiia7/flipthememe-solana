@@ -9,7 +9,7 @@ import {
 } from '@solana/kit';
 import { DEVNET_RPCS, MAINNET_RPCS, RPC_COOL_DOWN } from '../config';
 import { createCoolDown, retryAfterMs } from '../lib/limits';
-import { countRequest } from '../lib/requestLog';
+import { countRequest, recordLatency } from '../lib/requestLog';
 
 export type SolanaRpc = Rpc<SolanaRpcApi>;
 
@@ -62,6 +62,7 @@ function transportWithTimeout(url: string, timeoutMs: number, network: 'devnet' 
     const wait = coolDown.left(Date.now());
     if (wait > 0 && POLLED_METHODS.has(method)) throw new RateLimitedError(wait);
     countRequest(network, method);
+    const startedAt = Date.now();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     const outer = config.signal;
@@ -79,6 +80,7 @@ function transportWithTimeout(url: string, timeoutMs: number, network: 'devnet' 
       if (limited) coolDown.hit(Date.now(), limited.retryAfter);
       throw error;
     } finally {
+      recordLatency(network === 'devnet' ? 'rpc_devnet' : 'rpc_mainnet', Date.now() - startedAt);
       clearTimeout(timer);
       outer?.removeEventListener('abort', onOuterAbort);
     }

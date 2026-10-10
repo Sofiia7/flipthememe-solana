@@ -78,7 +78,7 @@ export function Banner({ tone, text, action }: { tone: 'warn' | 'error' | 'info'
     <View style={[styles.banner, { borderColor: color }]}>
       <Text style={[styles.bannerText, { color }]}>{text}</Text>
       {action ? (
-        <Pressable onPress={action.onPress} hitSlop={8}>
+        <Pressable onPress={action.onPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={action.label} style={{ minWidth: 48, minHeight: 48, justifyContent: 'center', alignItems: 'center' }}>
           <Text style={[styles.bannerAction, { color }]}>{action.label}</Text>
         </Pressable>
       ) : null}
@@ -88,7 +88,7 @@ export function Banner({ tone, text, action }: { tone: 'warn' | 'error' | 'info'
 
 export function ExtLink({ label, url, style }: { label: string; url: string; style?: StyleProp<ViewStyle> }) {
   return (
-    <Pressable onPress={() => void Linking.openURL(url).catch(() => undefined)} hitSlop={6} style={style}>
+    <Pressable onPress={() => void Linking.openURL(url).catch(() => undefined)} hitSlop={6} accessibilityRole="link" accessibilityLabel={label} style={[{ minHeight: 48, justifyContent: 'center' }, style]}>
       <Text style={T.link}>{label}</Text>
     </Pressable>
   );
@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     gap: 8,
     minHeight: 48,
   },
-  btnSmall: { paddingVertical: 8, paddingHorizontal: 10, minHeight: 36, borderWidth: 1 },
+  btnSmall: { paddingVertical: 8, paddingHorizontal: 10, minHeight: 48, borderWidth: 1 },
   btnOff: { opacity: 0.4 },
   btnPressed: { transform: [{ translateY: 1 }], opacity: 0.85 },
   btnTexts: { alignItems: 'center', flex: 1 },

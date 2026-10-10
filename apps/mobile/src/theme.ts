@@ -51,7 +51,7 @@ export const MONO = 'monospace';
  * Largest system font scale the fixed-height UI (tab bar, timer, X lane, buttons, token line) follows. React 19 has no
  * Text.defaultProps, so it is passed as maxFontSizeMultiplier on those Text elements; scrolling screens scale freely.
  */
-export const FONT_CAP = 1.15;
+export const FONT_CAP = 1.5;
 
 export const T = StyleSheet.create({
   label: { color: C.label, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },

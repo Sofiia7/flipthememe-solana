@@ -136,6 +136,7 @@ export function retryDelayMs(error: unknown, failures: number): number {
 const isProgramError = (error: unknown): boolean => PROGRAM_ERRORS.includes(describeError(error) as ProgramErrorName);
 
 export type SchedulerDeps = {
+  canClosePosition?: (position: string) => boolean;
   rpc: SolanaRpc;
   /** The keeper key: fee payer of every transaction, and the admin that creates rounds. */
   signer: KeyPairSigner;
@@ -213,6 +214,7 @@ export class Scheduler {
     this.certificates = deps.certificates ?? certificateInstructions;
     this.marketReady = deps.marketReady ?? (() => null);
     this.closer = deps.closer ?? new PositionCloser({ rpc: deps.rpc, signer: deps.signer, logger: deps.logger, closeAfterSecs: deps.cfg.closeAfterSecs });
+    if (deps.canClosePosition) this.closer.canClosePosition = deps.canClosePosition;
     this.cfg = deps.cfg;
     this.state = deps.state;
     this.selector = deps.selector;
@@ -609,7 +611,10 @@ export class Scheduler {
     }
     const reserve = latest.quoteAmount;
     const byDepth = reserve / DEPTH_K;
-    const maxBank = byDepth < MAX_BANK_CEILING ? byDepth : MAX_BANK_CEILING;
+    // Several overlapping windows on one pool share the same manipulation budget.
+    const committed = [...(this.snapshot?.rounds.values() ?? [])].reduce((sum, r) => sum + (r && r.pool === pool.pool && r.status !== RoundStatus.Final ? r.maxBank : 0n), 0n);
+    const room = byDepth > committed ? byDepth - committed : 0n;
+    const maxBank = room < MAX_BANK_CEILING ? room : MAX_BANK_CEILING;
     // The depth gate again, on the newest reserve and Config's min_bank. A round activates once
     // 2 x its smaller side reaches min_bank, and the depth rule keeps that at most max_bank: with
     // max_bank below min_bank it never activates, and a one-sided bet only waits for its refund.

@@ -27,6 +27,8 @@ import { closeBatches, closeDoneText, closeNothingText, confirmClosable, type Cl
 import { keyReturnAmount, shouldReturnKey, withdrawMessage, type KeyReturn } from './keyReturn';
 import { prepareTopUp } from './topUpFlow';
 import { sessionCapFor } from './topUpPlan';
+import { loadSessionPolicy, sessionRules } from './sessionPolicy';
+import { recordEvent } from '../lib/diagnostics';
 import { WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
 
 export type WalletBusy = Exclude<TxAction, 'bet' | 'claim'>;
@@ -126,6 +128,7 @@ export function useWalletActions(input: {
       try {
         const done = await work();
         setResult({ action, ok: !done.checking, checking: done.checking, message: done.message, signature: done.signature, at: Date.now() });
+          if (!done.checking && (action === 'topup' || action === 'renew')) recordEvent('wallet_prepared');
         onChanged();
         return !done.checking;
       } catch (error) {
@@ -278,6 +281,8 @@ export function useWalletActions(input: {
    */
   const prepareFor = useCallback(
     async (payer: Address, amount: bigint) => {
+      await loadSessionPolicy();
+      const rules = sessionRules();
       if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
       const vaultAddr = await vaultAddress(payer);
       const [vaultRaw, walletRaw, keyRaw] = await fetchAccounts(rpc, [vaultAddr, payer, keyAddress]);
@@ -286,13 +291,13 @@ export function useWalletActions(input: {
         deviceKey: keyAddress,
         deposit: amount,
         nowSec: chainNowSec(),
-        rules: SESSION_RULES,
+        rules,
         reads: { vaultData: vaultRaw?.data ?? null, walletLamports: walletRaw?.lamports ?? 0n, keyLamports: keyRaw?.lamports ?? 0n },
       });
     },
     [rpc, keyAddress, chainNowSec],
   );
-  const topUpDone = (amount: bigint) => `Topped up ${sol(amount)}. One-tap bets are on for 7 days.`;
+  const topUpDone = (amount: bigint) => `Topped up ${sol(amount)}. One-tap session prepared with your selected limits. This approval alone does not place a bet.`;
 
   /**
    * One wallet approval: open the vault if needed, deposit, grant the device key a 7-day session
@@ -347,6 +352,8 @@ export function useWalletActions(input: {
   const renewSession = useCallback(
     (available: bigint) =>
       run('renew', async () => {
+        await loadSessionPolicy();
+        const rules = sessionRules();
         const payer = owner;
         if (!payer) throw new Error('Connect a wallet first.');
         if (!keyAddress) throw new Error('The device key is still loading - try again in a second.');
@@ -359,14 +366,14 @@ export function useWalletActions(input: {
           await startSession({
             owner: payer,
             sessionSigner: keyAddress,
-            expiry: BigInt(Math.floor(chainNowSec()) + SESSION_RULES.durationSecs),
-            maxPerBet: SESSION_RULES.maxPerBet,
-            sessionCap: sessionCapFor(available, SESSION_RULES),
+            expiry: BigInt(Math.floor(chainNowSec()) + rules.durationSecs),
+            maxPerBet: rules.maxPerBet,
+            sessionCap: sessionCapFor(available, rules),
           }),
         ];
         if (needsKeyGas) ixs.push(transferSol({ from: payer, to: keyAddress, lamports: SESSION_RULES.gasTopUp }));
         const signed = await walletSign(payer, ixs);
-        return submitGuarded('renew', payer, signed, `One-tap bets are on for 7 days, up to ${sol(SESSION_RULES.maxPerBet)} per bet.`);
+        return submitGuarded('renew', payer, signed, `One-tap session renewed: up to ${sol(sessionRules().maxPerBet)} per bet. See Wallet for expiry and turnover allowance.`);
       }),
     [run, owner, keyAddress, rpc, chainNowSec, settleEarlier, walletSign, submitGuarded],
   );

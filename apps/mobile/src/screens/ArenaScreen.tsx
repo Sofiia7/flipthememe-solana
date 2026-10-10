@@ -1,7 +1,8 @@
 import { useMarketStatus } from '../chain/useMarketStatus';
 import { waitingView } from '../lib/marketStatus';
+import { recordEvent } from '../lib/diagnostics';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { RoundStatus, Side } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
@@ -93,6 +94,8 @@ export function ArenaScreen() {
   const [sharing, setSharing] = useState(false);
   // The side a visitor tapped, remembered while the wallet connects and approves (state/intent.ts).
   const [intent, setIntent] = useState<BetIntent | null>(null);
+  const [intentNotice, setIntentNotice] = useState<string | null>(null);
+  const [selectedRound, setSelectedRound] = useState<bigint | null>(null);
   const chatter = useBoolStore(chatterOn);
   const chatterShown = chatter.loaded && chatter.value;
   // The chart receives the stage's spare height after the token, timer, players and invitation.
@@ -136,15 +139,17 @@ export function ArenaScreen() {
     () => [...mine.values()].filter((m) => m.round.account.status !== RoundStatus.Final).sort((a, b) => (a.round.id < b.round.id ? -1 : 1)),
     [mine],
   );
-  const latest = latestCall(myUnresolved.map(m => m.round), nowSec);
+  // Follow the oldest unfinished call until the player explicitly selects another.
+  const latest = myUnresolved.find(m => m.round.id === selectedRound)?.round ?? myUnresolved[0]?.round ?? null;
   const myRounds = latest ? [latest] : [];
 
   const open = groups.open;
   const panel = selectPanel({ nowSec, open, upcoming: groups.upcoming, myUnresolved: myRounds });
   const focus = latest ? mine.get(latest.id) ?? null : null;
+  const selectedFeed = usePoolPrice(focus && focus.round.account.pool !== feed.pool && focus.round.account.pool !== myFeed.pool ? focus.round.account.pool : null, app.tab === 'arena');
 
   // Prices: the charted pool, or my round's pool when the token rotated since I bet.
-  const feedFor = (pool: string): PoolFeed | null => (feed.pool === pool ? feed : myFeed.pool === pool ? myFeed : null);
+  const feedFor = (pool: string): PoolFeed | null => (feed.pool === pool ? feed : myFeed.pool === pool ? myFeed : selectedFeed.pool === pool ? selectedFeed : null);
   const priceOf = (pool: string, atMs: number = nowMs) => {
     const f = feedFor(pool);
     return f?.latest ? { price: f.latest.price, stale: isFeedStale(f, atMs) } : null;
@@ -159,9 +164,9 @@ export function ArenaScreen() {
 
   // While a round of mine plays, the stage (token header, X lane, chart) follows it, even after the
   // keeper moved the next rounds to another token: the strike line I bet on stays on screen.
-  const preview = usePoolPrice(!focus && !feed.pool && market && nowMs - Date.parse(market.updatedAt) <= 240_000 ? market.pool?.pool ?? null : null);
+  const preview = usePoolPrice(!focus && !feed.pool && market && nowMs - Date.parse(market.updatedAt) <= 240_000 ? market.pool?.pool ?? null : null, app.tab === 'arena');
   const stagePool = focus?.round.account.pool ?? feed.pool ?? preview.pool;
-  const stageFeed: PoolFeed = stagePool === myFeed.pool ? myFeed : stagePool === feed.pool ? feed : stagePool === preview.pool ? preview : { pool: stagePool, ref: null, points: [], latest: null, error: null };
+  const stageFeed: PoolFeed = stagePool === selectedFeed.pool ? selectedFeed : stagePool === myFeed.pool ? myFeed : stagePool === feed.pool ? feed : stagePool === preview.pool ? preview : { pool: stagePool, ref: null, points: [], latest: null, error: null };
   // The chart follows my round, else the latest live round on this pool.
   const chartRound = selectChartRound({ pool: stageFeed.pool, focus: focus?.round ?? null, inFlight: groups.inFlight });
   const chartStrike = chartRound ? strikeState(chartRound.account, nowSec) : null;
@@ -226,7 +231,8 @@ export function ArenaScreen() {
   // A bet takes its stake and the rent of its position account from the game balance; a session made
   // before the allowance was widened is limited too. A chip over that is off, and the amount used
   // falls back to the largest chip that fits (the choice itself returns once the balance does).
-  const maxAmount = maxBet({ available, positionRent, sessionLeft: my.session ? remaining : null });
+  const balanceMax = maxBet({ available, positionRent, sessionLeft: my.session ? remaining : null });
+  const maxAmount = my.session && my.session.maxPerBet < balanceMax ? my.session.maxPerBet : balanceMax;
   const chips = chipStates(BET_AMOUNTS, maxAmount);
   const betAmount = effectiveAmount(amount, BET_AMOUNTS, maxAmount);
   const inOpen = open ? mine.get(open.id) : undefined;
@@ -248,6 +254,7 @@ export function ArenaScreen() {
   if (!open) blocked = waiting.detail;
   else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
   else if (paused) blocked = 'Betting is paused by the operator.';
+  else if (market?.phase === 'paused' && nowMs - Date.parse(market.updatedAt) < 240_000) blocked = market.reason;
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
   else if (betAmount + positionRent > available) {
@@ -276,6 +283,8 @@ export function ArenaScreen() {
   // and approves in one go. Once the approval is through, the call goes in by itself (decideIntent).
   const tapAsVisitor = (side: Side) => {
     if (wallet.busy !== null) return;
+    setIntentNotice(null);
+    recordEvent('intent');
     setIntent(armIntent({ side, amount, roundId: open?.id ?? null, nowMs: Date.now() }));
     setTopUpOpen(true);
   };
@@ -296,11 +305,14 @@ export function ArenaScreen() {
     guardSecs: ENTRY_GUARD_SECS,
   });
   useEffect(() => {
-    if (intentDecision.kind === 'drop') setIntent(null);
+    if (intentDecision.kind === 'drop') {
+      if (intentDecision.reason !== 'already-in') setIntentNotice('Balance prepared. Your bet was NOT placed: entry closed or conditions changed. Choose a side again in an open round.');
+      setIntent(null);
+    }
     else if (intentDecision.kind === 'place' && intent) {
       setIntent(null);
-      // The same path as the buttons: this render's guards, and the largest chip that fits if the remembered one no longer does.
-      placeBet(intentDecision.side, effectiveAmount(intent.amount, BET_AMOUNTS, maxAmount));
+      if (intent.amount > maxAmount) setIntentNotice('Balance prepared. Your chosen amount no longer fits. Bet NOT placed; choose an amount and tap again.');
+      else placeBet(intentDecision.side, intent.amount);
     }
     // placeBet is re-made every render; what starts it is the decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -312,6 +324,7 @@ export function ArenaScreen() {
   // round's own coin, which may differ from the stage's (the open round's often does).
   const challenge = (m: Mine, live: boolean) => {
     if (!owner) return;
+    recordEvent('invite_shared');
     const side = m.position.account.side;
     const info = peekTokenInfo(m.round.account.tokenMint);
     const symbol = info?.symbol ?? null;
@@ -376,8 +389,7 @@ export function ArenaScreen() {
 
       {chatterShown && tokenMint ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
 
-      <View style={styles.stage}>
-        <View style={styles.page}>
+      <ScrollView style={styles.stage} contentContainerStyle={styles.page}>
           {arena.error && (arenaStaleSec === null || arenaStaleSec > 10) ? (
             <Banner tone="error" text={`Devnet unreachable (${arena.error}).${arenaStaleSec !== null ? ` Data ${arenaStaleSec} s old.` : ''}`} />
           ) : arenaStaleSec !== null && arenaStaleSec > 10 ? (
@@ -385,10 +397,14 @@ export function ArenaScreen() {
           ) : null}
           {app.challenge ? <ChallengeCard challenge={app.challenge} open={open} nowSec={nowSec} onClose={app.clearChallenge} /> : null}
           {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
+          {intentNotice ? <Banner tone="info" text={intentNotice} action={{ label: 'OK', onPress: () => setIntentNotice(null) }} /> : null}
           {app.away ? <Banner tone="info" text={awayText(app.away, formatSol)} action={{ label: 'OK', onPress: app.ackAway }} /> : null}
           {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
 
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? preview.pool} nowMs={secMs} />
+          {myUnresolved.length > 0 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {myUnresolved.map(m => <Pressable key={String(m.round.id)} onPress={() => setSelectedRound(m.round.id)} accessibilityRole="button" accessibilityState={{ selected: m.round.id === latest?.id }} accessibilityLabel={`Your active round ${m.round.id}, ${sideName(m.position.account.side)}`} style={[styles.walletChip, { minHeight: 48, justifyContent: 'center', borderColor: m.round.id === latest?.id ? C.neonYellow : C.borderSoft }]}><Text style={styles.walletText}>#{String(m.round.id)} · {sideName(m.position.account.side)}</Text></Pressable>)}
+          </View> : null}
 
           <View style={styles.chartSpace} onLayout={e => setChartHeight(Math.max(60, Math.floor(e.nativeEvent.layout.height)))}>
           <PriceChart
@@ -428,7 +444,7 @@ export function ArenaScreen() {
           {streakText || (myUnresolved.length === 0 && !pendingHere) ? (
             <View style={styles.hintRow}>
               {streakText ? <Text style={styles.streakPill}>{streakText}</Text> : null}
-              {open && myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>Call the next minute. Result in about 2 minutes.</Text> : null}
+              {open && myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>TOKEN / SOL: higher or lower? Choose → reference → move → result. Result 100-160 seconds after entry, plus confirmation.</Text> : null}
             </View>
           ) : null}
 
@@ -460,10 +476,10 @@ export function ArenaScreen() {
           ) : null}
         </View>
           ) : null}
-        </View>
-      </View>
+      </ScrollView>
 
       <View style={styles.dock}>
+        {open && !inOpen ? <Text style={styles.nextExplanation}>BET #{String(open.id)} · {openSymbol ? `$${openSymbol}` : open.account.tokenMint.slice(0, 6)} / SOL · x{multiplier.replace(/^x/, '')} on matched stake only; excess returned. Match can change.</Text> : null}
         {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
         {panel.kind === 'mine' && open ? (
           <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} token={open.account.tokenMint !== tokenMint ? openSymbol : null} />
@@ -699,8 +715,8 @@ const styles = StyleSheet.create({
   streakPill: { color: '#2a1a00', backgroundColor: C.neonYellow, fontFamily: MONO, fontWeight: '900', fontSize: 12, paddingHorizontal: 8, paddingVertical: 3 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   help: {
-    width: 46,
-    height: 30,
+    width: 48,
+    height: 48,
     borderRadius: 0,
     borderWidth: 2,
     borderColor: C.neonPurple,
@@ -712,8 +728,8 @@ const styles = StyleSheet.create({
   nextExplanation: { color: C.accentText, fontSize: 12, lineHeight: 17 },
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
-  stage: { flex: 1, overflow: 'hidden' },
-  page: { flex: 1, paddingHorizontal: 14, paddingTop: 6, paddingBottom: 6, gap: 6 },
+  stage: { flex: 1 },
+  page: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 6, paddingBottom: 6, gap: 6 },
   chartSpace: { flex: 1, minHeight: 60, maxHeight: 220 },
   friend: { minHeight: 32, paddingVertical: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
@@ -735,7 +751,7 @@ const styles = StyleSheet.create({
   },
   amounts: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   // A fixed height, so the caption of an off chip never moves the dock.
-  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 2, minHeight: 35, alignItems: 'center', justifyContent: 'center' },
+  amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 2, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   amountOff: { opacity: 0.45 },
   amountCaption: { color: C.subtle, fontSize: 8, lineHeight: 10, fontWeight: '800', fontFamily: MONO },
   amountActive: { backgroundColor: C.neonPurple, borderColor: '#d9b8ff' },

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { diagnosticReport } from '../lib/diagnostics';
 import {
   ACCESSORY_NAMES,
   EYE_NAMES,
@@ -111,6 +112,8 @@ export function ProfileScreen() {
         </View>
       ))}
       <Text style={T.dim}>Saved on this phone. Shows in the arena and in your results.</Text>
+      <Btn small kind="ghost" title="EXPORT LOCAL DIAGNOSTICS" onPress={() => { void diagnosticReport().then(message => Share.share({ message, title: 'FlipTheMeme local devnet diagnostics' })).catch(() => undefined); }} />
+      <Text style={T.dim}>Local event times only; no wallet address, keys or signatures. Nothing is uploaded automatically. These are devnet sessions, not proof of real-money retention.</Text>
 
       <View style={T.panel}>
         <Text style={T.label}>STATS (TEST SOL)</Text>
