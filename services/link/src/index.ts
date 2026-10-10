@@ -20,6 +20,7 @@ import { releaseInfo, type ReleaseMetadata } from './release.ts';
 
 import { faucet, type FaucetEnv } from './faucet.ts';
 import { leaderboard, leaderboardPage, type LeaderboardEnv } from './leaderboard.ts';
+import { gateArena } from './arena-readiness.ts';
 import { base58Decode, names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
@@ -231,7 +232,8 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === '/v1/arena' && request.method === 'GET') {
       const raw = await env.LEADERBOARD?.get('snapshot');
-      const arena = raw ? JSON.parse(raw).arena : null;
+      const snapshot = raw ? JSON.parse(raw).arena : null;
+      const arena = snapshot ? await gateArena(snapshot) : null;
       return Response.json(arena ?? { error: 'collecting' }, { status: arena ? 200 : 503, headers: { 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }
     if (pathname === '/v1/avatar' && request.method === 'GET') return avatar(request);
