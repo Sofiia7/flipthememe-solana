@@ -1,7 +1,5 @@
-import { avatar } from './avatar.ts';
 import { withLeaderboardStorage, type LeaderboardStorageEnv } from './leaderboard-storage.ts';
-import { history } from './history.ts';
-import { releaseInfo, type ReleaseMetadata } from './release.ts';
+import { avatar } from './avatar.ts';
 // sol.flipthememe.com: the web side of a shared round link.
 //
 //   /r/<round>?side=up&t=<ticker>&by=<wallet>&n=<name>
@@ -21,7 +19,6 @@ import { releaseInfo, type ReleaseMetadata } from './release.ts';
 
 import { faucet, type FaucetEnv } from './faucet.ts';
 import { leaderboard, leaderboardPage, type LeaderboardEnv } from './leaderboard.ts';
-import { gateArena } from './arena-readiness.ts';
 import { base58Decode, names, type NamesEnv } from './names.ts';
 
 const PACKAGE = 'com.flipthememe.app';
@@ -181,14 +178,13 @@ ${headline}
 }
 
 /** How to install and play; with a challenge or an invite (r, side, t, by, n), a button that opens the app on it once installed. */
-function getPage(c: Challenge | null, release: ReleaseMetadata | null = null): string {
-  const version = release ? `Public APK: ${release.version} · ${release.publishedAt} · ${(release.sizeBytes / 1048576).toFixed(1)} MB · SHA-256 ${release.sha256 ?? 'unavailable'}` : 'Version metadata unavailable. Check the GitHub release before installing.';
+function getPage(c: Challenge | null): string {
   return page({
     title: 'FlipTheMeme for Android',
     description: `${PROMISE} Android app on Solana devnet.`,
     url: `${ORIGIN}/get`,
     body: `<div class="card"><div class="big">ONE MINUTE.<br>UP OR DOWN.</div><div class="sub">${PROMISE}</div></div>
-<a class="btn go" href="${escapeHtml(release?.apkUrl ?? APK_URL)}">DOWNLOAD THE APK</a>${
+<a class="btn go" href="${APK_URL}">DOWNLOAD THE APK</a>${
       c
         ? `
 <a class="btn get" href="${escapeHtml(appIntent(c))}">OPEN THE ${c.side ? 'CHALLENGE' : c.by ? 'INVITE' : 'ROUND'}</a>
@@ -201,16 +197,14 @@ function getPage(c: Challenge | null, release: ReleaseMetadata | null = null): s
 <li>Open FlipTheMeme, tap Top up &amp; play once, then every call is one tap.</li>
 </ol>
 <p>${FREE_SOL}</p>
-<p>Devnet only, test SOL only. Prices come from live PumpSwap pools on mainnet.</p>
-<p id="release">${escapeHtml(version)}</p><p><a href="https://github.com/Sofiia7/flipthememe-apk/releases/latest">Public release and build manifest</a></p><p>Android app, built for Seeker. Requires a Mobile Wallet Adapter wallet with Devnet enabled. Keep your invite page open while installing.</p><p><a href="https://github.com/Sofiia7/flipthememe-solana/issues">Support / report an issue</a></p>`,
-    // The page uses the live release record, so a newer LAN candidate cannot masquerade as public.
+<p>Devnet only, test SOL only. Prices come from live PumpSwap pools on mainnet.</p>`,
   });
 }
 
 const html = (body: string, status = 200) =>
   new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
 
-export function handle(request: Request, release: ReleaseMetadata | null = null): Response {
+export function handle(request: Request): Response {
   const url = new URL(request.url);
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 });
   if (url.pathname === '/.well-known/assetlinks.json') {
@@ -222,9 +216,9 @@ export function handle(request: Request, release: ReleaseMetadata | null = null)
   if (round) return html(challengePage(readChallenge(round, url.searchParams), `${ORIGIN}/r/${round}`));
   if (url.pathname === '/get') {
     const r = url.searchParams.get('r');
-    return html(getPage(r && /^\d{1,20}$/.test(r) ? readChallenge(r, url.searchParams) : null, release));
+    return html(getPage(r && /^\d{1,20}$/.test(r) ? readChallenge(r, url.searchParams) : null));
   }
-  if (url.pathname === '/') return html(getPage(null, release));
+  if (url.pathname === '/') return html(getPage(null));
   return new Response(null, { status: 302, headers: { location: `${ORIGIN}/get` } });
 }
 
@@ -234,21 +228,14 @@ export default {
     const { pathname } = new URL(request.url);
     if (pathname === '/v1/arena' && request.method === 'GET') {
       const raw = await env.LEADERBOARD?.get('snapshot');
-      const snapshot = raw ? JSON.parse(raw).arena : null;
-      const arena = snapshot ? await gateArena(snapshot) : null;
+      const arena = raw ? JSON.parse(raw).arena : null;
       return Response.json(arena ?? { error: 'collecting' }, { status: arena ? 200 : 503, headers: { 'access-control-allow-origin': '*', 'cache-control': 'no-store' } });
     }
     if (pathname === '/v1/avatar' && request.method === 'GET') return avatar(request);
     if (pathname === '/v1/leaderboard') return leaderboard(request, env);
-    if (pathname === '/v1/history') return history(request, env);
-    if (pathname === '/v1/release' && request.method === 'GET') return releaseInfo();
     if (pathname === '/leaderboard') return leaderboardPage();
     if (pathname === '/v1/names') return names(request, env, ctx);
     if (pathname === '/v1/faucet') return faucet(request, env);
-    if ((pathname === '/' || pathname === '/get') && request.method === 'GET') {
-      const response = await releaseInfo();
-      return handle(request, response.ok ? await response.json() as ReleaseMetadata : null);
-    }
     return handle(request);
   },
 };
