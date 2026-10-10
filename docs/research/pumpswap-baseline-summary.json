@@ -1,0 +1,29 @@
+{
+  "source": "real keeper PumpSwap shadow windows; observational baseline, no executed player strategy",
+  "totalSelected": 3780,
+  "uniquePools": 98,
+  "heldOut": 1134,
+  "counts": {
+    "down": 532,
+    "up": 590,
+    "tie": 12
+  },
+  "duplicateSelectedWindows": 0,
+  "poolDayBlocks": 18,
+  "bootstrap": {
+    "replicates": 5000,
+    "seed": 20261010,
+    "upShare95": [
+      0.4784688995215311,
+      0.5624365482233502
+    ]
+  },
+  "feeBreakEvenFullMatch": 0.5102040816326531,
+  "limitations": [
+    "About 67 hours spanning four UTC calendar dates, dependent windows and market selection; pool-day blocks are descriptive, not independent validation.",
+    "No recorded pre-cutoff momentum features; those strategies are skipped.",
+    "Full matching and zero network cost are assumed by shadow replay; reported net is not earned profit.",
+    "No adversarial price-window/MEV/arbitrage simulation.",
+    "Operator test wallets must be excluded from acquisition and retention."
+  ]
+}
