@@ -15,6 +15,21 @@ data are preserved in `audit-backup-20261010T071250Z` under the project root.
 The container is healthy and ranking publication works. Oracle readiness is still false
 because upstream devnet RPCs return 429/403; this rollout does not establish working sampling.
 
+At 07:26 UTC the attestor's `DEVNET_RPC` was switched to the existing second Alchemy
+credential, `ALCHEMY_SOLANA_URL_2` from the operator's `~/.hermes/.env` on that VPS,
+using the Solana devnet endpoint. The first credential reports a monthly capacity limit;
+the second passed devnet genesis and Config/OracleConfig account checks. Do not request
+new credentials before checking these existing operator entries. The Hermes configuration
+was not modified, and credential values are stored only as Worker secrets. Readiness
+returned true and round 6532 was created; certificate and settlement checks follow separately.
+
+At 07:28 UTC `MAINNET_RPC` was also switched to that second credential after the first
+price window exposed mainnet HTTP 429. At 07:32 UTC a public strike certificate for
+round 6536 contained ten observations and passed independent Ed25519 signature verification.
+The attestor reported ready with no current RPC errors and the arena returned `ready`.
+These checks verify RPC recovery, sampling and signing; they do not attest a matched player
+bet, payout or end-to-end history archival. No player bet was placed for this verification.
+
 **Continuous rounds with a measured reserve (8 October).** Production uses `POOL_BALANCED=true`, `POOL_NEUTRAL=false`, `POOL_YOUTH_WEIGHT=0`, with trending discovery disabled. Up to six qualified pools of distinct base tokens (including the active pool) are sampled in parallel. A prepared balanced pool replaces a biased one without a blank minute; ten directional samples measure readiness, while readiness and momentum never block round creation. With no better candidate the valid current market keeps serving. Token/quote-depth failures still fail closed. Reserve addresses are refreshed even after the new-token age window and activity discovery scans five pages. New-listing endpoint outages do not stop reserve refreshes. Qualified reserve pools survive temporary discovery outages and their token/depth checks repeat. Background price polling only runs around the ten-second measurement windows. Mature (24h+) reserves can have non-`pump` mints; every reserve still passes the same token and quote-depth checks. The optional `POOL_NEUTRAL=true` strict mode can create gaps. Actual UP/DOWN statistics remain public; no price outcome is changed or promised to be 50/50.
 
 One container, `ftm-sol-keeper`, on a Linux VPS with Docker Compose (the host may run other compose
