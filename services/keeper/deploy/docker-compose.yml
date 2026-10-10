@@ -21,6 +21,7 @@ services:
     stop_grace_period: 40s
     environment:
       DEVNET_RPC: ${DEVNET_RPC:-https://api.devnet.solana.com}
+      DEVNET_RPC_FALLBACKS: ${DEVNET_RPC_FALLBACKS:-https://solana-devnet.api.onfinality.io/public,https://api.devnet.solana.com}
       MAINNET_RPCS: ${MAINNET_RPCS:-https://api.mainnet-beta.solana.com,https://solana-rpc.publicnode.com}
       HOUSE_ROUND_CAP_LAMPORTS: ${HOUSE_ROUND_CAP_LAMPORTS:-50000000}
       HOUSE_DAILY_BUDGET_LAMPORTS: ${HOUSE_DAILY_BUDGET_LAMPORTS:-2000000000}

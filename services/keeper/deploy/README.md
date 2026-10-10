@@ -21,6 +21,16 @@ Placeholders used below:
 
 ## Canonical price rollout
 
+The audit keeper refuses new rounds when the attestor readiness check is unavailable or stale.
+Existing settlement, refunds and withdrawals remain independent of that creation gate. Set
+`DEVNET_RPC_FALLBACKS` in `deploy/.env` to a comma-separated list of operator-approved alternate
+devnet RPC URLs; Compose passes it through to the bundled keeper. Each provider still needs usable
+quota. The attestor has its own `DEVNET_RPC` secret and must also pass `/v1/attestor/ready`.
+Before replacing the bundle, stop the existing container and back up `deploy/data/` (including
+`leaderboard.json`) and the previous bundle outside the build context. Keep `deploy/.env` and
+`deploy/secrets/` on the server. After restarting, verify fresh status and history publication;
+unarchived player positions remain protected from this keeper's automatic account closure.
+
 The deployed program and keeper must use the same price protocol. `LEGACY_PRICES=true` is only for the previous program during a coordinated upgrade. Pause new bets, finish or refund existing rounds, deploy the verified program, then set `LEGACY_PRICES=false` and recreate the keeper container before resuming. The upgraded required-oracle program rejects priced legacy instructions; this flag cannot bypass it.
 
 In canonical mode the keeper obtains the public attestor certificate, verifies its context and signature locally, then relays it. A certificate outage does not fall back to keeper-selected samples. Any funded payer can also use [the standalone relay CLI](../../../docs/price-certificates.md). `status.json.priceProtocol` reports the effective mode. The optional strict mode includes `POOL_MAX_PRICE_MOVE_M5=1` and ten priced shadow minutes; continuous production does not block on either.
