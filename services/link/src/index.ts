@@ -1,3 +1,4 @@
+import { withLeaderboardStorage, type LeaderboardStorageEnv } from './leaderboard-storage.ts';
 import { avatar } from './avatar.ts';
 // sol.flipthememe.com: the web side of a shared round link.
 //
@@ -222,7 +223,8 @@ export function handle(request: Request): Response {
 }
 
 export default {
-  fetch: async (request: Request, env: NamesEnv & FaucetEnv & LeaderboardEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
+  fetch: async (request: Request, env: NamesEnv & FaucetEnv & LeaderboardStorageEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
+    env = withLeaderboardStorage(env);
     const { pathname } = new URL(request.url);
     if (pathname === '/v1/arena' && request.method === 'GET') {
       const raw = await env.LEADERBOARD?.get('snapshot');

@@ -20,7 +20,7 @@
   // refuse getProgramAccounts to Workers (see src/names.ts). Without it every name comes back missing.
   // A request is limited to 20 addresses and 10 getProgramAccounts calls.
   "name": "ftm-link",
-  "main": "src/index.ts",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-10-05",
   "workers_dev": false,
   "routes": [{ "pattern": "sol.flipthememe.com/*", "zone_name": "flipthememe.com" }],
@@ -30,5 +30,7 @@
   },
   "ratelimits": [{ "name": "FAUCET_LIMITER", "namespace_id": "1001", "simple": { "limit": 1, "period": 60 } }],
   "kv_namespaces": [{ "binding": "LEADERBOARD", "id": "3367232235614637b618960b2e2c81fd" }],
+  "durable_objects": { "bindings": [{ "name": "LEADERBOARD_STORE", "class_name": "LeaderboardStore" }] },
+  "migrations": [{ "tag": "v1-leaderboard-sqlite", "new_sqlite_classes": ["LeaderboardStore"] }],
   "observability": { "enabled": true }
 }
