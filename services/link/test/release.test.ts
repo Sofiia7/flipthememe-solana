@@ -16,8 +16,8 @@ test('GitHub rate limits and network failure preserve the verified immutable APK
     const response = await releaseInfo(fetcher, PUBLISHED_RELEASE);
     assert.equal(response.status, 200);
     const metadata = await response.json();
-    assert.equal(metadata.version, 'build-29');
-    assert.equal(metadata.sha256, '3e421cb91393433e75c0b106a3e1a1336b4d4f0b42b8c8404d615664dcb6ce0a');
-    assert.equal(metadata.apkUrl, 'https://github.com/Sofiia7/flipthememe-apk/releases/download/build-29/FlipTheMeme.apk');
+    assert.equal(metadata.version, 'build-31');
+    assert.equal(metadata.sha256, 'f1446990539717be02a73342e6b74b573f1c0744da3f090a65abfb0a3c4f629d');
+    assert.equal(metadata.apkUrl, 'https://github.com/Sofiia7/flipthememe-apk/releases/download/build-31/FlipTheMeme.apk');
   }
 });
