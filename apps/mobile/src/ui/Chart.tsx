@@ -31,7 +31,6 @@ type Props = {
 const PAST_MS = 90_000;
 const PAD_TOP = 16;
 const PAD_BOTTOM = 16;
-const AHEAD_MAX_MS = 110_000;
 /** Live points further apart than this (app in the background, another tab open) leave a gap in the line. */
 const LIVE_GAP_MS = 15_000;
 /** Every label inside the SVG: 10sp is the smallest size that stays readable on a phone. */
@@ -63,13 +62,9 @@ function PriceChartView({
   const onLayout = (e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width));
 
   const start = nowMs - PAST_MS;
-  let end = nowMs + 20_000;
-  const reach = (ms: number | null | undefined) => {
-    if (ms && ms > nowMs) end = Math.max(end, Math.min(ms + 5_000, nowMs + AHEAD_MAX_MS));
-  };
-  reach(exitWindow?.[1]);
-  reach(strikeWindow?.range[1]);
-  reach(cutoffMs);
+  // Keep the same price scale through entry, reference and result. Future windows
+  // enter the chart as they approach; their countdowns never compress the price line.
+  const end = nowMs + 20_000;
 
   const visible = points.filter((p) => p.atMs >= start - 3_000 && p.atMs <= nowMs + 1_000);
   const values = visible.map((p) => Number(p.price));

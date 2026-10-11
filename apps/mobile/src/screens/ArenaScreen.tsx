@@ -471,7 +471,7 @@ export function ArenaScreen() {
         <View style={styles.betContext}>{working || pending || betting.bet.phase === 'failed' ? <BetStatusLine openId={open?.id ?? null} visible={(roundId) => mine.has(roundId)} /> : <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={styles.nextExplanation} numberOfLines={1}>{open ? `${focus && focus.round.id !== open.id ? 'NEXT ' : ''}CALL #${open.id} - ${openSymbol ? '$' + openSymbol : 'TOKEN'} - ${inOpen ? 'SAVED' : 'matched payout ' + multiplier}` : 'Next round - preparing entry'}</Text></Pressable>}</View>
             <View style={styles.amounts}>
               {chips.map(({ amount: a, fits }) => {
-                const active = betAmount === a;
+                const active = (owner ? betAmount : amount) === a;
                 return (
                   <Pressable
                     key={a.toString()}
