@@ -1,7 +1,7 @@
 import { avatar } from './avatar.ts';
 import { withLeaderboardStorage, type LeaderboardStorageEnv } from './leaderboard-storage.ts';
 import { history } from './history.ts';
-import { releaseInfo, type ReleaseMetadata } from './release.ts';
+import { releaseInfo, PUBLISHED_RELEASE, type ReleaseMetadata } from './release.ts';
 // sol.flipthememe.com: the web side of a shared round link.
 //
 //   /r/<round>?side=up&t=<ticker>&by=<wallet>&n=<name>
@@ -241,12 +241,12 @@ export default {
     if (pathname === '/v1/avatar' && request.method === 'GET') return avatar(request);
     if (pathname === '/v1/leaderboard') return leaderboard(request, env);
     if (pathname === '/v1/history') return history(request, env);
-    if (pathname === '/v1/release' && request.method === 'GET') return releaseInfo();
+    if (pathname === '/v1/release' && request.method === 'GET') return releaseInfo(fetch, PUBLISHED_RELEASE);
     if (pathname === '/leaderboard') return leaderboardPage();
     if (pathname === '/v1/names') return names(request, env, ctx);
     if (pathname === '/v1/faucet') return faucet(request, env);
     if ((pathname === '/' || pathname === '/get') && request.method === 'GET') {
-      const response = await releaseInfo();
+      const response = await releaseInfo(fetch, PUBLISHED_RELEASE);
       return handle(request, response.ok ? await response.json() as ReleaseMetadata : null);
     }
     return handle(request);
