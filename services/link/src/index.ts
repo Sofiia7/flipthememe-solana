@@ -232,6 +232,7 @@ export default {
   fetch: async (request: Request, env: NamesEnv & FaucetEnv & LeaderboardStorageEnv, ctx: { waitUntil(promise: Promise<unknown>): void }) => {
     env = withLeaderboardStorage(env);
     const { pathname } = new URL(request.url);
+    if (pathname === '/icon-512.png' && request.method === 'GET') return fetch('https://flipthememe.com/icon-512.png');
     if (pathname === '/v1/arena' && request.method === 'GET') {
       const raw = await env.LEADERBOARD?.get('snapshot');
       const snapshot = raw ? JSON.parse(raw).arena : null;

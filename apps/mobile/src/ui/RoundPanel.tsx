@@ -11,7 +11,7 @@ import { HouseFace, PixelFace } from '../PixelFace';
 import { C, FONT_CAP, MONO } from '../theme';
 import { PixelText } from './PixelText';
 
-const MAX_CHIPS = 5;
+const MAX_CHIPS = 2;
 
 /** A blinking dot for live states. */
 export function Pulse({ color, size = 8 }: { color: string; size?: number }) {
@@ -28,6 +28,28 @@ export function Pulse({ color, size = 8 }: { color: string; size?: number }) {
   }, [v]);
   return <Animated.View style={{ width: size, height: size, backgroundColor: color, opacity: v }} />;
 }
+
+
+/** One stable row of players for the single-screen Arena. Full player cards remain available elsewhere. */
+function CompactRoundPanel({ round, positions, me, stage, position, standing }: { round: RoundView; positions: readonly PositionView[]; me: string | null; stage: string; position?: PositionView; standing?: string | null }) {
+  return <View style={[styles.panel, styles.panelOpen]}>
+    <View style={styles.head}>
+      <Text numberOfLines={1} style={styles.title}>#{String(round.id)} - {stage}</Text>
+      <Text style={[styles.stageText, { color: standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow }]}>{standing ? standing.toUpperCase() + ' NOW' : position ? sideText(position.account.side) + ' ' + formatSol(position.account.stake) + ' SOL' : positions.length + ' IN'}</Text>
+    </View>
+    <View style={styles.sides}>{[Side.Up, Side.Down].map(side => {
+      const players = sortPlayers(positions.filter(p => p.account.side === side), me, null);
+      const first = players[0];
+      const color = side === Side.Up ? C.neonGreen : C.neonRed;
+      return <View key={side} style={[styles.compactSide, { borderColor: color }]}>
+        {first ? first.account.isHouse ? <HouseFace size={22} /> : <PixelFace face={faceFromBytes(first.account.face)} size={22} /> : <Text style={{ color }}>?</Text>}
+        <Text numberOfLines={1} style={[styles.stageText, { color }]}>{sideText(side)} {formatSol(side === Side.Up ? round.account.rawUp : round.account.rawDown)}</Text>
+        <Text style={styles.houseTag}>{first?.account.authority === me ? 'YOU' : first?.account.isHouse ? 'HOUSE' : players.length > 1 ? '+' + (players.length - 1) : ''}</Text>
+      </View>;
+    })}</View>
+  </View>;
+}
+const sideText = (side: number) => side === Side.Up ? 'UP' : 'DOWN';
 
 /** The friend whose challenge link opened the app, on their face in the round panels (YOU wins on my own face). */
 export function RivalTag() {
@@ -52,6 +74,7 @@ export function SideColumn({
   rival = null,
   myExpression,
   big = false,
+  compact = false,
 }: {
   side: number;
   total: bigint;
@@ -61,6 +84,7 @@ export function SideColumn({
   rival?: string | null;
   myExpression?: Expression;
   big?: boolean;
+  compact?: boolean;
 }) {
   const up = side === Side.Up;
   const color = up ? C.neonGreen : C.neonRed;
@@ -71,17 +95,17 @@ export function SideColumn({
   // Seeker ID names (.skr) of the players shown; a player without one stays a face.
   const names = useSkrNames(shown.filter((p) => !p.account.isHouse).map((p) => p.account.authority));
   return (
-    <View style={[styles.column, hasMe && { borderColor: color, backgroundColor: up ? 'rgba(53,223,108,0.08)' : 'rgba(251,96,124,0.08)' }]}>
+    <View style={[styles.column, compact && styles.columnCompact, hasMe && { borderColor: color, backgroundColor: up ? 'rgba(53,223,108,0.08)' : 'rgba(251,96,124,0.08)' }]}>
       <View style={styles.colHead}>
-        <PixelText text={up ? 'UP' : 'DOWN'} size={1.8} color={color} />
-        <Text style={styles.total}>
+        <PixelText text={up ? 'UP' : 'DOWN'} size={compact ? 1.5 : 1.8} color={color} />
+        <Text style={[styles.total, compact && { fontSize: 12 }]}>
           {formatSol(total)}
           <Text style={styles.unit}> SOL</Text>
         </Text>
       </View>
       <View style={styles.chips}>
         {shown.length === 0 ? (
-          <View style={[styles.ghost, big && styles.ghostBig]}>
+          <View style={[styles.ghost, big && !compact && styles.ghostBig]}>
             <Text style={styles.ghostText}>?</Text>
           </View>
         ) : null}
@@ -91,10 +115,10 @@ export function SideColumn({
           return (
             <View key={p.address} style={styles.chip}>
               {house ? (
-                <HouseFace size={big ? 34 : 28} />
+                <HouseFace size={compact ? 22 : big ? 34 : 28} />
               ) : (
                 <View style={mine ? [styles.meRing, { borderColor: color, boxShadow: `0 0 10px ${color}` }] : null}>
-                  <PixelFace face={faceFromBytes(p.account.face)} size={mine ? 36 : 28} expression={mine ? myExpression : undefined} />
+                  <PixelFace face={faceFromBytes(p.account.face)} size={compact ? 22 : mine ? 36 : 28} expression={mine ? myExpression : undefined} />
                 </View>
               )}
               {mine ? (
@@ -137,7 +161,9 @@ export const MyRoundPanel = memo(function MyRoundPanel({
   standing,
   me,
   rival = null,
+  compact = false,
 }: {
+  compact?: boolean;
   round: RoundView;
   position: PositionView;
   positions: readonly PositionView[];
@@ -154,6 +180,7 @@ export const MyRoundPanel = memo(function MyRoundPanel({
   const expression: Expression | undefined = standing === 'winning' ? 'happy' : standing === 'losing' ? 'sad' : undefined;
   const st = STAGE[stage];
   const glow = standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonPurple;
+  if (compact) return <CompactRoundPanel round={round} positions={all} me={me} stage={st.text} position={position} standing={standing} />;
   return (
     <View style={[styles.panel, { borderColor: glow, boxShadow: `0 0 16px ${glow}66` }]}>
       <View style={styles.head}>
@@ -167,8 +194,8 @@ export const MyRoundPanel = memo(function MyRoundPanel({
         <StandingBadge stage={stage} standing={standing} />
       </View>
       <View style={styles.sides}>
-        <SideColumn side={Side.Up} total={a.rawUp} positions={ups} me={me} rival={rival} myExpression={expression} big />
-        <SideColumn side={Side.Down} total={a.rawDown} positions={downs} me={me} rival={rival} myExpression={expression} big />
+        <SideColumn compact={compact} side={Side.Up} total={a.rawUp} positions={ups} me={me} rival={rival} myExpression={expression} big />
+        <SideColumn compact={compact} side={Side.Down} total={a.rawDown} positions={downs} me={me} rival={rival} myExpression={expression} big />
       </View>
       {/* While the strike is being fixed the house may still fill the short side: wait until the book is final. */}
       {stage !== 'fixing' ? <MatchedLine rawUp={a.rawUp} rawDown={a.rawDown} minBank={a.minBank} side={position.account.side} stake={position.account.stake} /> : null}
@@ -187,8 +214,8 @@ function MatchedLine({ rawUp, rawDown, minBank, side, stake }: { rawUp: bigint; 
   const accepted = acceptedStake(rawUp, rawDown, side as Side, stake);
   if (accepted === null) return null;
   return (
-    <Text style={styles.matchedLine}>
-      Matched now {formatSol(accepted)} · excess {formatSol(stake - accepted)} back. Can change until entry closes.
+    <Text numberOfLines={1} style={styles.matchedLine}>
+      Matched {formatSol(accepted)} · excess {formatSol(stake - accepted)} back.
     </Text>
   );
 }
@@ -208,7 +235,9 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
   me,
   rival = null,
   upcoming,
+  compact = false,
 }: {
+  compact?: boolean;
   round: RoundView | null;
   positions: readonly PositionView[];
   me: string | null;
@@ -220,6 +249,7 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
   const pulse = round
     ? pulseText(roundPulse({ positions, positionCount: round.account.positionCount, rawUp: round.account.rawUp, rawDown: round.account.rawDown }), formatSol)
     : null;
+  if (compact && round) return <CompactRoundPanel round={round} positions={positions} me={me} stage={upcoming ? 'OPENS SOON' : positions.some(p => p.account.authority === me && !p.account.isHouse) ? 'SAVED' : 'OPEN'} position={positions.find(p => p.account.authority === me && !p.account.isHouse)} />;
   return (
     <View style={[styles.panel, styles.panelOpen]}>
       <View style={styles.head}>
@@ -240,7 +270,6 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
           </View>
           <View style={styles.emptyMid}>
             <Text style={styles.emptyTitle}>BE THE FIRST{'\n'}TO CALL IT</Text>
-            <Text style={styles.emptyArrow}>▼</Text>
           </View>
           <View style={styles.ghost}>
             <Text style={[styles.ghostText, { color: C.neonRed }]}>▼</Text>
@@ -248,8 +277,8 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
         </View>
       ) : (
         <View style={styles.sides}>
-          <SideColumn side={Side.Up} total={round?.account.rawUp ?? 0n} positions={ups} me={me} rival={rival} />
-          <SideColumn side={Side.Down} total={round?.account.rawDown ?? 0n} positions={downs} me={me} rival={rival} />
+          <SideColumn compact={compact} side={Side.Up} total={round?.account.rawUp ?? 0n} positions={ups} me={me} rival={rival} />
+          <SideColumn compact={compact} side={Side.Down} total={round?.account.rawDown ?? 0n} positions={downs} me={me} rival={rival} />
         </View>
       )}
     </View>
@@ -299,8 +328,9 @@ export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { ro
 }
 
 const styles = StyleSheet.create({
+  compactSide: { flex: 1, height: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, paddingHorizontal: 4, gap: 4 },
   matchedLine: { color: C.subtle, fontSize: 11, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
-  panel: { borderWidth: 2, backgroundColor: C.panelDeep, padding: 8, gap: 8 },
+  panel: { borderWidth: 2, backgroundColor: C.panelDeep, padding: 6, gap: 4 },
   panelOpen: { borderColor: '#5b4f78', borderWidth: 1 },
   head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8, minHeight: 22 },
   headLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
@@ -321,7 +351,8 @@ const styles = StyleSheet.create({
   },
   sides: { flexDirection: 'row', gap: 8 },
   column: { flex: 1, borderWidth: 1, borderColor: C.borderSoft, backgroundColor: C.panel, padding: 6, gap: 6, minHeight: 84 },
-  colHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  columnCompact: { minHeight: 62, padding: 4, gap: 2 },
+  colHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 4 },
   sideName: { fontSize: 15, fontWeight: '900' },
   total: { color: C.white, fontFamily: MONO, fontWeight: '900', fontSize: 15 },
   unit: { color: C.subtle, fontSize: 9, fontWeight: '800' },

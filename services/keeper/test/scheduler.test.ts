@@ -135,7 +135,7 @@ async function byRound(h: Harness, id: bigint): Promise<SentInstruction[][]> {
 describe('scheduler', () => {
   test('an unobserved market never accepts a round; a ready one can open normally', async () => {
     let reason: string | null = 'observing market: 9/10 priced shadow minutes';
-    const h = await harness({ marketReady: () => reason });
+    const h = await harness({ marketReady: async () => reason });
     const now = MINUTE + 50;
     h.store.add(POOL, obs(now * 1000 - 400, 1));
     await tick(h, now);

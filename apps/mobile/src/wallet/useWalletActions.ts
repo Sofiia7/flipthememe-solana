@@ -29,7 +29,7 @@ import { prepareTopUp } from './topUpFlow';
 import { sessionCapFor } from './topUpPlan';
 import { loadSessionPolicy, sessionRules } from './sessionPolicy';
 import { recordEvent } from '../lib/diagnostics';
-import { WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
+import { devnetAuthorization, WalletAccountChanged, withWallet, type WalletContext, type WalletStore } from './walletSession';
 
 export type WalletBusy = Exclude<TxAction, 'bet' | 'claim'>;
 
@@ -144,14 +144,14 @@ export function useWalletActions(input: {
 
   // The kit's own connect/sign cannot recover from a cached authorization the wallet rejects
   // (see walletSession.ts), so every wallet trip goes through withWallet.
-  const { store, chain, identity } = mwa;
+  const { store, identity } = mwa;
   const walletCtx = useMemo<WalletContext<KitMobileWallet>>(
     () => ({
       store: store as unknown as WalletStore,
       transact: async (callback) => await transact(callback),
-      authorize: (wallet, authToken) => wallet.authorize({ chain, identity, auth_token: authToken }),
+      authorize: (wallet, authToken) => wallet.authorize(devnetAuthorization(identity, authToken)),
     }),
-    [store, chain, identity],
+    [store, identity],
   );
 
   /**
@@ -166,7 +166,7 @@ export function useWalletActions(input: {
         const compiled = await compileForWallet(rpc, payer, instructions);
         const [transaction] = await wallet.signTransactions({ transactions: [compiled.transaction] });
         return { transaction, lastValidBlockHeight: compiled.lastValidBlockHeight };
-      }),
+      }, { fresh: true }),
     [rpc, walletCtx],
   );
 
@@ -338,7 +338,7 @@ export function useWalletActions(input: {
           const compiled = await compileForWallet(rpc, payer, prepared.instructions);
           const [transaction] = await wallet.signTransactions({ transactions: [compiled.transaction] });
           return { kind: 'signed', payer, signed: { transaction, lastValidBlockHeight: compiled.lastValidBlockHeight } };
-        });
+        }, { fresh: true });
         if (step.kind === 'settled') return step.outcome;
         return submitGuarded('topup', step.payer, step.signed, topUpDone(amount));
       }),

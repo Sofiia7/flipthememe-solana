@@ -70,7 +70,7 @@ export function NeonButton({
 
 const styles = StyleSheet.create({
   wrap: { borderWidth: 2, borderColor: 'rgba(255,255,255,0.55)' },
-  off: { opacity: 0.38 },
+  off: { opacity: 0.55 },
   pressed: { transform: [{ translateY: 2 }] },
   fill: { minHeight: 50, borderTopWidth: 3, borderLeftWidth: 3, borderRightWidth: 3, borderBottomWidth: 4, borderTopColor: '#ffffff55', borderLeftColor: '#ffffff33', borderRightColor: '#00000033', borderBottomColor: '#00000066', paddingVertical: 9, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center' },
   fillBig: { minHeight: 56, paddingVertical: 5 },

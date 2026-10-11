@@ -61,6 +61,11 @@ export type WalletAuthorization = { accounts: WalletAccount[]; authToken: string
 /** What the wallet answers to `authorize`: base64 addresses and a token for the next session. */
 export type AuthorizeResult = { accounts: readonly { address: string; label?: string; icon?: string }[]; auth_token: string };
 
+/** Explicit modern and legacy network selection; never inherit a wallet's mainnet default. */
+export function devnetAuthorization(identity: { name?: string; uri?: string; icon?: string }, authToken?: string) {
+  return { chain: 'solana:devnet' as const, cluster: 'devnet' as const, identity, auth_token: authToken };
+}
+
 /** The kit's authorization store, as far as this module uses it. */
 export type WalletStore = {
   $authToken: { get(): string | undefined };
@@ -118,8 +123,9 @@ async function session<W, T>(ctx: WalletContext<W>, authToken: string | undefine
  * with the authorized account. When the wallet rejects the cached token, a second session asks for
  * a fresh authorization: the wallet opens twice, once.
  */
-export async function withWallet<W, T>(ctx: WalletContext<W>, work: (wallet: W, account: WalletAccount) => Promise<T>): Promise<T> {
-  const cached = ctx.store.$authToken.get();
+export async function withWallet<W, T>(ctx: WalletContext<W>, work: (wallet: W, account: WalletAccount) => Promise<T>, options: { fresh?: boolean } = {}): Promise<T> {
+  // Legacy reauthorize does not carry a chain. Money signing must establish devnet anew.
+  const cached = options.fresh ? undefined : ctx.store.$authToken.get();
   try {
     return await session(ctx, cached, work);
   } catch (error) {

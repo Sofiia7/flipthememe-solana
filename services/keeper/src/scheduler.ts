@@ -146,7 +146,7 @@ export type SchedulerDeps = {
   /** Present when ATTEST_URL is set. */
   attestor?: AttestorClient | null;
   certificates?: typeof certificateInstructions;
-  marketReady?: (pool: string, nowMs: number) => string | null;
+  marketReady?: (pool: string, nowMs: number) => string | null | Promise<string | null>;
   closer?: PositionCloser;
   /** rounds.jsonl: a line per swept round (humans, wallets, outcome); absent = no such record. */
   roundLog?: RoundLog | null;
@@ -172,7 +172,7 @@ export class Scheduler {
   private readonly houseSigner: KeyPairSigner;
   private readonly attestor: AttestorClient | null;
   private readonly certificates: typeof certificateInstructions;
-  private readonly marketReady: (pool: string, nowMs: number) => string | null;
+  private readonly marketReady: (pool: string, nowMs: number) => string | null | Promise<string | null>;
   private readonly closer: PositionCloser;
   private readonly cfg: KeeperConfig;
   private readonly state: StateStore;
@@ -598,7 +598,7 @@ export class Scheduler {
       this.warn('no-pool', { event: 'create_skipped', reason: 'no pool selected yet' });
       return;
     }
-    const notReady = this.marketReady(pool.pool, nowMs);
+    const notReady = await this.marketReady(pool.pool, nowMs);
     if (notReady) {
       this.warn('market-ready', { event: 'create_skipped', reason: notReady, pool: pool.pool });
       return;

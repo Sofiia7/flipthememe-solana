@@ -16,7 +16,7 @@ export async function gateArena(arena: Record<string, unknown>, fetcher: typeof 
   if (fetcher !== fetch) ready = await read();
   else if (cached && cached.until > Date.now()) ready = cached.ready;
   else {
-    checking ??= read().then(value => { cached = { ready: value, until: Date.now() + 20_000 }; return value; }).finally(() => { checking = null; });
+    checking ??= read().then(value => { cached = { ready: value, until: Date.now() + (value ? 5_000 : 1_000) }; return value; }).finally(() => { checking = null; });
     ready = await checking;
   }
   return ready ? arena : { ...arena, phase: 'paused', reason: 'Fresh oracle prices cannot be confirmed. New bets wait; existing bets can still settle or refund.', keeperUpdatedAt: arena.updatedAt, updatedAt: new Date().toISOString() };

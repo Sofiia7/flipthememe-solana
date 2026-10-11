@@ -186,7 +186,10 @@ async function main(): Promise<void> {
     priceSigner: roles.price,
     houseSigner: roles.house,
     attestor,
-    marketReady: (pool, nowMs) => (!leaderboard ? 'History archive is unavailable; new rounds wait.' : null) ?? (!cfg.legacyPrices ? oracleHealth.refusal(nowMs) : null) ?? (cfg.poolGate.neutral ? shadow.readiness(pool, nowMs) : null),
+    marketReady: async (pool, nowMs) => {
+      if (!cfg.legacyPrices && oracleHealth.refusal(nowMs)) await oracleHealth.check();
+      return (!leaderboard ? 'History archive is unavailable; new rounds wait.' : null) ?? (!cfg.legacyPrices ? oracleHealth.refusal(Date.now()) : null) ?? (cfg.poolGate.neutral ? shadow.readiness(pool, Date.now()) : null);
+    },
     cfg,
     state,
     selector,
@@ -268,8 +271,9 @@ async function main(): Promise<void> {
   // is the error log's business, a loop that stopped completing is the watchdog's.
   let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
-    every('oracle-readiness', 20_000, 1_000, errors, () => oracleHealth.check()),
-    every('market-status', 30_000, 12_000, errors, async () => {
+    every('oracle-readiness', 5_000, 1_000, errors, () => oracleHealth.check()),
+    every('market-status', 10_000, 12_000, errors, async () => {
+      if (!cfg.legacyPrices && oracleHealth.refusal(Date.now())) await oracleHealth.check();
       const pool = selector.current;
       const oracleRefusal = !cfg.legacyPrices ? oracleHealth.refusal(Date.now()) : null;
       await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, oracleRefusal ?? (cfg.poolGate.neutral ? pool ? shadow.readiness(pool.pool, Date.now()) : selector.watching.map(p => shadow.bias(p.pool, Date.now())).find(Boolean) ?? null : null), (sched.snapshot?.config?.paused ?? false) || oracleRefusal !== null, selector.watching.length));

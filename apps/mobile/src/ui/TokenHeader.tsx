@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
   logoLetter: { color: C.accentText, fontSize: 18, fontWeight: '900' },
   waiting: { color: C.subtle, fontSize: 13, fontWeight: '800' },
   texts: { flex: 1, gap: 1 },
-  titleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  titleRow: { minHeight: 28, justifyContent: 'center' },
   symbol: { color: C.white, fontSize: 24, fontWeight: '900', flexShrink: 1 },
   name: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   // Context, not an action: quiet next to the money and the round stage.

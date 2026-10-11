@@ -6,7 +6,7 @@ import { Animated, Linking, Pressable, StyleSheet, Text, View } from 'react-nati
 import { ago, useChatter, type ChatterItem } from '../chain/useChatter';
 import { C, FONT_CAP, MONO } from '../theme';
 
-const CHATTER_LANE_HEIGHT = 50;
+const CHATTER_LANE_HEIGHT = 42;
 /** Each tweet is on screen at least this long before the next one pushes it out. */
 const MIN_SHOW_MS = 4_500;
 /** Then it dims, and stays until the next one comes. */

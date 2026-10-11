@@ -1,9 +1,10 @@
 import { useMarketStatus } from '../chain/useMarketStatus';
 import { waitingView } from '../lib/marketStatus';
 import { recordEvent } from '../lib/diagnostics';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RoundStatus, Side, acceptedStake } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
@@ -46,10 +47,9 @@ import { HowItWorksSheet } from '../ui/HowItWorks';
 import { EntryTicker, LiveClock, type ClockView } from '../ui/LiveClock';
 import { NeonButton } from '../ui/NeonButton';
 import { PixelText } from '../ui/PixelText';
-import { ExtraRoundLine, MyRoundPanel, NextRoundBar, OpenRoundPanel } from '../ui/RoundPanel';
+import { ExtraRoundLine, MyRoundPanel, OpenRoundPanel } from '../ui/RoundPanel';
 import { TokenHeader } from '../ui/TokenHeader';
 import { RoundProgress } from '../ui/RoundProgress';
-import { DailyRecord } from '../ui/DailyRecord';
 import { TopUpSheet } from '../ui/TopUpSheet';
 import { canRenewSession, minStakeOf } from '../wallet/playState';
 import { RENT_FALLBACK, maxWinProfit } from '../wallet/topUpPlan';
@@ -96,10 +96,14 @@ export function ArenaScreen() {
   const [intent, setIntent] = useState<BetIntent | null>(null);
   const [intentNotice, setIntentNotice] = useState<string | null>(null);
   const [selectedRound, setSelectedRound] = useState<bigint | null>(null);
+  const [showNewCall, setShowNewCall] = useState(false);
   const chatter = useBoolStore(chatterOn);
-  const chatterShown = chatter.loaded && chatter.value;
-  // The chart receives the stage's spare height after the token, timer, players and invitation.
-  const [chartHeight, setChartHeight] = useState(140);
+  const insets = useSafeAreaInsets();
+  // The chart depends only on the device window, never on player count, hints or dock contents.
+  const { height: windowHeight } = useWindowDimensions();
+  const arenaHeight = windowHeight - insets.top - insets.bottom - 48;
+  const chartHeight = arenaHeight < 600 ? 100 : arenaHeight < 700 ? 120 : 140;
+  const chatterShown = chatter.loaded && chatter.value && arenaHeight >= 660;
 
   // The rules stay behind the "?" in the header: nothing opens by itself on the first launch.
   useEffect(() => {
@@ -141,11 +145,11 @@ export function ArenaScreen() {
   );
   // Follow the oldest unfinished call until the player explicitly selects another.
   const latest = myUnresolved.find(m => m.round.id === selectedRound)?.round ?? myUnresolved[0]?.round ?? null;
-  const myRounds = latest ? [latest] : [];
+  const myRounds = latest && !showNewCall ? [latest] : [];
 
   const open = groups.open;
   const panel = selectPanel({ nowSec, open, upcoming: groups.upcoming, myUnresolved: myRounds });
-  const focus = latest ? mine.get(latest.id) ?? null : null;
+  const focus = latest && !showNewCall ? mine.get(latest.id) ?? null : null;
   const selectedFeed = usePoolPrice(focus && focus.round.account.pool !== feed.pool && focus.round.account.pool !== myFeed.pool ? focus.round.account.pool : null, app.tab === 'arena');
 
   // Prices: the charted pool, or my round's pool when the token rotated since I bet.
@@ -177,7 +181,7 @@ export function ArenaScreen() {
       ? {
           range: [chainToLocalMs(chartRound.account.strikeStart, offsetSec), chainToLocalMs(chartRound.account.strikeEnd, offsetSec)] as const,
           label:
-            chartStrike.kind === 'pending' ? 'REFERENCE SOON' : chartStrike.kind === 'fixing' ? 'REFERENCE' : '',
+            chartStrike.kind === 'pending' ? 'START PRICE SOON' : chartStrike.kind === 'fixing' ? 'REFERENCE' : '',
           strong: chartStrike.kind === 'pending' || chartStrike.kind === 'fixing',
         }
       : null;
@@ -196,9 +200,9 @@ export function ArenaScreen() {
       if (st.kind === 'fixed') {
         const p = priceOf(deltaRound.account.pool, atMs);
         const delta = p ? deltaView(st.strike, p.price) : null;
-        if (p && delta) side = { kind: 'delta', delta, label: `${id} VS REFERENCE`, stale: p.stale };
-      } else if (st.kind === 'pending') side = { kind: 'note', text: formatCountdown(st.secondsLeft), label: 'REFERENCE MEASUREMENT IN' };
-      else if (st.kind === 'fixing') side = { kind: 'note', text: sec < Number(deltaRound.account.strikeEnd) ? 'MEASURING' : 'CONFIRMING', label: 'REFERENCE PRICE' };
+        if (p && delta) side = { kind: 'delta', delta, label: `${id} VS START PRICE`, stale: p.stale };
+      } else if (st.kind === 'pending') side = { kind: 'note', text: formatCountdown(st.secondsLeft), label: 'START PRICE IN' };
+      else if (st.kind === 'fixing') side = { kind: 'note', text: sec < Number(deltaRound.account.strikeEnd) ? 'MEASURING' : 'CONFIRMING', label: 'START PRICE' };
     }
     return { timer, side };
   };
@@ -236,6 +240,15 @@ export function ArenaScreen() {
   const chips = chipStates(BET_AMOUNTS, maxAmount);
   const betAmount = effectiveAmount(amount, BET_AMOUNTS, maxAmount);
   const inOpen = open ? mine.get(open.id) : undefined;
+  const followedConfirmation = useRef<bigint | null>(null);
+  useEffect(() => {
+    const id = betting.bet.roundId;
+    if (betting.bet.phase === 'confirmed' && id !== null && id !== followedConfirmation.current && mine.has(id)) {
+      followedConfirmation.current = id;
+      setSelectedRound(id);
+      setShowNewCall(false);
+    }
+  }, [mine, betting.bet.phase, betting.bet.roundId]);
   const quotedAmount = owner ? betAmount : amount;
   const upMatch = open ? acceptedStake(open.account.rawUp + quotedAmount, open.account.rawDown, Side.Up, quotedAmount) : null;
   const downMatch = open ? acceptedStake(open.account.rawUp, open.account.rawDown + quotedAmount, Side.Down, quotedAmount) : null;
@@ -257,7 +270,6 @@ export function ArenaScreen() {
   if (!open) blocked = waiting.detail;
   else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
   else if (paused) blocked = 'Betting is paused by the operator.';
-  else if (market?.phase === 'paused' && nowMs - Date.parse(market.updatedAt) < 240_000) blocked = market.reason;
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
   else if (betAmount + positionRent > available) {
@@ -355,22 +367,22 @@ export function ArenaScreen() {
   // Outside a bet the same place invites a friend to play. The link names no side, only me (wallet and
   // name for their RIVAL tag) and the round open now, so their app shows where to meet.
   const inviteRound = challengeFocus || inOpen ? null : (open ?? groups.upcoming);
-  const invite = (round: RoundView) => {
-    const link = roundLink(round.id, { side: null, token: null, by: owner, name: myName });
+  const invite = (round: RoundView | null) => {
+    const id = round?.id ?? arena.rounds[0]?.id ?? 0n;
+    const link = roundLink(id, { side: null, token: null, by: owner, name: myName });
     const text = `Play FlipTheMeme with me: call UP or DOWN on a busy Solana meme coin. A 1-minute move, result in about 2 minutes, a new round every minute (devnet, test SOL). Join me: ${link}`;
     setSharing(true);
-    void shareCard({ kind: 'invite', face: app.face, roundId: round.id, name: myName }, text, 'Play with a friend').finally(() => setSharing(false));
+    void shareCard({ kind: 'invite', face: app.face, roundId: id, name: myName }, text, 'Play with a friend').finally(() => setSharing(false));
   };
 
-  const lateRounds = myUnresolved.filter((m) => nowSec > Number(m.round.account.exitEnd) + OVERDUE_SECS);
-  const extraRounds = panel.kind === 'mine' ? panel.others.map((r) => mine.get(r.id)).filter((m): m is Mine => !!m) : [];
 
   return (
     <View style={styles.flex}>
+      <View style={styles.screen}>
       <View style={styles.headerWrap}>
         <View style={styles.header}>
           <View style={styles.brand}>
-            <PixelText text="$FLIPTHEMEME" size={1.75} color={C.white} shadow={C.accent} />
+            <View style={{ flex: 1, minWidth: 0 }}><PixelText text="$FLIPTHEMEME" size={1.75} color={C.white} shadow={C.accent} fit style={{ alignItems: 'flex-start' }} /></View>
             <Text style={styles.devnet}>DEVNET</Text>
           </View>
           <View style={styles.headerRight}>
@@ -385,37 +397,24 @@ export function ArenaScreen() {
             </Pressable>
           </View>
         </View>
-        {dayText ? (
-          <DailyRecord text={dayText} won={day.won} finished={day.finished} color={dayColor} />
-        ) : null}
       </View>
 
       {chatterShown && tokenMint ? <ChatterLane symbol={symbol} mint={tokenMint} /> : null}
 
-      <ScrollView style={styles.stage} contentContainerStyle={styles.page}>
-          {arena.error && (arenaStaleSec === null || arenaStaleSec > 10) ? (
-            <Banner tone="error" text={`Devnet unreachable (${arena.error}).${arenaStaleSec !== null ? ` Data ${arenaStaleSec} s old.` : ''}`} />
-          ) : arenaStaleSec !== null && arenaStaleSec > 10 ? (
-            <Banner tone="warn" text={`Data ${arenaStaleSec} s old - devnet is slow, retrying.`} />
-          ) : null}
-          {app.challenge ? <ChallengeCard challenge={app.challenge} open={open} nowSec={nowSec} onClose={app.clearChallenge} /> : null}
-          {app.pendingNote ? <Banner tone="warn" text={app.pendingNote} action={{ label: 'OK', onPress: app.clearPendingNote }} /> : null}
-          {intentNotice ? <Banner tone="info" text={intentNotice} action={{ label: 'OK', onPress: () => setIntentNotice(null) }} /> : null}
-          {app.away ? <Banner tone="info" text={awayText(app.away, formatSol)} action={{ label: 'OK', onPress: app.ackAway }} /> : null}
-          {wallet.result && !wallet.result.ok && wallet.result.action === 'connect' ? <Banner tone="error" text={wallet.result.message} /> : null}
-
+      <View style={styles.page}>
           <TokenHeader mint={tokenMint} pool={tokenRound?.account.pool ?? preview.pool} nowMs={secMs} />
-          {myUnresolved.length > 0 ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-            {myUnresolved.map(m => <Pressable key={String(m.round.id)} onPress={() => setSelectedRound(m.round.id)} accessibilityRole="button" accessibilityState={{ selected: m.round.id === latest?.id }} accessibilityLabel={`Your active round ${m.round.id}, ${sideName(m.position.account.side)}`} style={[styles.walletChip, { minHeight: 48, justifyContent: 'center', borderColor: m.round.id === latest?.id ? C.neonYellow : C.borderSoft }]}><Text style={styles.walletText}>#{String(m.round.id)} · {sideName(m.position.account.side)}</Text></Pressable>)}
-          </View> : null}
+          <View style={styles.roundSelection}>
+            <Text numberOfLines={1} style={styles.dayText}>{focus ? `YOUR CALL #${focus.round.id} - ${sideName(focus.position.account.side)}` : open ? `CALL #${open.id} - OPEN` : 'NEXT ROUND'}</Text>
+            {myUnresolved.length > 0 ? <Pressable hitSlop={10} onPress={() => { if (focus) setShowNewCall(true); else { setShowNewCall(false); setSelectedRound(myUnresolved[(myUnresolved.findIndex(m => m.round.id === selectedRound) + 1) % myUnresolved.length].round.id); } }} style={styles.viewCall} accessibilityRole="button"><Text style={styles.walletText}>{focus ? 'NEXT CALL' : 'MY CALL'}</Text></Pressable> : null}
+          </View>
 
-          <View style={styles.chartSpace} onLayout={e => setChartHeight(Math.max(60, Math.floor(e.nativeEvent.layout.height)))}>
+          <View style={[styles.chartSpace, { height: chartHeight }]}>
           <PriceChart
             points={stageFeed.points}
             nowMs={secMs}
             height={chartHeight}
             strike={chartStrike?.kind === 'fixed' ? chartStrike.strike : null}
-            strikeLabel={chartRound ? `REFERENCE #${chartRound.id}` : undefined}
+            strikeLabel={chartRound ? `START #${chartRound.id}` : undefined}
             pairLabel={`${symbol ? symbol.toUpperCase() : 'TOKEN'} / SOL`}
             strikeWindow={strikeWindow}
             exitWindow={
@@ -439,20 +438,13 @@ export function ArenaScreen() {
               <View style={{ paddingVertical: 16, gap: 10 }}>
                 <PixelText text={waiting.title} size={2} color={C.neonYellow} fit />
                 {waiting.progress ? <Text style={[T.subtle, { color: C.white }]}>{waiting.progress.observed}/{waiting.progress.required} measured minutes</Text> : null}
-                <Text style={T.subtle}>{waiting.detail}</Text>
-                <Text style={T.subtle}>Bets open only after market checks pass. No bet is placed while waiting.</Text>
               </View>
             ) : <LiveClock at={clockAt} />
           )}
-          {streakText || (myUnresolved.length === 0 && !pendingHere) ? (
-            <View style={styles.hintRow}>
-              {streakText ? <Text style={styles.streakPill}>{streakText}</Text> : null}
-              {open && myUnresolved.length === 0 && !pendingHere ? <Text style={[T.subtle, styles.hintText]}>TOKEN / SOL: higher or lower? Choose → reference → move → result. Result 100-160 seconds after entry, plus confirmation.</Text> : null}
-            </View>
-          ) : null}
-
+          <View style={styles.panelSpace}>
           {panel.kind === 'mine' && focus && owner ? (
             <MyRoundPanel
+              compact
               round={focus.round}
               position={focus.position}
               positions={arena.positions.get(focus.round.id) ?? NO_PLAYERS}
@@ -463,6 +455,7 @@ export function ArenaScreen() {
             />
           ) : panelRound ? (
             <OpenRoundPanel
+              compact
               round={panelRound}
               positions={panelRound ? (arena.positions.get(panelRound.id) ?? NO_PLAYERS) : NO_PLAYERS}
               me={owner}
@@ -470,28 +463,34 @@ export function ArenaScreen() {
               upcoming={panel.kind !== 'open'}
             />
           ) : null}
-          {challengeFocus || inviteRound ? (
-        <View>
-          {challengeFocus ? (
-            <Btn small kind="ghost" title="CHALLENGE A FRIEND" busy={sharing} onPress={() => challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt))} style={styles.friend} />
-          ) : inviteRound ? (
-            <Btn small kind="ghost" title="PLAY WITH A FRIEND" busy={sharing} onPress={() => invite(inviteRound)} style={styles.friend} />
-          ) : null}
-        </View>
-          ) : null}
-      </ScrollView>
+          </View>
+      </View>
 
       <View style={styles.dock}>
-        {open && !inOpen ? <Text style={styles.nextExplanation}>BET #{String(open.id)} · {openSymbol ? `$${openSymbol}` : open.account.tokenMint.slice(0, 6)} / SOL · x{multiplier.replace(/^x/, '')} on matched stake only; excess returned. Match can change.</Text> : null}
-        {open && !inOpen && !pendingHere && upMatch !== null && downMatch !== null ? <Text style={styles.nextExplanation}>Current book estimate for {formatSol(quotedAmount)} SOL: UP plays {formatSol(upMatch)}, back {formatSol(quotedAmount - upMatch)} · DOWN plays {formatSol(downMatch)}, back {formatSol(quotedAmount - downMatch)}. Final match is set after entry.</Text> : null}
-        {panel.kind === 'mine' && open ? <Text style={styles.nextExplanation}>NEW BET · separate from your #{focus?.round.id.toString()} above</Text> : null}
-        {panel.kind === 'mine' && open ? (
-          <NextRoundBar roundId={open.id} secondsLeft={secondsLeft} opens={false} token={open.account.tokenMint !== tokenMint ? openSymbol : null} />
-        ) : null}
-        {panel.kind === 'mine' && !open && groups.upcoming ? (
-          <NextRoundBar roundId={groups.upcoming.id} secondsLeft={Number(groups.upcoming.account.opensAt) - nowSec} opens />
-        ) : null}
-        <BetStatusLine openId={open?.id ?? null} visible={(roundId) => mine.has(roundId)} />
+        <Btn small kind="ghost" title={challengeFocus ? 'CHALLENGE A FRIEND' : 'PLAY WITH A FRIEND'} busy={sharing} onPress={() => challengeFocus ? challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt)) : invite(inviteRound)} style={styles.friend} />
+        <View style={styles.betContext}>{working || pending || betting.bet.phase === 'failed' ? <BetStatusLine openId={open?.id ?? null} visible={(roundId) => mine.has(roundId)} /> : <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={styles.nextExplanation} numberOfLines={1}>{open ? `${focus && focus.round.id !== open.id ? 'NEXT ' : ''}CALL #${open.id} - ${openSymbol ? '$' + openSymbol : 'TOKEN'} - ${inOpen ? 'SAVED' : 'matched payout ' + multiplier}` : 'Next round - preparing entry'}</Text></Pressable>}</View>
+            <View style={styles.amounts}>
+              {chips.map(({ amount: a, fits }) => {
+                const active = betAmount === a;
+                return (
+                  <Pressable
+                    key={a.toString()}
+                    disabled={!!owner && !fits}
+                    onPress={() => {
+                      void Haptics.selectionAsync().catch(() => undefined);
+                      setAmount(a);
+                    }}
+                    style={[styles.amount, active && styles.amountActive, !!owner && !fits && styles.amountOff]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active, disabled: !!owner && !fits }}
+                  >
+                    <Text style={[styles.amountText, active && styles.amountTextActive]}>{formatSol(a)}</Text>
+                    {owner && !fits ? <Text style={styles.amountCaption}>{maxBetCaption(maxAmount)}</Text> : null}
+                  </Pressable>
+                );
+              })}
+              <Text style={styles.amountUnit}>SOL</Text>
+            </View>
         {!owner ? (
           // Visitors see the real buttons; a tap opens the top up sheet, which connects the wallet and approves in one go.
           <View style={styles.sides}>
@@ -509,100 +508,45 @@ export function ArenaScreen() {
               />
             ))}
           </View>
-        ) : intent && intentWaiting && !inOpen ? (
-          // The approval is through and the call goes in as soon as the account shows the new balance.
-          <NeonButton
-            title="PLACING YOUR CALL"
-            subtitle={intentText(intent, sideName, formatSol)}
-            kind={intent.side === Side.Up ? 'up' : 'down'}
-            big
-            busy
-            onPress={() => undefined}
-          />
-        ) : !myReady ? (
-          <NeonButton title="LOADING YOUR BALANCE" kind="purple" big disabled onPress={() => undefined} />
-        ) : inOpen ? (
-          <View style={[styles.inCard, { borderColor: inOpen.position.account.side === Side.Up ? C.neonGreen : C.neonRed }]}>
-            <Text style={styles.inText}>
-              YOU'RE IN #{inOpen.round.id.toString()}{' '}
-              <Text style={{ color: inOpen.position.account.side === Side.Up ? C.neonGreen : C.neonRed }}>
-                {inOpen.position.account.side === Side.Up ? 'UP ▲' : 'DOWN ▼'}
-              </Text>{' '}
-              {formatSol(inOpen.position.account.stake)} SOL
-            </Text>
-            <Text style={styles.nextExplanation}>Bet saved · waiting for the reference price</Text>
-          </View>
-        ) : topUpReason && !pendingHere ? (
-          <>
-            <Text style={styles.reason}>{topUpReason}</Text>
-            <NeonButton
-              title={canRenew ? 'PLAY AGAIN' : 'TOP UP & PLAY'}
-              subtitle={canRenew ? `${formatSol(available)} SOL ready · no deposit` : 'one wallet approval'}
-              kind="gold"
-              big
-              onPress={() => setTopUpOpen(true)}
-            />
-          </>
+        ) : (intent && intentWaiting && !inOpen) || !myReady || (topUpReason && !pendingHere) ? (
+          <View style={styles.sides}>{[Side.Up, Side.Down].map(side => <NeonButton key={side} title={side === Side.Up ? 'UP' : 'DOWN'} kind={side === Side.Up ? 'up' : 'down'} big badge={multiplier} subtitle={!myReady ? 'loading balance' : intentWaiting ? 'placing call...' : canRenew ? 'renew & play' : 'top up & play'} busy={!!intentWaiting && intent?.side === side} disabled={!myReady || !!intentWaiting} onPress={() => setTopUpOpen(true)} style={styles.flex} />)}</View>
         ) : (
           <>
-            <View style={styles.amounts}>
-              {chips.map(({ amount: a, fits }) => {
-                const active = betAmount === a;
-                return (
-                  <Pressable
-                    key={a.toString()}
-                    disabled={!fits}
-                    onPress={() => {
-                      void Haptics.selectionAsync().catch(() => undefined);
-                      setAmount(a);
-                    }}
-                    style={[styles.amount, active && styles.amountActive, !fits && styles.amountOff]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active, disabled: !fits }}
-                  >
-                    <Text style={[styles.amountText, active && styles.amountTextActive]}>{formatSol(a)}</Text>
-                    {!fits ? <Text style={styles.amountCaption}>{maxBetCaption(maxAmount)}</Text> : null}
-                  </Pressable>
-                );
-              })}
-              <Text style={styles.amountUnit}>SOL</Text>
-            </View>
             <View style={styles.sides}>
               <NeonButton
                 title="UP ▲"
-                subtitle={!open ? 'WAITING FOR MARKET' : upFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
+                subtitle={inOpen ? 'CALL SAVED' : !open ? 'NEXT ROUND SOON' : upFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
                 kind="up"
                 big
                 badge={multiplier}
-                disabled={!!blocked || working || !!pendingHere || !upFits}
+                disabled={!!inOpen || !!blocked || working || !!pendingHere || !upFits}
                 busy={working && betting.bet.side === Side.Up}
                 onPress={() => placeBet(Side.Up)}
                 style={styles.flex}
               />
               <NeonButton
                 title="DOWN ▼"
-                subtitle={!open ? 'WAITING FOR MARKET' : downFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
+                subtitle={inOpen ? 'CALL SAVED' : !open ? 'NEXT ROUND SOON' : downFits ? `win up to +${formatSol(winProfit)}` : SIDE_FULL}
                 kind="down"
                 big
                 badge={multiplier}
-                disabled={!!blocked || working || !!pendingHere || !downFits}
+                disabled={!!inOpen || !!blocked || working || !!pendingHere || !downFits}
                 busy={working && betting.bet.side === Side.Down}
                 onPress={() => placeBet(Side.Down)}
                 style={styles.flex}
               />
             </View>
-            {blocked ? (
+          </>
+        )}
               <View style={styles.blockedRow}>
-                <Text style={styles.reason}>{blocked}</Text>
+                <Text numberOfLines={1} style={styles.reason}>{!blocked ? 'Only matched stake plays - excess returned' : !open ? market?.phase === 'paused' ? 'New calls paused' : market?.phase === 'ready' ? 'Next round soon' : 'Checking markets' : blocked}</Text>
                 {blockedByFunds ? (
                   <Pressable onPress={() => setTopUpOpen(true)} hitSlop={8}>
                     <Text style={styles.topUpLink}>TOP UP</Text>
                   </Pressable>
                 ) : null}
               </View>
-            ) : null}
-          </>
-        )}
+      </View>
       </View>
 
       <EntryTicker cutoffAt={open?.account.cutoffAt ?? null} offsetSec={offsetSec} active={!!owner && !!open && !paused} roundId={open?.id ?? null} />
@@ -614,6 +558,14 @@ export function ArenaScreen() {
       />
       <HowItWorksSheet visible={howOpen} onClose={closeHow} context={
         howOpen ? <View style={{ gap: 8 }}>
+          <Text style={T.subtle}>Only matched stake plays; excess is returned. Current matching can change before entry closes.</Text>
+          {open && upMatch !== null && downMatch !== null ? <Text style={T.subtle}>For {formatSol(quotedAmount)} SOL: UP matches {formatSol(upMatch)}, returns {formatSol(quotedAmount - upMatch)}; DOWN matches {formatSol(downMatch)}, returns {formatSol(quotedAmount - downMatch)}.</Text> : null}
+          {blocked ? <Text style={T.subtle}>{blocked}</Text> : null}
+          {app.pendingNote ? <Text style={T.subtle}>{app.pendingNote}</Text> : null}
+          {intentNotice ? <Text style={T.subtle}>{intentNotice}</Text> : null}
+          {app.away ? <Text style={T.subtle}>{awayText(app.away, formatSol)}</Text> : null}
+          {betting.bet.phase === 'failed' ? <Text style={T.subtle}>{betting.bet.error}</Text> : null}
+          {dayText ? <Text style={T.subtle}>{dayText}{streakText ? ' - ' + streakText : ''}</Text> : null}
           {focus ? <RoundProgress round={focus.round} position={focus.position} nowSec={nowSec} /> : null}
           {myUnresolved.filter(m => m.round.id !== focus?.round.id).map(m => <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />)}
           <ResultsStrip finals={groups.finals.filter(r => r.account.pool === stageFeed.pool)} mine={mine} />
@@ -632,7 +584,7 @@ function BetStatusLine({ openId, visible }: { openId: bigint | null; visible: (r
     return (
       <View style={styles.status}>
         <ActivityIndicator size="small" color={C.neonYellow} />
-        <Text style={styles.statusText} numberOfLines={2}>
+        <Text style={styles.statusText} numberOfLines={1}>
           Waiting for devnet: {sideName(pending.side)} {formatSol(pending.amount)} SOL in #{pending.roundId.toString()}
         </Text>
       </View>
@@ -642,7 +594,7 @@ function BetStatusLine({ openId, visible }: { openId: bigint | null; visible: (r
   if (b.phase === 'failed') {
     return (
       <View style={styles.status}>
-        <Text style={[styles.statusText, { color: C.danger }]} numberOfLines={3}>
+        <Text style={[styles.statusText, { color: C.danger }]} numberOfLines={1}>
           Bet not placed: {b.error}
         </Text>
         <Pressable hitSlop={8} onPress={betting.reset}>
@@ -706,13 +658,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingTop: 2,
+    paddingBottom: 4,
   },
   // The day so far, as a ring under the brand: calls, wins and the net, coloured by the net.
   dayRing: { alignSelf: 'flex-start', marginLeft: 14, marginBottom: 6, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
-  dayText: { fontSize: 11, fontWeight: '900', fontFamily: MONO },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  dayText: { color: C.accentText, fontSize: 11, fontWeight: '900', fontFamily: MONO },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
   devnet: { color: C.neonYellow, fontSize: 9, fontWeight: '900', fontFamily: MONO, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 4 },
   hintRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   hintText: { flexShrink: 1 },
@@ -733,9 +685,18 @@ const styles = StyleSheet.create({
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
   stage: { flex: 1 },
-  page: { flexGrow: 1, paddingHorizontal: 14, paddingTop: 6, paddingBottom: 6, gap: 6 },
-  chartSpace: { flex: 1, minHeight: 60, maxHeight: 220 },
-  friend: { minHeight: 32, paddingVertical: 6 },
+  screen: { flex: 1 },
+  notice: { height: 12, justifyContent: 'center' },
+  noticeText: { fontSize: 10, color: C.neonYellow },
+  roundSelection: { height: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  viewCall: { paddingHorizontal: 8, height: 28, justifyContent: 'center' },
+  panelSpace: { flex: 1, minHeight: 0 },
+  betContext: { height: 20, justifyContent: 'center' },
+  page: { flex: 1, minHeight: 0, paddingHorizontal: 14, paddingTop: 0, paddingBottom: 4, gap: 4 },
+  chartSpace: { flexShrink: 0 },
+  summary: { minHeight: 20, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  matchEstimate: { color: C.subtle, fontSize: 11, lineHeight: 16 },
+  friend: { minHeight: 48, paddingVertical: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
   loadingText: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   results: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
@@ -745,10 +706,11 @@ const styles = StyleSheet.create({
   resultWord: { fontSize: 8, fontWeight: '900', fontFamily: MONO, paddingVertical: 2 },
   resultId: { color: C.subtle, fontSize: 9, fontFamily: MONO },
   dock: {
+    flexShrink: 0,
     paddingHorizontal: 14,
-    paddingTop: 6,
+    paddingTop: 4,
     paddingBottom: 8,
-    gap: 6,
+    gap: 4,
     borderTopWidth: 1,
     borderTopColor: '#3a2c5e',
     backgroundColor: '#140f26',
@@ -763,7 +725,7 @@ const styles = StyleSheet.create({
   amountTextActive: { color: C.white },
   amountUnit: { color: C.subtle, fontSize: 10, fontWeight: '900', fontFamily: MONO },
   sides: { flexDirection: 'row', gap: 10 },
-  blockedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  blockedRow: { height: 18, flexDirection: 'row', alignItems: 'center', gap: 10 },
   reason: { color: C.neonYellow, fontSize: 12, fontWeight: '800', flexShrink: 1 },
   topUpLink: { color: C.neonYellow, fontSize: 12, fontWeight: '900', textDecorationLine: 'underline' },
   inCard: { borderWidth: 2, padding: 8, gap: 8, backgroundColor: C.panelDeep },
