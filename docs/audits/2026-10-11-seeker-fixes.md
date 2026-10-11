@@ -1,0 +1,13 @@
+# Seeker screenshot fixes - 11 October 2026
+
+The Arena is a non-scrolling flex screen. Friend invitation, stake amounts and UP/DOWN stay in the bottom action area across entry, saved, reference and live states. Compact round cards show totals, the player face and status. Detailed matching and recovery messages are accessible through Rules. Token title uses independent rows; fitted pixel text reserves its height before measuring width. Chart size depends on device space and safe-area insets, never round state or dock content. Small screens omit the optional chatter lane.
+
+New entries are no longer disabled by the market-creation status when an on-chain round is already open. The operator's actual on-chain pause remains authoritative. Keeper checks oracle readiness every five seconds and rechecks a cached refusal immediately before creating a round. Market status publishes every ten seconds; the link service retains negative readiness for one second instead of twenty. These changes remove false pauses carried from a previous sampling window without signing unverified prices. Each round reserves at most one quarter of the pool depth budget, leaving capacity for four overlapping rounds; the remaining aggregate room still limits creation. Selection requires enough depth for all four minimum banks. A regression test proves four same-pool rounds open and a fifth cannot exceed the shared limit.
+
+Keeper rollout: bundle SHA256 e6abe7562d2261f747aaa68829e327660ea99ccf1e0016ae4c2e8b09d6c2aad9, verified inside the existing VPS container. Previous bundle: audit-backup-20261011-continuity/keeper.mjs. Rounds 7589 and 7590 opened at 15:40 and 15:41 UTC consecutively; public arena status returned ready. Link Worker version 3cdc3bc6-21a3-45c7-81c6-9af148af9f30.
+
+Owner transactions establish fresh devnet authorization with both current chain and legacy cluster fields. Identity is sol.flipthememe.com, the Android App Links host; its icon is served there. Unit tests check that an old mainnet token cannot be reused for this authorization. Native Solflare behavior still requires device verification.
+
+Validation: 809 tests passed, no skipped tests; mobile and keeper type checks and link Worker dry-run passed. Actual Arena components were inspected in browser fixtures, including 360x720 with simulated Android insets. These are UI-only fixtures with no transaction execution, not a native Seeker certification. Replacement APK is pending build at this point.
+
+Delayed devnet acceptance completed: positions in round 6622 closed, rent withdrawn and HTTP archives verified after closure. Sanitized proof is docs/research/devnet-acceptance-6622.json. No physical-device result is inferred from these server checks.

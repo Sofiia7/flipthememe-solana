@@ -614,7 +614,11 @@ export class Scheduler {
     // Several overlapping windows on one pool share the same manipulation budget.
     const committed = [...(this.snapshot?.rounds.values() ?? [])].reduce((sum, r) => sum + (r && r.pool === pool.pool && r.status !== RoundStatus.Final ? r.maxBank : 0n), 0n);
     const room = byDepth > committed ? byDepth - committed : 0n;
-    const maxBank = room < MAX_BANK_CEILING ? room : MAX_BANK_CEILING;
+    // A result window lasts 160 seconds and we precreate the next minute's round.
+    // Reserve capacity for four overlapping rounds instead of lending it all to the first.
+    const perRound = byDepth / 4n;
+    const available = room < perRound ? room : perRound;
+    const maxBank = available < MAX_BANK_CEILING ? available : MAX_BANK_CEILING;
     // The depth gate again, on the newest reserve and Config's min_bank. A round activates once
     // 2 x its smaller side reaches min_bank, and the depth rule keeps that at most max_bank: with
     // max_bank below min_bank it never activates, and a one-sided bet only waits for its refund.

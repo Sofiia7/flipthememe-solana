@@ -1,5 +1,48 @@
 {
-  "stage": "waiting-for-program-close-delay",
+  "stage": "position-close-rent-and-archive-verified",
+  "owners": [
+    "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
+    "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7"
+  ],
+  "stake": "20000000",
+  "roundId": "6622",
+  "result": {
+    "roundId": "6622",
+    "outcome": 2,
+    "refundReason": 0,
+    "rawUp": "20000000",
+    "rawDown": "20000000",
+    "strikeSamples": 10,
+    "exitSamples": 10,
+    "strikePrice": "187304844221",
+    "exitPrice": "187304688097"
+  },
+  "closeDueAt": "2026-10-10T11:14:55.000Z",
+  "archives": [
+    {
+      "owner": "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
+      "position": "FzAver5MBEw4xMSNSthbBavVURPEKVXtbMAYDEYv6kKV",
+      "roundId": "6622",
+      "stake": "20000000",
+      "payout": "0",
+      "claimed": true,
+      "indexedAt": "2026-10-10T10:16:45.000Z"
+    },
+    {
+      "owner": "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7",
+      "position": "7QsDSrWLJjoEBooZWzcWo47FtyXnqzhEmZEEq99NqFmG",
+      "roundId": "6622",
+      "stake": "20000000",
+      "payout": "39200000",
+      "claimed": true,
+      "indexedAt": "2026-10-10T10:16:45.000Z"
+    }
+  ],
+  "withdrawn": [
+    "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
+    "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7"
+  ],
+  "closed": true,
   "actions": {
     "fund-0": {
       "signature": "5gepazSRvp8eqepSCv9oy4mQKSHPWg8KD39vdQPvWcMGhFCL4P51H31pNJmWCaH8w2yk6NSwC5j6c16UnXK118SX",
@@ -45,48 +88,26 @@
       "signature": "62ysMkncNHHV6Rb3wSyqX47kYrVfoxWnke2GcJeFEfASNDFBAQVsvEfTcjTqVCF3Ljjiro2hy6U3ht7LyxwHGpRe",
       "at": "2026-10-10T10:16:50.648Z",
       "confirmed": true
-    }
-  },
-  "owners": [
-    "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
-    "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7"
-  ],
-  "stake": "20000000",
-  "roundId": "6622",
-  "result": {
-    "roundId": "6622",
-    "outcome": 2,
-    "refundReason": 0,
-    "rawUp": "20000000",
-    "rawDown": "20000000",
-    "strikeSamples": 10,
-    "exitSamples": 10,
-    "strikePrice": "187304844221",
-    "exitPrice": "187304688097"
-  },
-  "closeDueAt": "2026-10-10T11:14:55.000Z",
-  "archives": [
-    {
-      "owner": "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
-      "position": "FzAver5MBEw4xMSNSthbBavVURPEKVXtbMAYDEYv6kKV",
-      "roundId": "6622",
-      "stake": "20000000",
-      "payout": "0",
-      "claimed": true,
-      "indexedAt": "2026-10-10T10:16:45.000Z"
     },
-    {
-      "owner": "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7",
-      "position": "7QsDSrWLJjoEBooZWzcWo47FtyXnqzhEmZEEq99NqFmG",
-      "roundId": "6622",
-      "stake": "20000000",
-      "payout": "39200000",
-      "claimed": true,
-      "indexedAt": "2026-10-10T10:16:45.000Z"
+    "close-position-0": {
+      "signature": "okKCHNg6LeaDRYi8UvVDF9m8dD5iwhAnxCRdYeSWjPGsTEjo3padA3CXuxta1RyaACq8q6qu1AqayhxsypxnPK3",
+      "at": "2026-10-10T11:14:55.551Z",
+      "confirmed": true
+    },
+    "withdraw-rent-0": {
+      "signature": "arDQgVNo2isaT3znR5Y8w2gwMxtJgT61xwnL2F1MQHBFQsKHiT9sWQDFftZMg67MajtaWSm4kNiRmUkm9p34TLK",
+      "at": "2026-10-10T11:14:57.588Z",
+      "confirmed": true
+    },
+    "close-position-1": {
+      "signature": "4yTrtFu6EWubcguKYV7fJWyEEB8xHz6TdXsbARwuqtfNvFuzVcEGxSi2ywTvdepGWceVv1kSD9UjGNYFcsgC9FWo",
+      "at": "2026-10-10T11:14:59.629Z",
+      "confirmed": true
+    },
+    "withdraw-rent-1": {
+      "signature": "3k1VMMAgCs8pL7ZFJVHX7HqVJnEpYx5sozmFRc6Ms77cjgDz18SGEjjruDH2vQLH3w8s369T6bfoiuaw73dtAbWK",
+      "at": "2026-10-10T11:15:01.608Z",
+      "confirmed": true
     }
-  ],
-  "withdrawn": [
-    "AwNf2rux77u6M37fXGAifWAq4zQKUpiQnqxZ7sgsx315",
-    "8i4szKW1t3aNXcHhX5R5N89DQGXMDN69xqRPmyQRCqX7"
-  ]
+  }
 }

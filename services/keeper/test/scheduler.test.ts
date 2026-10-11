@@ -160,7 +160,7 @@ describe('scheduler', () => {
     assert.equal(readI64(ix.data, 80), BigInt(MINUTE + 60)); // opens_at: next minute boundary
     assert.equal(readI64(ix.data, 88), BigInt(MINUTE + 120)); // cutoff_at
     assert.equal(readI64(ix.data, 128), BigInt(MINUTE + 60 + 760)); // settle_deadline
-    assert.equal(readU64(ix.data, 136), 120_000_000n); // shared pool budget: 400 SOL / 2500 minus 0.04 committed
+    assert.equal(readU64(ix.data, 136), 40_000_000n); // a quarter of the shared 400 SOL / 2500 budget, with 0.04 already committed
     assert.deepEqual(ix.accounts, [await configAddress(), await roundAddress(10n), h.signer.address, SYSTEM_PROGRAM_ID]);
     assert.ok(h.logs.some((l) => l.step === 'create' && l.round === 10n && typeof l.sig === 'string'));
     // The chain has not caught up yet (the fake never applies it): no second create.
@@ -199,7 +199,7 @@ describe('scheduler', () => {
     });
   });
 
-  test('max_bank must reach min_bank as Config sets it: K x min_bank opens a round, one lamport less does not', async () => {
+  test('max_bank must reach min_bank as Config sets it: 4 x K x min_bank sustains overlapping rounds, one lamport less does not', async () => {
     const now = MINUTE + 50;
     const minBank = SOL / 10n; // not the 0.02 SOL default: the check reads Config
     const open = async (reserve: bigint): Promise<Harness> => {
@@ -210,11 +210,31 @@ describe('scheduler', () => {
       await tick(h, now);
       return h;
     };
-    const below = await open(DEPTH_K * minBank - 1n);
+    const below = await open(4n * DEPTH_K * minBank - 1n);
     assert.equal(below.chain.sent.length, 0);
     assert.equal(below.logs.find((l) => l.event === 'round_skipped_shallow_pool')?.maxBank, minBank - 1n);
-    const at = await open(DEPTH_K * minBank);
+    const at = await open(4n * DEPTH_K * minBank);
     assert.equal(readU64(only(at).data, 136), minBank); // max_bank
+  });
+
+  test('four overlapping same-pool rounds fit the depth budget; the fifth cannot exceed it', async () => {
+    const h = await harness();
+    const now = MINUTE + 50;
+    for (let i = 0; i < 4; i++) {
+      h.store.add(POOL, obs((now + i * 60) * 1000 - 400, i + 1));
+      await tick(h, now + i * 60);
+      const creates = h.chain.sent.flat().filter(ix => ix.name === 'createRound');
+      assert.equal(creates.length, i + 1);
+      const ix = creates.at(-1)!;
+      assert.equal(readU64(ix.data, 136), 40_000_000n);
+      const id = BigInt(10 + i);
+      h.chain.rounds.set(id, makeRound(id, BigInt(MINUTE + (i + 1) * 60), POOL, MINT, { maxBank: 40_000_000n }));
+      h.chain.config = { ...h.chain.config!, nextRoundId: id + 1n };
+    }
+    h.store.add(POOL, obs((now + 240) * 1000 - 400, 5));
+    await tick(h, now + 240);
+    assert.equal(h.chain.sent.flat().filter(ix => ix.name === 'createRound').length, 4);
+    assert.ok(h.logs.some(l => l.event === 'round_skipped_shallow_pool' && l.maxBank === 0n));
   });
 
   test('house fill: tops up the empty side of a lone bet and books it against the daily budget', async () => {
