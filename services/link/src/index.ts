@@ -1,5 +1,5 @@
-import { avatar } from './avatar.ts';
 import { withLeaderboardStorage, type LeaderboardStorageEnv } from './leaderboard-storage.ts';
+import { avatar } from './avatar.ts';
 import { history } from './history.ts';
 import { releaseInfo, PUBLISHED_RELEASE, type ReleaseMetadata } from './release.ts';
 // sol.flipthememe.com: the web side of a shared round link.
