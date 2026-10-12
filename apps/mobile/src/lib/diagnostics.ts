@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { requestReport } from './requestLog';
 /** Local only. No wallets, signatures, keys, URLs or error payloads are recorded. */
-export type DiagnosticEvent = 'first_open' | 'app_open' | 'intent' | 'wallet_prepared' | 'bet_sent' | 'bet_confirmed' | 'bet_failed' | 'result' | 'invite_opened' | 'invite_shared' | 'storage_failed';
+export type DiagnosticEvent = 'first_open' | 'app_open' | 'intent' | 'wallet_prepared' | 'bet_sent' | 'bet_confirmed' | 'bet_failed' | 'result' | 'invite_opened' | 'invite_shared' | 'storage_failed'
+  // What became of a remembered first call (state/intent.ts): placed in its round, carried to the next round of the same coin, or why it was dropped.
+  | 'intent_placed' | 'intent_carried' | 'intent_expired' | 'intent_token-changed' | 'intent_already-in' | 'intent_no-wallet' | 'intent_refused';
 const KEY = 'ftm.diagnostics.v1';
 let queue = Promise.resolve();
 export function recordEvent(event: DiagnosticEvent): void {

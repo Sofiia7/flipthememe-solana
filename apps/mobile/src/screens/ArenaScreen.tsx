@@ -111,8 +111,11 @@ export function ArenaScreen() {
   }, []);
   const closeHow = useCallback(() => setHowOpen(false), []);
   // A sheet closed without the approval forgets the side that was tapped; one closing after it keeps it.
+  const intentRef = useRef<BetIntent | null>(null);
   const closeTopUp = useCallback(() => {
     setTopUpOpen(false);
+    // Closed without an approval: the remembered call is forgotten, and the row above the chips says so.
+    if (intentRef.current && !intentRef.current.committed) setIntentNotice('NOT PLACED: top up not confirmed. Tap a side again.');
     setIntent(intentAfterSheetClosed);
   }, []);
 
@@ -297,7 +300,10 @@ export function ArenaScreen() {
   const winProfit = maxWinProfit(betAmount, feeWinBps);
 
   const placeBet = (side: Side, wanted: bigint = betAmount) => {
-    if (working || pendingHere) return;
+    if (working || pendingHere) {
+      setIntentNotice('A call of yours is still going through - wait for it.');
+      return;
+    }
     if (!open || blocked || inOpen) {
       setIntentNotice(inOpen ? `Call #${open!.id} already saved.` : `NOT PLACED: ${blocked ?? 'Next round is not open yet.'}`);
       return;
@@ -316,18 +322,20 @@ export function ArenaScreen() {
     void betting.place(open.id, side, wanted);
   };
 
-  // A visitor's tap on UP or DOWN: remember the side and the chip, and open the sheet that connects the wallet
-  // and approves in one go. Once the approval is through, the call goes in by itself (decideIntent).
+  // A tap on UP or DOWN that leads to the top up sheet (a visitor, or a connected wallet with no balance or
+  // session): remember the side and the chip, and open the sheet. Once the approval is through, the call goes
+  // in by itself (decideIntent).
   const tapAsVisitor = (side: Side) => {
     if (wallet.busy !== null) return;
     setIntentNotice(null);
     recordEvent('intent');
-    setIntent(armIntent({ side, amount, roundId: open?.id ?? null, pool: open?.account.pool ?? null, tokenMint: open?.account.tokenMint ?? null, nowMs: Date.now() }));
+    // A connected wallet picks chips by its balance (betAmount); a visitor by the plain chip (amount).
+    setIntent(armIntent({ side, amount: owner ? betAmount : amount, roundId: open?.id ?? null, pool: open?.account.pool ?? null, tokenMint: open?.account.tokenMint ?? null, nowMs: Date.now() }));
     setTopUpOpen(true);
   };
   useEffect(() => {
     const r = wallet.result;
-    if (intent && !intent.committed && r && r.ok && r.action === 'topup' && r.at >= intent.armedAt) setIntent(commitIntent(intent));
+    if (intent && !intent.committed && r && r.ok && (r.action === 'topup' || r.action === 'renew') && r.at >= intent.armedAt) setIntent(commitIntent(intent));
   }, [wallet.result, intent]);
   const intentDecision = decideIntent(intent, {
     nowMs,
@@ -343,6 +351,7 @@ export function ArenaScreen() {
     guardSecs: ENTRY_GUARD_SECS,
   });
   useEffect(() => {
+    if (intentDecision.kind === 'drop' || intentDecision.kind === 'place') recordEvent(`intent_${intentDecision.kind === 'drop' ? intentDecision.reason : intentDecision.carried ? 'carried' : 'placed'}`);
     if (intentDecision.kind === 'drop') {
       if (intentDecision.reason === 'token-changed' && intent) {
         setIntentNotice(null);
@@ -364,6 +373,7 @@ export function ArenaScreen() {
     // placeBet is re-made every render; what starts it is the decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intentDecision.kind, intent]);
+  intentRef.current = intent;
   const intentWaiting = intent?.committed === true && intentDecision.kind === 'wait';
   // The coin changed during the wallet trip: a card with the facts and one button, so the first call never ends in silence.
   const [coinChanged, setCoinChanged] = useState<{ side: Side; amount: bigint; fromMint: string | null } | null>(null);
@@ -578,7 +588,7 @@ export function ArenaScreen() {
             ))}
           </View>
         ) : (intent && intentWaiting && !inOpen) || !myReady || (topUpReason && !pendingHere) ? (
-          <View style={styles.sides}>{[Side.Up, Side.Down].map(side => <NeonButton key={side} title={side === Side.Up ? 'UP' : 'DOWN'} kind={side === Side.Up ? 'up' : 'down'} big badge={multiplier} subtitle={!myReady ? 'loading balance' : intentWaiting ? 'placing call...' : canRenew ? 'renew & play' : 'top up & play'} busy={!!intentWaiting && intent?.side === side} disabled={!myReady || !!intentWaiting} onPress={() => setTopUpOpen(true)} style={styles.flex} />)}</View>
+          <View style={styles.sides}>{[Side.Up, Side.Down].map(side => <NeonButton key={side} title={side === Side.Up ? 'UP' : 'DOWN'} kind={side === Side.Up ? 'up' : 'down'} big badge={multiplier} subtitle={!myReady ? 'loading balance' : intentWaiting ? 'placing call...' : canRenew ? 'renew & play' : 'top up & play'} busy={!!intentWaiting && intent?.side === side} disabled={!myReady || !!intentWaiting} onPress={() => tapAsVisitor(side)} style={styles.flex} />)}</View>
         ) : (
           <>
             <View style={styles.sides}>
