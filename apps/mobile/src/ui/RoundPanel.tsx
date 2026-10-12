@@ -35,7 +35,7 @@ function CompactRoundPanel({ round, positions, me, rival, previewFace, stage, po
   return <View style={[styles.panel, styles.panelOpen, { padding: 4, gap: 2, height: 78 }]}>
     <View style={[styles.head, { minHeight: 24 }]}>
       <Text numberOfLines={1} style={styles.title}>#{String(round.id)} - {stage}</Text>
-      {!position && previewFace && positions.length > 0 ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}><PixelFace face={previewFace} size={24} /><Text style={styles.houseTag}>YOU</Text></View> : null}
+      {!position && previewFace && positions.length > 0 ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}><PixelFace face={previewFace} size={16} /><Text style={styles.houseTag}>YOU</Text></View> : null}
       <Text style={[styles.stageText, { color: standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow }]}>{standing ? standing.toUpperCase() + ' NOW' : position ? sideText(position.account.side) + ' ' + formatSol(position.account.stake) + ' SOL' : positions.length + ' IN'}</Text>
     </View>
     {!position && previewFace && positions.length === 0 ? <View style={styles.previewPlayer}><PixelFace face={previewFace} size={32} /><Text style={styles.previewLabel}>YOU · CHOOSE UP OR DOWN</Text></View> : null}
