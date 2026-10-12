@@ -11,14 +11,12 @@ import type { PositionView, RoundView } from '../chain/fetch';
 import { withOwnPosition, showBetReceipt } from '../chain/arenaPositions';
 import { useSkrNames } from '../chain/skr';
 import {
-  OVERDUE_SECS,
   classifyRounds,
   fitsDepth,
   roundResultLabel,
   selectChartRound,
   selectPanel,
   selectTimer,
-  latestCall,
   standingNow,
   strikeState,
   type RoundGroups,
@@ -43,7 +41,8 @@ import type { ClockSide } from '../ui/ArenaClock';
 import { ChallengeCard } from '../ui/ChallengeCard';
 import { PriceChart } from '../ui/Chart';
 import { ChatterLane } from '../ui/ChatterLane';
-import { Banner, Btn, ExtLink } from '../ui/common';
+import { Btn, ExtLink } from '../ui/common';
+import { DailyRecord } from '../ui/DailyRecord';
 import { HowItWorksSheet } from '../ui/HowItWorks';
 import { EntryTicker, LiveClock, type ClockView } from '../ui/LiveClock';
 import { NeonButton } from '../ui/NeonButton';
@@ -334,12 +333,12 @@ export function ArenaScreen() {
   });
   useEffect(() => {
     if (intentDecision.kind === 'drop') {
-      if (intentDecision.reason !== 'already-in') setIntentNotice('Balance prepared. Your bet was NOT placed: entry closed or conditions changed. Choose a side again in an open round.');
+      if (intentDecision.reason !== 'already-in') setIntentNotice('NOT PLACED: round closed. Tap a side again.');
       setIntent(null);
     }
     else if (intentDecision.kind === 'place' && intent) {
       setIntent(null);
-      if (intent.amount > maxAmount) setIntentNotice('Balance prepared. Your chosen amount no longer fits. Bet NOT placed; choose an amount and tap again.');
+      if (intent.amount > maxAmount) setIntentNotice('NOT PLACED: amount no longer fits. Pick again.');
       else placeBet(intentDecision.side, intent.amount);
     }
     // placeBet is re-made every render; what starts it is the decision.
@@ -458,7 +457,6 @@ export function ArenaScreen() {
           <View style={styles.panelSpace}>
           {panel.kind === 'mine' && focus && owner ? (
             <MyRoundPanel
-              compact
               round={focus.round}
               position={focus.position}
               positions={panelPositions}
@@ -469,7 +467,6 @@ export function ArenaScreen() {
             />
           ) : panelRound ? (
             <OpenRoundPanel
-              compact
               previewFace={app.face}
               round={panelRound}
               positions={panelPositions}
@@ -488,6 +485,10 @@ export function ArenaScreen() {
             <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={[styles.nextExplanation, { color: C.neonRed }]} numberOfLines={1}>{betNotice}</Text></Pressable>
           ) : pending || showBetReceipt(betting.bet.phase, betting.bet.roundId, betting.bet.roundId !== null && mine.has(betting.bet.roundId)) ? (
             <BetStatusLine visible={(roundId) => mine.has(roundId)} />
+          ) : app.away ? (
+            <Pressable onPress={app.ackAway} style={{ flex: 1 }} accessibilityRole="button" accessibilityLabel="Dismiss the summary of results while you were away"><Text style={[styles.nextExplanation, { color: C.neonYellow }]} numberOfLines={1}>{awayText(app.away, formatSol)}</Text></Pressable>
+          ) : app.challenge ? (
+            <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={[styles.nextExplanation, { color: C.neonPink }]} numberOfLines={1}>FRIEND CHALLENGE: tap to see round #{String(app.challenge.round)}</Text></Pressable>
           ) : (
             <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={styles.nextExplanation} numberOfLines={1}>{open ? `${focus && focus.round.id !== open.id ? 'NEXT ' : ''}CALL #${open.id} - ${openSymbol ? '$' + openSymbol : 'TOKEN'} - ${inOpen ? 'SAVED' : 'matched payout ' + multiplier}` : 'Next round - preparing entry'}</Text></Pressable>
           )}
@@ -581,6 +582,7 @@ export function ArenaScreen() {
       />
       <HowItWorksSheet visible={howOpen} onClose={closeHow} context={
         howOpen ? <View style={{ gap: 8 }}>
+          {app.challenge ? <ChallengeCard challenge={app.challenge} open={open ?? null} nowSec={nowSec} onClose={app.clearChallenge} /> : null}
           <Text style={T.subtle}>Only matched stake plays; excess is returned. Current matching can change before entry closes.</Text>
           {open && upMatch !== null && downMatch !== null ? <Text style={T.subtle}>For {formatSol(quotedAmount)} SOL: UP matches {formatSol(upMatch)}, returns {formatSol(quotedAmount - upMatch)}; DOWN matches {formatSol(downMatch)}, returns {formatSol(quotedAmount - downMatch)}.</Text> : null}
           {blocked ? <Text style={T.subtle}>{blocked}</Text> : null}
@@ -588,7 +590,7 @@ export function ArenaScreen() {
           {intentNotice ? <Text style={T.subtle}>{intentNotice}</Text> : null}
           {app.away ? <Text style={T.subtle}>{awayText(app.away, formatSol)}</Text> : null}
           {betting.bet.phase === 'failed' ? <Text style={T.subtle}>{betting.bet.error}</Text> : null}
-          {dayText ? <Text style={T.subtle}>{dayText}{streakText ? ' - ' + streakText : ''}</Text> : null}
+          {dayText ? <DailyRecord text={`${dayText}${streakText ? ' - ' + streakText : ''}`} won={day.won} finished={day.finished} color={dayColor} /> : null}
           {focus ? <RoundProgress round={focus.round} position={focus.position} nowSec={nowSec} /> : null}
           {myUnresolved.filter(m => m.round.id !== focus?.round.id).map(m => <ExtraRoundLine key={m.round.id.toString()} round={m.round} position={m.position.account} standing={standingOf(m)} late={null} />)}
           <ResultsStrip finals={groups.finals.filter(r => r.account.pool === stageFeed.pool)} mine={mine} />
@@ -684,14 +686,9 @@ const styles = StyleSheet.create({
     paddingTop: 2,
     paddingBottom: 4,
   },
-  // The day so far, as a ring under the brand: calls, wins and the net, coloured by the net.
-  dayRing: { alignSelf: 'flex-start', marginLeft: 14, marginBottom: 6, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
   dayText: { color: C.accentText, fontSize: 11, fontWeight: '900', fontFamily: MONO },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
   devnet: { color: C.neonYellow, fontSize: 9, fontWeight: '900', fontFamily: MONO, borderWidth: 1, borderColor: C.neonYellow, paddingHorizontal: 4 },
-  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  hintText: { flexShrink: 1 },
-  streakPill: { color: '#2a1a00', backgroundColor: C.neonYellow, fontFamily: MONO, fontWeight: '900', fontSize: 12, paddingHorizontal: 8, paddingVertical: 3 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   help: {
     width: 48,
@@ -707,18 +704,13 @@ const styles = StyleSheet.create({
   nextExplanation: { color: C.accentText, fontSize: 12, lineHeight: 17 },
   walletChip: { borderWidth: 1, borderColor: C.accentSoft, paddingHorizontal: 9, paddingVertical: 6, flexShrink: 1 },
   walletText: { color: C.accentText, fontSize: 12, fontWeight: '900', fontFamily: MONO },
-  stage: { flex: 1 },
   screen: { flex: 1 },
-  notice: { height: 12, justifyContent: 'center' },
-  noticeText: { fontSize: 10, color: C.neonYellow },
   roundSelection: { height: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   viewCall: { paddingHorizontal: 8, height: 28, justifyContent: 'center' },
   panelSpace: { flex: 1, minHeight: 0 },
   betContext: { height: 20, justifyContent: 'center' },
   page: { flex: 1, minHeight: 0, paddingHorizontal: 14, paddingTop: 0, paddingBottom: 4, gap: 4 },
   chartSpace: { flexShrink: 0 },
-  summary: { minHeight: 20, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  matchEstimate: { color: C.subtle, fontSize: 11, lineHeight: 16 },
   friend: { minHeight: 48, paddingVertical: 6 },
   loading: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 50 },
   loadingText: { color: C.subtle, fontSize: 12, flexShrink: 1 },
@@ -751,8 +743,6 @@ const styles = StyleSheet.create({
   blockedRow: { height: 18, flexDirection: 'row', alignItems: 'center', gap: 10 },
   reason: { color: C.neonYellow, fontSize: 12, fontWeight: '800', flexShrink: 1 },
   topUpLink: { color: C.neonYellow, fontSize: 12, fontWeight: '900', textDecorationLine: 'underline' },
-  inCard: { borderWidth: 2, padding: 8, gap: 8, backgroundColor: C.panelDeep },
-  inText: { color: C.white, fontSize: 15, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
   status: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusText: { color: C.text, fontSize: 12, fontWeight: '700', flex: 1 },
   statusAction: { color: C.accentText, fontSize: 12, fontWeight: '900' },

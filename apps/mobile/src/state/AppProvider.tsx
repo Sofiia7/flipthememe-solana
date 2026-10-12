@@ -301,7 +301,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSentRoundHint(cur => cur?.owner === bet.owner && cur.roundId === bet.roundId ? null : cur);
         setPendingNote(
           check.verdict === 'failed'
-            ? `Bet in round #${bet.roundId} refused: ${humanError(settledError(bet.signature, 'failed', check, null), 'bet')}`
+            ? `NOT PLACED #${bet.roundId}: ${humanError(settledError(bet.signature, 'failed', check, null), 'bet')}`
             : `Your bet in round #${bet.roundId} did not go through - nothing was taken.`,
         );
         return;

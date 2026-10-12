@@ -300,8 +300,8 @@ export function useWalletActions(input: {
   const topUpDone = (amount: bigint) => `Topped up ${sol(amount)}. One-tap session prepared with your selected limits. This approval alone does not place a bet.`;
 
   /**
-   * One wallet approval: open the vault if needed, deposit, grant the device key a 7-day session
-   * (an allowance of turnover, see sessionCapFor), and send the key a little SOL for network fees when
+   * One wallet approval: open the vault if needed, deposit, grant the device key a session of the selected preset
+   * (default 1 hour, an allowance of turnover, see sessionCapFor), and send the key a little SOL for network fees when
    * it runs low.
    */
   const topUpAndPlay = useCallback(
@@ -346,7 +346,7 @@ export function useWalletActions(input: {
   );
 
   /**
-   * One-tap bets again without a deposit: a new 7-day session over the game balance the player already
+   * One-tap bets again without a deposit: a new session of the selected preset over the game balance the player already
    * has (shown on the button), plus a little SOL for the key's network fees when it runs low.
    */
   const renewSession = useCallback(

@@ -20,7 +20,7 @@ import { PixelText } from './PixelText';
 const solUp = (lamports: bigint) => formatSol(((lamports + 99_999n) / 100_000n) * 100_000n);
 
 /**
- * "Top up & play": one wallet approval for vault, deposit, 7-day session and key fees, with the amount
+ * "Top up & play": one wallet approval for vault, deposit, the selected session (default 1 hour) and key fees, with the amount
  * leaving the wallet listed before the wallet opens (the deposit, and the network and setup costs in one
  * line). With money already in the game balance the sheet first offers to renew one-tap bets without a
  * deposit. For a visitor (no wallet connected yet) the same sheet connects and approves in one wallet
