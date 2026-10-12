@@ -12,7 +12,7 @@ pnpm android
 
 Identity MWA: `https://flipthememe.com` и относительная `icon-512.png` (`APP_IDENTITY` в `apps/mobile/src/config.ts`). `favicon.ico` на сайте отдаёт HTML, поэтому иконка указана явно. Digital Asset Links для ключа подписи публикует `services/link` на `sol.flipthememe.com` (App Links для ссылок `/r/<round>`); для домена identity `flipthememe.com` они не проверялись, а без проверки домена кошелёк имеет право отклонить авторизацию.
 
-Проверено на devnet: Seed Vault Wallet на Seeker (Settings, Network, Devnet) и Solflare подписывают; Phantom в наших тестах открывался, но не возвращал подписи через MWA.
+Проверено на devnet: Seed Vault Wallet на Seeker (Settings, Network, Devnet) Solflare и Jupiter Mobile (на втором телефоне, 12 октября) подписывают; Phantom в наших тестах открывался, но не возвращал подписи через MWA.
 
 Через MWA подписываются только операции владельца:
 

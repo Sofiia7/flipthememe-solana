@@ -2,6 +2,8 @@
 
 ## Verified operator target (10 October 2026)
 
+> Update 12 October 2026: `ATTEST_URL` in `deploy/.env` now points at the backup attestor `https://ftm-attestor.flipthememe-attestor.workers.dev` (a second free Cloudflare account); the previous value was `https://ftm-attestor.sofiaseremeteva.workers.dev`, and `deploy/` keeps a dated `.env.bak-before-backup-attestor-*`. The house vault is topped up with `scripts/fund-house.ts` (dry run by default, `HOUSE_KEYPAIR` required). The oracle readiness problem described below was resolved on 10 October.
+
 The existing deployment is reached from the operator workstation with SSH alias
 `openclaw-bot_TEST` (user `openclaw`, port 2222). Its project root is
 `/home/openclaw/ftm-sol-keeper`; run Compose in its `deploy/` directory. The container

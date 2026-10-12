@@ -201,6 +201,19 @@ every subrequest, and from local `wrangler dev`): `api.devnet.solana.com` and
 endpoint once answered 429 while two local instances polled it at the same time, and Workers share
 their outgoing addresses, so a keyed `DEVNET_RPC` is the safer setting for a deployed attestor.
 
+## Deployment on 12 October 2026
+
+Two deployments run the same code and the same signing key:
+
+| | Account | Address | Used by |
+|---|---|---|---|
+| main | sofiaseremeteva | `sol.flipthememe.com/v1/attest*` and `ftm-attestor.sofiaseremeteva.workers.dev` | public certificate URL in the README |
+| backup | second free account | `https://ftm-attestor.flipthememe-attestor.workers.dev` (`wrangler.backup.jsonc`, no custom route) | the keeper (`ATTEST_URL` on the VPS) |
+
+Why: at about 08:50 UTC the main account used up its daily Durable Objects rows-read quota ("Exceeded allowed rows read in Durable Objects free tier"), the attestor answered 503 and the keeper, which refuses new rounds while readiness is false, stopped creating rounds. The keeper polls `/v1/attestor/ready` every 5 seconds without a cache, and that ran the whole `health()`, a full scan of the samples table. Changes since: `ready()` answers the readiness verdict alone and reads only the windows open right now; the whole-table counts in `health()` are recomputed at most every 5 minutes; a round that nobody entered is not sampled, but only with proof (its account was read at least 10 seconds after the entry closed and holds no position and no stake), otherwise it is sampled as before.
+
+Two attestors must not both serve one window: they would each sign their own sample set. While the backup is the keeper's endpoint, treat the main one as retired for pricing, or delete it. To switch the keeper back, set `ATTEST_URL` in the VPS `deploy/.env` and run `docker compose up -d --force-recreate` there.
+
 ## Workers Free plan budget
 
 The Free plan limits are per Cloudflare account, and the attestor, `ftm-link` and `ftm-chatter` share

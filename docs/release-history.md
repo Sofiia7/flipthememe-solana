@@ -27,3 +27,16 @@ The keeper runs continuous rounds with a measured reserve; drift, flow and shado
 Local notification reminders are implemented; server push containing a confirmed win/loss is not. Seeker battery/frame-time measurements and acceptance of this new APK remain device checks.
 
 To serve a candidate on the same Wi-Fi network, put its signed APK in `dist/serve`, run `node apps/mobile/scripts/lan-page.mjs`, then `python -m http.server 8000 --bind 0.0.0.0 --directory dist/serve`. Use the LAN address printed by the page generator; DHCP can change it.
+
+## 11 and 12 October 2026: builds 29 to 41
+
+| Build | Source | What changed | Published |
+|---|---|---|---|
+| 29 and 31 | 31: `db3fbec` | Seeker layout fixes, install page fallback metadata | 31 yes |
+| 34 | `375de02` | Arena avatars, saved-stake feedback, direct account reads | no |
+| 35 | `08508e8` | Friend challenge in RULES, missed results in the bet row, clearer notices, dead code removed | no |
+| 37 | `7d9e930` | The first call is bound to the coin, not the round; a card when the coin changed | no |
+| 40 | `09f3efb` | A connected wallet's first tap is remembered; a challenge link offers the other side | no |
+| 41 | `5c3ec6f` | The offer cards fit 360 dp screens and return with every new link | yes, the build in the CLOCK IN submission |
+
+Operations on 12 October: the main Cloudflare account used up its daily Durable Objects quota, a backup attestor on a second free account took over, the faucet moved to the working Alchemy key and the house vault was topped up to about 4.6 SOL. See the README Limits and `services/attestor/README.md`.
