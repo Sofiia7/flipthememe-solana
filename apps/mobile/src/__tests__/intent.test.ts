@@ -32,11 +32,11 @@ const ready: IntentContext = {
   guardSecs: 1,
 };
 
-const armed = (over: Partial<BetIntent> = {}): BetIntent => ({ side: Side.Up, amount: (2n * SOL) / 100n, roundId: 123n, pool: 'PoolA', armedAt: T0, committed: true, ...over });
+const armed = (over: Partial<BetIntent> = {}): BetIntent => ({ side: Side.Up, amount: (2n * SOL) / 100n, roundId: 123n, pool: 'PoolA', tokenMint: null, armedAt: T0, committed: true, ...over });
 
 test('a tap remembers the side, the chip and the round open at that moment; with no open round there is nothing to bind it to', () => {
   const intent = armIntent({ side: Side.Down, amount: SOL / 50n, roundId: 7n, pool: 'PoolA', nowMs: T0 });
-  assert.deepEqual(intent, { side: Side.Down, amount: SOL / 50n, roundId: 7n, pool: 'PoolA', armedAt: T0, committed: false });
+  assert.deepEqual(intent, { side: Side.Down, amount: SOL / 50n, roundId: 7n, pool: 'PoolA', tokenMint: null, armedAt: T0, committed: false });
   assert.equal(armIntent({ side: Side.Up, amount: SOL / 50n, roundId: null, pool: null, nowMs: T0 }), null);
   assert.equal(armIntent({ side: Side.Up, amount: SOL / 50n, roundId: 7n, pool: null, nowMs: T0 }), null, 'a round whose pool is unknown cannot bind a call');
 });

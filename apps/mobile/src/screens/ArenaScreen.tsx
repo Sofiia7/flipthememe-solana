@@ -312,6 +312,7 @@ export function ArenaScreen() {
     app.clearPendingNote();
     // A bet placed by hand ends any remembered first call, so the two can never both go in.
     setIntent(null);
+    setCoinChanged(null);
     void betting.place(open.id, side, wanted);
   };
 
@@ -321,7 +322,7 @@ export function ArenaScreen() {
     if (wallet.busy !== null) return;
     setIntentNotice(null);
     recordEvent('intent');
-    setIntent(armIntent({ side, amount, roundId: open?.id ?? null, pool: open?.account.pool ?? null, nowMs: Date.now() }));
+    setIntent(armIntent({ side, amount, roundId: open?.id ?? null, pool: open?.account.pool ?? null, tokenMint: open?.account.tokenMint ?? null, nowMs: Date.now() }));
     setTopUpOpen(true);
   };
   useEffect(() => {
@@ -343,10 +344,12 @@ export function ArenaScreen() {
   });
   useEffect(() => {
     if (intentDecision.kind === 'drop') {
-      if (intentDecision.reason !== 'already-in') {
+      if (intentDecision.reason === 'token-changed' && intent) {
+        setIntentNotice(null);
+        setCoinChanged({ side: intent.side, amount: intent.amount, fromMint: intent.tokenMint });
+      } else if (intentDecision.reason !== 'already-in') {
         setIntentNotice(
-          intentDecision.reason === 'token-changed' ? 'NOT PLACED: the coin changed. Tap a side again.'
-            : intentDecision.reason === 'expired' ? 'NOT PLACED: it took too long. Tap a side again.'
+          intentDecision.reason === 'expired' ? 'NOT PLACED: it took too long. Tap a side again.'
             : intentDecision.reason === 'no-wallet' ? 'NOT PLACED: wallet not connected.'
             : 'NOT PLACED: ' + (blocked ?? 'could not place. Tap a side again.'),
         );
@@ -362,6 +365,8 @@ export function ArenaScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intentDecision.kind, intent]);
   const intentWaiting = intent?.committed === true && intentDecision.kind === 'wait';
+  // The coin changed during the wallet trip: a card with the facts and one button, so the first call never ends in silence.
+  const [coinChanged, setCoinChanged] = useState<{ side: Side; amount: bigint; fromMint: string | null } | null>(null);
   const betNotice = intentNotice ?? app.pendingNote;
 
   // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
@@ -496,6 +501,29 @@ export function ArenaScreen() {
       </View>
 
       <View style={styles.dock}>
+        {coinChanged ? (
+          <View style={styles.coinCard} accessibilityLiveRegion="polite">
+            <Text style={styles.coinTitle}>THE COIN CHANGED WHILE YOU APPROVED</Text>
+            <Text style={styles.coinText} numberOfLines={3}>
+              {`You tapped ${sideName(coinChanged.side)} on ${peekTokenInfo(coinChanged.fromMint)?.symbol ? '$' + peekTokenInfo(coinChanged.fromMint)!.symbol : 'the previous coin'}. The round open now is ${openSymbol ? '$' + openSymbol : 'another coin'}. Nothing was placed.`}
+            </Text>
+            <View style={styles.sides}>
+              <NeonButton
+                title={`${sideName(coinChanged.side)} ON ${openSymbol ? '$' + openSymbol : 'THIS COIN'}`}
+                subtitle={open ? `${formatSol(coinChanged.amount <= maxAmount ? coinChanged.amount : betAmount)} SOL, one tap` : 'NEXT ROUND SOON'}
+                kind={coinChanged.side === Side.Up ? 'up' : 'down'}
+                disabled={!open || !!blocked || working || !!inOpen}
+                onPress={() => {
+                  const wanted = coinChanged.amount <= maxAmount ? coinChanged.amount : betAmount;
+                  setCoinChanged(null);
+                  placeBet(coinChanged.side, wanted);
+                }}
+                style={styles.flex}
+              />
+              <Btn small kind="ghost" title="NOT NOW" onPress={() => setCoinChanged(null)} style={styles.coinCancel} />
+            </View>
+          </View>
+        ) : null}
         <Btn small kind="ghost" title={challengeFocus ? 'CHALLENGE A FRIEND' : 'PLAY WITH A FRIEND'} busy={sharing} onPress={() => challengeFocus ? challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt)) : invite(inviteRound)} style={styles.friend} />
         <View style={styles.betContext}>
           {betNotice ? (
@@ -748,6 +776,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#140f26',
   },
   amounts: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Over the top of the dock (the friend button, the context row and the chips), never moving the layout under it.
+  coinCard: { position: 'absolute', left: 14, right: 14, top: 4, zIndex: 10, elevation: 10, borderWidth: 2, borderColor: C.neonYellow, backgroundColor: C.panelDeep, padding: 10, gap: 8 },
+  coinTitle: { color: C.neonYellow, fontSize: 12, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
+  coinText: { color: C.white, fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  coinCancel: { minHeight: 48, paddingHorizontal: 14 },
   // A fixed height, so the caption of an off chip never moves the dock.
   amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 2, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   amountOff: { opacity: 0.45 },

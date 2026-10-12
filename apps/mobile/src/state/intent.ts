@@ -19,6 +19,8 @@ export type BetIntent = {
   roundId: bigint;
   /** The pool (the coin) of that round: the call is never placed on another coin. */
   pool: string;
+  /** The coin's mint, for the words of the notice when the coin changed; null when the round did not say. */
+  tokenMint: string | null;
   /** Local ms of the tap. */
   armedAt: number;
   /** The wallet session approved the top up; until then the sheet is still open and nothing is placed. */
@@ -26,9 +28,9 @@ export type BetIntent = {
 };
 
 /** The call to remember for a tap, or null when no round is open to bind it to. */
-export function armIntent(input: { side: Side; amount: bigint; roundId: bigint | null; pool: string | null; nowMs: number }): BetIntent | null {
+export function armIntent(input: { side: Side; amount: bigint; roundId: bigint | null; pool: string | null; tokenMint?: string | null; nowMs: number }): BetIntent | null {
   if (input.roundId === null || input.pool === null) return null;
-  return { side: input.side, amount: input.amount, roundId: input.roundId, pool: input.pool, armedAt: input.nowMs, committed: false };
+  return { side: input.side, amount: input.amount, roundId: input.roundId, pool: input.pool, tokenMint: input.tokenMint ?? null, armedAt: input.nowMs, committed: false };
 }
 
 /** The wallet session came back approved: from here the call waits for the account, whatever happens to the sheet. */
