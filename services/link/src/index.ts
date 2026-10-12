@@ -197,7 +197,7 @@ function getPage(c: Challenge | null, release: ReleaseMetadata | null = null): s
     }
 <ol>
 <li>Install the APK on an Android phone (built for Solana Seeker).</li>
-<li>Switch your wallet to Devnet: Seed Vault Wallet or Solflare, Settings, Network, Devnet.</li>
+<li>Switch your wallet to Devnet: Seed Vault Wallet, Solflare or Jupiter Mobile, Settings, Network, Devnet.</li>
 <li>Open FlipTheMeme, tap Top up &amp; play once, then every call is one tap.</li>
 </ol>
 <p>${FREE_SOL}</p>

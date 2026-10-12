@@ -12,6 +12,8 @@ These texts describe the implementation. Fill the TODO items below and attach ve
 - Demo video: TODO before submitting: link to the three-minute recording of the submitted APK on a Seeker.
 - Pitch deck (public PDF, 13 slides): https://github.com/Sofiia7/flipthememe-apk/releases/download/pitch-deck/FlipTheMeme-pitch-deck.pdf
 - Money: Solana devnet test SOL. Price reads: Solana mainnet PumpSwap. Program: `5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`.
+- Wallets checked over Mobile Wallet Adapter: Seed Vault Wallet (Seeker), Solflare, Jupiter Mobile. Phantom opened but returned no signature.
+- First two-person round on two phones: round 8723 on 12 October (0.02 UP vs 0.02 DOWN, no house, settled DOWN), explorer: https://explorer.solana.com/address/DWrxSr4hsoXUaKqHaycLT5FnQRGCXQX97naNF785auyg?cluster=devnet
 
 ## Description
 

@@ -26,7 +26,7 @@ A busy memecoin, a shared start, one measured minute of price move. You make the
 
 ## Status
 
-Devnet MVP, test SOL only. The install page [sol.flipthememe.com/get](https://sol.flipthememe.com/get) names the published APK with its version and SHA-256. Release evidence and the history of the audit passes: [release history](docs/release-history.md), [Android acceptance](docs/android-acceptance.md), [Solana validation](docs/research/solana-validation.md), [submission text](docs/submission/submission-texts.md). A passing CI build is not the same as acceptance on a physical Seeker; the acceptance matrix records which builds were checked on a device.
+Devnet MVP, test SOL only. The install page [sol.flipthememe.com/get](https://sol.flipthememe.com/get) names the published APK with its version and SHA-256. Release evidence and the history of the audit passes: [release history](docs/release-history.md), [Android acceptance](docs/android-acceptance.md), [Solana validation](docs/research/solana-validation.md), [submission text](docs/submission/submission-texts.md). A passing CI build is not the same as acceptance on a physical Seeker; the acceptance matrix records which builds were checked on a device. The first round between two people on two phones was [round 8723](https://explorer.solana.com/address/DWrxSr4hsoXUaKqHaycLT5FnQRGCXQX97naNF785auyg?cluster=devnet) on 12 October: 0.02 SOL UP against 0.02 SOL DOWN, no house stake, settled DOWN. Founder testing on devnet, not organic demand.
 
 ## Screens
 
@@ -42,7 +42,7 @@ Devnet MVP, test SOL only. The install page [sol.flipthememe.com/get](https://so
 ## Try it on an Android phone
 
 1. Install the signed arm64 Android APK. New candidates are checked on Seeker through a LAN download page before publication; the public release can lag the source.
-2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** works too. In our tests Phantom opened but did not return signatures over MWA.
+2. Switch your wallet to devnet. On a Seeker the built-in **Seed Vault Wallet** works: Settings, Network, Devnet. **Solflare** and **Jupiter Mobile** work too (Jupiter checked on a second phone on 12 October). In our tests Phantom opened but did not return signatures over MWA.
 3. Open FlipTheMeme. Watching needs no wallet. Tap **UP** or **DOWN** (or **Connect**, then **Top up & play**): one wallet trip (connect, then sign) and your original call goes in after approval only if that same round is still open and the exact amount still fits. The approval deposits test SOL into your in-app vault, opens the session whose limits you selected and, when the device key runs low, sends it 0.005 SOL for network fees (about 800 bets). No devnet SOL? Tap **GET TEST SOL** in the top-up sheet (0.2 devnet SOL, once your wallet holds less than 0.1), or use **Airdrop** in the Wallet tab or https://faucet.solana.com. When you leave the app with a round in play, a local reminder invites you back about 15 seconds after its scheduled exit window. It does not claim that settlement has confirmed or tell you who won.
 4. Pick an amount and tap **UP** or **DOWN**. That is one tap: the device key signs, no wallet pop-up.
 5. The result comes in about 2 minutes after your tap (a 1-minute move, plus confirmations), and the keeper credits your in-app balance (History offers a manual **Claim** if it is slow). **Withdraw** sends your available balance back to your wallet.
