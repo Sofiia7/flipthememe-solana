@@ -380,6 +380,8 @@ export function ArenaScreen() {
   const [coinChanged, setCoinChanged] = useState<{ side: Side; amount: bigint; fromMint: string | null } | null>(null);
   // A friend's challenge offers the other side once per app run; NOT NOW hides the offer, the RIVAL tag and the RULES card stay.
   const [challengeHidden, setChallengeHidden] = useState(false);
+  const challengeAt = app.challenge?.at ?? null;
+  useEffect(() => setChallengeHidden(false), [challengeAt]);
   const betNotice = intentNotice ?? app.pendingNote;
 
   // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
@@ -518,8 +520,7 @@ export function ArenaScreen() {
           <View style={[styles.coinCard, { borderColor: C.neonPink }]} accessibilityLiveRegion="polite">
             <Text style={[styles.coinTitle, { color: C.neonPink }]}>{`${inviterName(app.challenge).toUpperCase()} CALLED ${app.challenge.side.toUpperCase()}${app.challenge.ticker ? ' ON $' + app.challenge.ticker.toUpperCase() : ''}`}</Text>
             <Text style={styles.coinText} numberOfLines={2}>{`Take the other side${openSymbol ? ' on $' + openSymbol : ''}. Only matched stake plays; a win pays ${multiplier}.`}</Text>
-            <View style={styles.sides}>
-              <NeonButton
+            <NeonButton
                 title={`${app.challenge.side === 'up' ? 'DOWN ▼' : 'UP ▲'} ON ${openSymbol ? '$' + openSymbol : 'THIS COIN'}`}
                 subtitle={open ? `${formatSol(owner ? betAmount : amount)} SOL${owner && myReady && !topUpReason ? ', one tap' : ', top up & play'}` : 'NEXT ROUND SOON'}
                 kind={app.challenge.side === 'up' ? 'down' : 'up'}
@@ -530,10 +531,8 @@ export function ArenaScreen() {
                   if (owner && myReady && !topUpReason && status === 'active') placeBet(other);
                   else tapAsVisitor(other);
                 }}
-                style={styles.flex}
               />
-              <Btn small kind="ghost" title="NOT NOW" onPress={() => setChallengeHidden(true)} style={styles.coinCancel} />
-            </View>
+            <Pressable onPress={() => setChallengeHidden(true)} style={styles.coinCancel} hitSlop={6} accessibilityRole="button" accessibilityLabel="Not now"><Text style={styles.coinCancelText}>NOT NOW</Text></Pressable>
           </View>
         ) : null}
         {coinChanged ? (
@@ -542,8 +541,7 @@ export function ArenaScreen() {
             <Text style={styles.coinText} numberOfLines={3}>
               {`You tapped ${sideName(coinChanged.side)} on ${peekTokenInfo(coinChanged.fromMint)?.symbol ? '$' + peekTokenInfo(coinChanged.fromMint)!.symbol : 'the previous coin'}. The round open now is ${openSymbol ? '$' + openSymbol : 'another coin'}. Nothing was placed.`}
             </Text>
-            <View style={styles.sides}>
-              <NeonButton
+            <NeonButton
                 title={`${sideName(coinChanged.side)} ON ${openSymbol ? '$' + openSymbol : 'THIS COIN'}`}
                 subtitle={open ? `${formatSol(coinChanged.amount <= maxAmount ? coinChanged.amount : betAmount)} SOL, one tap` : 'NEXT ROUND SOON'}
                 kind={coinChanged.side === Side.Up ? 'up' : 'down'}
@@ -553,10 +551,8 @@ export function ArenaScreen() {
                   setCoinChanged(null);
                   placeBet(coinChanged.side, wanted);
                 }}
-                style={styles.flex}
               />
-              <Btn small kind="ghost" title="NOT NOW" onPress={() => setCoinChanged(null)} style={styles.coinCancel} />
-            </View>
+            <Pressable onPress={() => setCoinChanged(null)} style={styles.coinCancel} hitSlop={6} accessibilityRole="button" accessibilityLabel="Not now"><Text style={styles.coinCancelText}>NOT NOW</Text></Pressable>
           </View>
         ) : null}
         <Btn small kind="ghost" title={challengeFocus ? 'CHALLENGE A FRIEND' : 'PLAY WITH A FRIEND'} busy={sharing} onPress={() => challengeFocus ? challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt)) : invite(inviteRound)} style={styles.friend} />
@@ -815,7 +811,8 @@ const styles = StyleSheet.create({
   coinCard: { position: 'absolute', left: 14, right: 14, top: 4, zIndex: 10, elevation: 10, borderWidth: 2, borderColor: C.neonYellow, backgroundColor: C.panelDeep, padding: 10, gap: 8 },
   coinTitle: { color: C.neonYellow, fontSize: 12, fontWeight: '900', fontFamily: MONO, letterSpacing: 0.5 },
   coinText: { color: C.white, fontSize: 13, lineHeight: 18, fontWeight: '700' },
-  coinCancel: { minHeight: 48, paddingHorizontal: 14 },
+  coinCancel: { minHeight: 36, alignItems: 'center', justifyContent: 'center' },
+  coinCancelText: { color: C.subtle, fontSize: 12, fontWeight: '900', fontFamily: MONO, textDecorationLine: 'underline' },
   // A fixed height, so the caption of an off chip never moves the dock.
   amount: { flex: 1, borderWidth: 2, borderColor: '#48405c', paddingVertical: 2, minHeight: 48, alignItems: 'center', justifyContent: 'center' },
   amountOff: { opacity: 0.45 },
