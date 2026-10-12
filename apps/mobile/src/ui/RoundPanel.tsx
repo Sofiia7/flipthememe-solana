@@ -5,7 +5,7 @@ import type { PositionView, RoundView } from '../chain/fetch';
 import type { InFlightStage } from '../chain/phase';
 import { pulseText, roundPulse } from '../chain/roundPulse';
 import { useSkrNames } from '../chain/skr';
-import { faceFromBytes, type Expression } from '../face/faceModel';
+import { faceFromBytes, type Expression, type Face } from '../face/faceModel';
 import { formatCountdown, formatSol } from '../lib/format';
 import { HouseFace, PixelFace } from '../PixelFace';
 import { C, FONT_CAP, MONO } from '../theme';
@@ -31,22 +31,29 @@ export function Pulse({ color, size = 8 }: { color: string; size?: number }) {
 
 
 /** One stable row of players for the single-screen Arena. Full player cards remain available elsewhere. */
-function CompactRoundPanel({ round, positions, me, stage, position, standing }: { round: RoundView; positions: readonly PositionView[]; me: string | null; stage: string; position?: PositionView; standing?: string | null }) {
-  return <View style={[styles.panel, styles.panelOpen]}>
-    <View style={styles.head}>
+function CompactRoundPanel({ round, positions, me, rival, previewFace, stage, position, standing }: { round: RoundView; positions: readonly PositionView[]; me: string | null; rival: string | null; previewFace?: Face; stage: string; position?: PositionView; standing?: string | null }) {
+  return <View style={[styles.panel, styles.panelOpen, { padding: 4, gap: 2, height: 78 }]}>
+    <View style={[styles.head, { minHeight: 24 }]}>
       <Text numberOfLines={1} style={styles.title}>#{String(round.id)} - {stage}</Text>
+      {!position && previewFace && positions.length > 0 ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}><PixelFace face={previewFace} size={24} /><Text style={styles.houseTag}>YOU</Text></View> : null}
       <Text style={[styles.stageText, { color: standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow }]}>{standing ? standing.toUpperCase() + ' NOW' : position ? sideText(position.account.side) + ' ' + formatSol(position.account.stake) + ' SOL' : positions.length + ' IN'}</Text>
     </View>
-    <View style={styles.sides}>{[Side.Up, Side.Down].map(side => {
-      const players = sortPlayers(positions.filter(p => p.account.side === side), me, null);
-      const first = players[0];
+    {!position && previewFace && positions.length === 0 ? <View style={styles.previewPlayer}><PixelFace face={previewFace} size={32} /><Text style={styles.previewLabel}>YOU · CHOOSE UP OR DOWN</Text></View> : null}
+    {positions.length > 0 || !previewFace ? <View style={styles.sides}>{[Side.Up, Side.Down].map(side => {
+      const players = sortPlayers(positions.filter(p => p.account.side === side), me, rival);
       const color = side === Side.Up ? C.neonGreen : C.neonRed;
       return <View key={side} style={[styles.compactSide, { borderColor: color }]}>
-        {first ? first.account.isHouse ? <HouseFace size={22} /> : <PixelFace face={faceFromBytes(first.account.face)} size={22} /> : <Text style={{ color }}>?</Text>}
         <Text numberOfLines={1} style={[styles.stageText, { color }]}>{sideText(side)} {formatSol(side === Side.Up ? round.account.rawUp : round.account.rawDown)}</Text>
-        <Text style={styles.houseTag}>{first?.account.authority === me ? 'YOU' : first?.account.isHouse ? 'HOUSE' : players.length > 1 ? '+' + (players.length - 1) : ''}</Text>
+        <View style={styles.compactPlayers}>{players.slice(0, MAX_CHIPS).map(player => {
+          const mine = !player.account.isHouse && player.account.authority === me;
+          const isRival = !mine && !player.account.isHouse && player.account.authority === rival;
+          return <View key={player.address} style={styles.compactPlayer}>
+            {player.account.isHouse ? <HouseFace size={32} /> : <PixelFace face={faceFromBytes(player.account.face)} size={32} expression={mine ? standing === 'winning' ? 'happy' : standing === 'losing' ? 'sad' : undefined : undefined} />}
+            <Text numberOfLines={1} style={[styles.houseTag, { fontSize: 8, lineHeight: 8, color: mine ? color : isRival ? C.neonPink : C.subtle }]}>{mine ? 'YOU' : player.account.isHouse ? 'HOUSE' : isRival ? 'RIVAL' : 'PLAYER'}</Text>
+          </View>;
+        })}{players.length === 0 ? <Text style={styles.houseTag}>NO CALLS YET</Text> : players.length > MAX_CHIPS ? <Text style={styles.houseTag}>+{players.length - MAX_CHIPS}</Text> : null}</View>
       </View>;
-    })}</View>
+    })}</View> : null}
   </View>;
 }
 const sideText = (side: number) => side === Side.Up ? 'UP' : 'DOWN';
@@ -180,7 +187,7 @@ export const MyRoundPanel = memo(function MyRoundPanel({
   const expression: Expression | undefined = standing === 'winning' ? 'happy' : standing === 'losing' ? 'sad' : undefined;
   const st = STAGE[stage];
   const glow = standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonPurple;
-  if (compact) return <CompactRoundPanel round={round} positions={all} me={me} stage={st.text} position={position} standing={standing} />;
+  if (compact) return <CompactRoundPanel round={round} positions={all} me={me} rival={rival} stage={st.text} position={position} standing={standing} />;
   return (
     <View style={[styles.panel, { borderColor: glow, boxShadow: `0 0 16px ${glow}66` }]}>
       <View style={styles.head}>
@@ -236,7 +243,9 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
   rival = null,
   upcoming,
   compact = false,
+  previewFace,
 }: {
+  previewFace?: Face;
   compact?: boolean;
   round: RoundView | null;
   positions: readonly PositionView[];
@@ -249,7 +258,7 @@ export const OpenRoundPanel = memo(function OpenRoundPanel({
   const pulse = round
     ? pulseText(roundPulse({ positions, positionCount: round.account.positionCount, rawUp: round.account.rawUp, rawDown: round.account.rawDown }), formatSol)
     : null;
-  if (compact && round) return <CompactRoundPanel round={round} positions={positions} me={me} stage={upcoming ? 'OPENS SOON' : positions.some(p => p.account.authority === me && !p.account.isHouse) ? 'SAVED' : 'OPEN'} position={positions.find(p => p.account.authority === me && !p.account.isHouse)} />;
+  if (compact && round) return <CompactRoundPanel round={round} positions={positions} me={me} rival={rival} previewFace={previewFace} stage={upcoming ? 'OPENS SOON' : positions.some(p => p.account.authority === me && !p.account.isHouse) ? 'SAVED' : 'OPEN'} position={positions.find(p => p.account.authority === me && !p.account.isHouse)} />;
   return (
     <View style={[styles.panel, styles.panelOpen]}>
       <View style={styles.head}>
@@ -328,7 +337,11 @@ export function NextRoundBar({ roundId, secondsLeft, opens, token = null }: { ro
 }
 
 const styles = StyleSheet.create({
-  compactSide: { flex: 1, height: 32, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, paddingHorizontal: 4, gap: 4 },
+  compactSide: { flex: 1, minWidth: 0, height: 42, flexDirection: 'row', alignItems: 'center', borderWidth: 1, paddingHorizontal: 2, gap: 4 },
+  compactPlayers: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, flex: 1 },
+  compactPlayer: { alignItems: 'center', gap: 1 },
+  previewPlayer: { flexDirection: 'row', alignItems: 'center', gap: 8, height: 34 },
+  previewLabel: { color: C.subtle, fontFamily: MONO, fontSize: 10, fontWeight: '900' },
   matchedLine: { color: C.subtle, fontSize: 11, fontWeight: '900', fontFamily: MONO, textAlign: 'center' },
   panel: { borderWidth: 2, backgroundColor: C.panelDeep, padding: 6, gap: 4 },
   panelOpen: { borderColor: '#5b4f78', borderWidth: 1 },

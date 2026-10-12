@@ -456,6 +456,7 @@ export function ArenaScreen() {
           ) : panelRound ? (
             <OpenRoundPanel
               compact
+              previewFace={app.face}
               round={panelRound}
               positions={panelRound ? (arena.positions.get(panelRound.id) ?? NO_PLAYERS) : NO_PLAYERS}
               me={owner}
