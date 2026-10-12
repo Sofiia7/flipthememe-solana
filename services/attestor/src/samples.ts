@@ -68,6 +68,33 @@ export function pendingWindows(rounds: Iterable<WindowRound>): RoundWindow[] {
   return out;
 }
 
+/**
+ * A read taken this long after a round's entry closed cannot miss a bet: the program enforces the cutoff
+ * on its own clock, and ours may differ by a few seconds.
+ */
+export const EMPTY_PROOF_MARGIN_MS = 10_000;
+
+export type EnteredRound = WindowRound & Pick<RoundAccount, 'cutoffAt' | 'positionCount' | 'rawUp' | 'rawDown'>;
+
+/**
+ * True only with proof that nobody entered the round: the account was read (at snapshotAtMs) after the
+ * entry closed and holds no position and no stake. Such a round is never priced, so its windows need no
+ * samples. Without the proof (a read before the cutoff, a failed refresh) the round counts as entered.
+ */
+export function isProvablyEmpty(round: EnteredRound, snapshotAtMs: number): boolean {
+  return (
+    round.positionCount === 0 &&
+    round.rawUp === 0n &&
+    round.rawDown === 0n &&
+    snapshotAtMs >= Number(round.cutoffAt) * 1000 + EMPTY_PROOF_MARGIN_MS
+  );
+}
+
+/** The rounds whose windows are sampled: every one that is not provably empty. */
+export function roundsToPrice<T extends EnteredRound>(rounds: Iterable<T>, snapshotAtMs: number): T[] {
+  return [...rounds].filter((round) => !isProvablyEmpty(round, snapshotAtMs));
+}
+
 /** Windows to sample at `nowMs`: [start - margin, end + margin) holds it. */
 export function activeWindows(rounds: Iterable<WindowRound>, nowMs: number, marginMs: number = SAMPLE_MARGIN_MS): RoundWindow[] {
   return pendingWindows(rounds).filter((w) => nowMs >= w.startMs - marginMs && nowMs < w.endMs + marginMs);

@@ -35,6 +35,10 @@ export class Attestor extends DurableObject<Env> {
     return this.core.health();
   }
 
+  ready(): Promise<Result> {
+    return this.core.ready();
+  }
+
   ping(): Promise<Result> {
     return this.core.ping();
   }

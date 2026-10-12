@@ -25,6 +25,8 @@ export type Result = { status: number; body: Record<string, unknown> };
 export interface AttestorApi {
   attest(tx: string): Promise<Result>;
   health(): Promise<Result>;
+  /** Only the readiness verdict, cheap enough for a poll every few seconds; health() is the fallback. */
+  ready?(): Promise<Result>;
   certificate?(id: string, kind: 'strike' | 'exit'): Promise<Result>;
 }
 
@@ -152,7 +154,7 @@ export async function handle(request: Request, api: AttestorApi, env: HttpEnv = 
     if (pathname === '/live' || pathname === '/v1/attestor/live') return json({ live: true });
     if (pathname === '/ready' || pathname === '/v1/attestor/ready') {
       if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'));
-      const result = await api.health();
+      const result = await (api.ready ? api.ready() : api.health());
       const ready = (result.body.readiness as { ready?: boolean } | undefined)?.ready === true;
       return json(result.body, ready && result.status === 200 ? 200 : 503);
     }

@@ -66,9 +66,11 @@ import {
   activeWindows,
   compareSamples,
   isCorroboratedOutage,
+  isProvablyEmpty,
   nextSamplingStart,
   ownReadsInside,
   pendingWindows,
+  roundsToPrice,
   windowOf,
   type Observation,
   type RoundWindow,
@@ -77,6 +79,8 @@ import {
 
 export const TICK_MS = 1_000;
 export const REFRESH_MS = 15_000;
+/** The whole-table counts in GET /v1/attestor are a full scan: they are recomputed at most this often. */
+export const TOTALS_CACHE_MS = 5 * 60 * 1000;
 export const RETAIN_MS = 60 * 60 * 1000;
 export const PRUNE_EVERY_MS = 10 * 60 * 1000;
 /** Rounds read per refresh besides next_round_id itself: enough for every window still ahead. */
@@ -233,6 +237,7 @@ export class AttestorCore {
   private refreshTriedAt = 0;
   private refreshedAt = 0;
   private prunedAt = 0;
+  private totalsCache: { at: number; value: { samples: number; strikes: number; exits: number; last: number | null } } | null = null;
   private plannedAt = 0;
   private ticking = false;
   private lastSample: { atMs: number; slot: bigint } | null = null;
@@ -314,7 +319,7 @@ export class AttestorCore {
     this.ticking = true;
     try {
       const now = this.now();
-      const due = this.rounds ? activeWindows(this.rounds.values(), now) : [];
+      const due = activeWindows(this.priced(), now);
       // Windows that never leave a gap (not the 60 s cadence) still get a refresh once a minute.
       const refreshDue = now - this.refreshTriedAt >= (due.length > 0 ? 4 * REFRESH_MS : REFRESH_MS);
       await Promise.all([due.length > 0 ? this.sample(due) : undefined, refreshDue ? this.refresh(now) : undefined]);
@@ -326,6 +331,14 @@ export class AttestorCore {
         this.ticking = false;
       }
     }
+  }
+
+  /**
+   * The rounds whose windows are sampled: not provably empty at the last refresh (samples.ts). A round nobody
+   * entered is never priced, so sampling it would only spend alarms, rows and devnet quota.
+   */
+  private priced(): RoundAccount[] {
+    return this.rounds ? roundsToPrice(this.rounds.values(), this.refreshedAt) : [];
   }
 
   /** Re-arms the loop when no alarm is pending (first start, or an alarm dropped after retries). */
@@ -350,7 +363,7 @@ export class AttestorCore {
    */
   private async schedule(): Promise<void> {
     const now = this.now();
-    const rounds = this.rounds ? [...this.rounds.values()] : [];
+    const rounds = this.priced();
     let next = Math.max(this.plannedAt + TICK_MS, now + MIN_ALARM_GAP_MS);
     if (activeWindows(rounds, next).length === 0) {
       const samplingEnds = activeWindows(rounds, now).map((w) => w.endMs + SAMPLE_MARGIN_MS);
@@ -376,7 +389,7 @@ export class AttestorCore {
       this.oracle = snap.oracle;
       this.refreshedAt = now;
       // Pool vaults are read once per pool, ahead of its first window.
-      const pools = new Set(pendingWindows(snap.rounds.values()).filter((w) => w.endMs + SAMPLE_MARGIN_MS > now).map((w) => w.pool));
+      const pools = new Set(pendingWindows(roundsToPrice(snap.rounds.values(), now)).filter((w) => w.endMs + SAMPLE_MARGIN_MS > now).map((w) => w.pool));
       if (this.poolRefs.size > 64) this.poolRefs.clear();
       await Promise.all([...pools].map((pool) => this.poolRef(pool).then(() => undefined, (error) => this.note('mainnet', error))));
     } catch (error) {
@@ -739,31 +752,78 @@ export class AttestorCore {
     return { start: iso(w.startMs), end: iso(w.endMs), samples: row.n, slots: row.n > 0 ? [String(row.lo), String(row.hi)] : null };
   }
 
+  /** The signing key's address, or why it is not usable. */
+  private async keyState(): Promise<{ attestor: Address | null; keyError: string | null }> {
+    try {
+      return { attestor: (await this.key()).address, keyError: null };
+    } catch (error) {
+      return { attestor: null, keyError: describe(error) };
+    }
+  }
+
+  /** Whole-table counts for diagnostics: a full scan, so at most once per TOTALS_CACHE_MS. */
+  private sampleTotals(): { samples: number; strikes: number; exits: number; last: number | null } {
+    const now = this.now();
+    if (this.totalsCache && now - this.totalsCache.at < TOTALS_CACHE_MS) return this.totalsCache.value;
+    const value = this.sql
+      .exec('SELECT COUNT(*) AS samples, COUNT(DISTINCT strike_round) AS strikes, COUNT(DISTINCT exit_round) AS exits, MAX(at_ms) AS last FROM samples')
+      .toArray()[0] as { samples: number; strikes: number; exits: number; last: number | null };
+    this.totalsCache = { at: now, value };
+    return value;
+  }
+
+  private lastSampleIn(w: RoundWindow): number | null {
+    return (this.sql.exec('SELECT MAX(at_ms) AS last FROM samples WHERE pool = ? AND at_ms >= ? AND at_ms < ?', w.pool, w.startMs, w.endMs).toArray()[0] as { last: number | null }).last;
+  }
+
+  /**
+   * The readiness verdict. readiness.ts looks at a window only while it is open (from 3 s in), so only
+   * those windows read the table; the rest are passed without a sample time because they are never asked.
+   */
+  private readinessNow(attestor: Address | null, keyError: string | null, configError: string | null) {
+    const now = this.now();
+    return readiness({
+      now,
+      refreshedAt: this.refreshedAt,
+      oracleMatches: this.oracle !== null && this.oracle.attestor === attestor,
+      keyOk: !keyError && !configError,
+      windows: pendingWindows(this.priced()).map((w) => ({ ...w, lastSampleAt: now >= w.startMs + 3_000 && now < w.endMs ? this.lastSampleIn(w) : null })),
+      lastSampleAt: this.lastSample?.atMs ?? null,
+    });
+  }
+
+  /**
+   * GET /v1/attestor/ready: only the readiness verdict. The keeper asks every 5 seconds, so unlike
+   * health() it must not scan the samples table or list the rounds.
+   */
+  async ready(): Promise<Result> {
+    await this.ensureLoop().catch((error) => this.note('alarm', error));
+    const { attestor, keyError } = await this.keyState();
+    const configError = this.configError();
+    return {
+      status: keyError || configError ? 503 : 200,
+      body: { readiness: this.readinessNow(attestor, keyError, configError), attestor, ...(keyError ? { keyError } : {}), ...(configError ? { configError } : {}) },
+    };
+  }
+
   /** GET /v1/attestor: the key, the sampler's state and the on-chain OracleConfig. */
   async health(): Promise<Result> {
     await this.ensureLoop().catch((error) => this.note('alarm', error));
-    let attestor: Address | null = null;
-    let keyError: string | null = null;
-    try {
-      attestor = (await this.key()).address;
-    } catch (error) {
-      keyError = describe(error);
-    }
+    const { attestor, keyError } = await this.keyState();
     const configError = this.configError();
-    const totals = this.sql
-      .exec('SELECT COUNT(*) AS samples, COUNT(DISTINCT strike_round) AS strikes, COUNT(DISTINCT exit_round) AS exits, MAX(at_ms) AS last FROM samples')
-      .toArray()[0] as { samples: number; strikes: number; exits: number; last: number | null };
+    const totals = this.sampleTotals();
     const rounds = [...(this.rounds?.values() ?? [])]
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map((r) => ({
         id: r.id.toString(),
         status: statusName(r.status),
         pool: r.pool,
+        sampled: !isProvablyEmpty(r, this.refreshedAt),
         strike: this.windowHealth(windowOf(r, 'strike')),
         exit: this.windowHealth(windowOf(r, 'exit')),
       }));
     const body: Record<string, unknown> = {
-      readiness: readiness({ now: this.now(), refreshedAt: this.refreshedAt, oracleMatches: this.oracle !== null && this.oracle.attestor === attestor, keyOk: !keyError && !configError, windows: pendingWindows(this.rounds?.values() ?? []).map(w => ({ ...w, lastSampleAt: (this.sql.exec('SELECT MAX(at_ms) AS last FROM samples WHERE pool = ? AND at_ms >= ? AND at_ms < ?', w.pool, w.startMs, w.endMs).toArray()[0] as { last: number | null }).last })), lastSampleAt: this.lastSample?.atMs ?? totals.last }),
+      readiness: this.readinessNow(attestor, keyError, configError),
       attestor,
       priceMode: 'detached-canonical',
       ...(keyError ? { keyError } : {}),
