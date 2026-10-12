@@ -10,7 +10,7 @@ These texts describe the implementation. Fill the TODO items below and attach ve
 - Install page: https://sol.flipthememe.com/get
 - APK: https://github.com/Sofiia7/flipthememe-apk/releases/latest/download/FlipTheMeme.apk (the install page names the exact version and SHA-256)
 - Demo video: TODO before submitting: link to the three-minute recording of the submitted APK on a Seeker.
-- Pitch deck: TODO before submitting: public PDF link (the Slides artifact is private).
+- Pitch deck (public PDF, 13 slides): https://github.com/Sofiia7/flipthememe-apk/releases/download/pitch-deck/FlipTheMeme-pitch-deck.pdf
 - Money: Solana devnet test SOL. Price reads: Solana mainnet PumpSwap. Program: `5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`.
 
 ## Description
