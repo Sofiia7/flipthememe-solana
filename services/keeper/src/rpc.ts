@@ -19,6 +19,33 @@ export function makeRpc(url: string, timeoutMs: number): SolanaRpc {
   return createSolanaRpcFromTransport(transport);
 }
 
+/** Shared endpoint cooldown for all devnet loops; overall request deadline includes every fallback. */
+export function makeDevnetRpc(urls: string[], budgetMs = 15_000): SolanaRpc {
+  const endpoints = [...new Set(urls)].map(url => {
+    if (new URL(url).protocol !== 'https:') throw new Error('Devnet RPC requires HTTPS');
+    return { transport: createDefaultRpcTransport({ url }), failures: 0, retryAt: 0 };
+  });
+  if (!endpoints.length) throw new Error('No devnet endpoints');
+  const transport: RpcTransport = async <TResponse>(config: Readonly<{ payload: unknown; signal?: AbortSignal }>): Promise<TResponse> => {
+    const deadline = Date.now() + budgetMs;
+    let last: unknown = new Error('Devnet endpoints are cooling down');
+    for (const endpoint of endpoints) {
+      if (endpoint.retryAt > Date.now()) continue;
+      const left = deadline - Date.now(); if (left <= 0) break;
+      const timeout = AbortSignal.timeout(Math.min(5_000, left));
+      try {
+        const result = await endpoint.transport<TResponse>({ ...config, signal: config.signal ? AbortSignal.any([config.signal, timeout]) : timeout });
+        endpoint.failures = 0; endpoint.retryAt = 0; return result;
+      } catch (error) {
+        if (!isEndpointFailure(error)) throw error;
+        last = error; endpoint.retryAt = Date.now() + backoffMs(++endpoint.failures);
+      }
+    }
+    throw last;
+  };
+  return createSolanaRpcFromTransport(transport);
+}
+
 type Endpoint = { url: string; host: string; rpc: SolanaRpc; failures: number; retryAtMs: number };
 
 export const BACKOFF_BASE_MS = 1_000;

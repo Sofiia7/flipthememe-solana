@@ -56,3 +56,8 @@ jobs:
 
       - name: Typecheck the app
         run: pnpm --filter @flipthememe/mobile typecheck
+      - name: Typecheck financial client and services
+        run: |
+          pnpm --filter @flipthememe/client exec tsc --noEmit
+          pnpm --filter @flipthememe/keeper typecheck
+          pnpm --filter @flipthememe/attestor typecheck

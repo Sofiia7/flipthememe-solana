@@ -7,6 +7,7 @@ import {
   WalletAccountChanged,
   WalletStepError,
   withWallet,
+  devnetAuthorization,
   type AuthorizeResult,
   type WalletAuthorization,
   type WalletContext,
@@ -64,6 +65,18 @@ function setup(wallets: FakeWallet[], cached?: string, selected?: string) {
 const granted = (token: string, ...accounts: string[]) => async (): Promise<AuthorizeResult> => ({
   accounts: accounts.map((address) => ({ address })),
   auth_token: token,
+});
+
+test('money signing does not reuse a legacy authorization from another network', async () => {
+  const t = setup([{ authorize: granted('devnet-token', A), sign: async () => 'signed-devnet' }], 'old-mainnet-token');
+  const result = await withWallet(t.ctx, async (wallet) => wallet.sign!(), { fresh: true });
+  assert.equal(result, 'signed-devnet');
+  assert.deepEqual(t.tokens, [undefined]);
+  assert.equal(t.persisted[0]?.authToken, 'devnet-token');
+  const request = devnetAuthorization({ name: 'FlipTheMeme', uri: 'https://sol.flipthememe.com' });
+  assert.equal(request.chain, 'solana:devnet');
+  assert.equal(request.cluster, 'devnet');
+  assert.equal(request.auth_token, undefined);
 });
 
 test('a cached token the wallet rejects is replaced by a fresh authorization in a second session', async () => {

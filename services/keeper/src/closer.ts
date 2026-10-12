@@ -107,6 +107,7 @@ async function readRoundsWithLamports(rpc: SolanaRpc, addresses: readonly Addres
 }
 
 export class PositionCloser {
+  canClosePosition: (position: string) => boolean = () => true;
   queue: Closable[] = [];
   /** Rounds that are ready to close (read fresh, no positions left, bank swept or empty), oldest first. */
   roundQueue: RoundClosable[] = [];
@@ -176,6 +177,7 @@ export class PositionCloser {
     for (const c of claimed) {
       const round = this.rounds.get(c.position.round);
       if (!round?.final || this.rejected.has(c.address)) continue;
+      if (!c.position.isHouse && !this.canClosePosition(c.address)) { waiting++; continue; }
       if (chainNowSecs < round.exitEnd + this.closeAfterSecs + CLOSE_MARGIN_SECS) {
         waiting++;
         continue;
@@ -196,6 +198,9 @@ export class PositionCloser {
    */
   async closeNext(nowMs: number): Promise<void> {
     if (this.roundQueue.length > 0) return this.closeRounds(nowMs);
+    // Publication acknowledgements can be invalidated by an updated claim snapshot
+    // after scan. Check again immediately before building the close transaction.
+    this.queue = this.queue.filter(c => c.isHouse || this.canClosePosition(c.position));
     const batch = this.nextBatch();
     if (batch.length === 0) return;
     const ixs = await Promise.all(batch.map((c) => closePosition({ roundId: c.roundId, owner: c.owner })));

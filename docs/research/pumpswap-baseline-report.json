@@ -1,0 +1,79 @@
+{
+  "temporalSplit": {
+    "calibration": 2646,
+    "heldOut": 1134,
+    "firstHeldOut": 1791558780
+  },
+  "assumptions": "Shadow rows default to full matching and zero network cost. Supply measured matching/costs and features recorded before cutoff; missing features are skipped. No claim of fair odds or mainnet profitability.",
+  "results": [
+    {
+      "policy": "random",
+      "wins": 528,
+      "losses": 594,
+      "refunds": 12,
+      "skipped": 0,
+      "matchedStakeUnits": 1122,
+      "netStakeUnits": -87.12000000000172,
+      "winConfidence95": {
+        "lower": 0.4415324945101927,
+        "upper": 0.499844686545891
+      }
+    },
+    {
+      "policy": "always-up",
+      "wins": 590,
+      "losses": 532,
+      "refunds": 12,
+      "skipped": 0,
+      "matchedStakeUnits": 1122,
+      "netStakeUnits": 34.40000000000042,
+      "winConfidence95": {
+        "lower": 0.4965909296849231,
+        "upper": 0.5549260930233668
+      }
+    },
+    {
+      "policy": "always-down",
+      "wins": 532,
+      "losses": 590,
+      "refunds": 12,
+      "skipped": 0,
+      "matchedStakeUnits": 1122,
+      "netStakeUnits": -79.28000000000075,
+      "winConfidence95": {
+        "lower": 0.44507390697663307,
+        "upper": 0.5034090703150769
+      }
+    },
+    {
+      "policy": "momentum",
+      "wins": 0,
+      "losses": 0,
+      "refunds": 0,
+      "skipped": 1134,
+      "matchedStakeUnits": 0,
+      "netStakeUnits": 0,
+      "winConfidence95": null
+    },
+    {
+      "policy": "contrarian",
+      "wins": 0,
+      "losses": 0,
+      "refunds": 0,
+      "skipped": 1134,
+      "matchedStakeUnits": 0,
+      "netStakeUnits": 0,
+      "winConfidence95": null
+    },
+    {
+      "policy": "late-momentum",
+      "wins": 0,
+      "losses": 0,
+      "refunds": 0,
+      "skipped": 1134,
+      "matchedStakeUnits": 0,
+      "netStakeUnits": 0,
+      "winConfidence95": null
+    }
+  ]
+}

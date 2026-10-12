@@ -23,6 +23,8 @@ import { useWalletActions, type WalletActions } from '../wallet/useWalletActions
 import { awaySummary, type AwayItem, type AwaySummary } from './away';
 import { challengeActive, createChallengeStore, type Challenge } from './challenge';
 import { HISTORY_CAP, createHistoryStore, mergeHistory, reconcileHistory, type HistoryEntry, type HistoryRecord } from './history';
+import { fetchRemoteHistory } from './remoteHistory';
+import { recordEvent } from '../lib/diagnostics';
 import { collectInPlay } from './reminders';
 import type { DuelScore } from './rivalScore';
 import { useRivalScore } from './useRivalScore';
@@ -148,7 +150,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const wallet = useWalletActions({ rpc, sessionKey, chainNowSec: chainNow, onChanged: refreshAll, betInFlight });
   const owner = wallet.owner;
 
-  const myRead = useMyAccount(rpc, owner, sessionKey?.address ?? null);
+  // Keep the recovery record until the actual position (or archived result) is available.
+  const [pending, setPending] = useState<PendingBet | null>(null);
+  const [sentRoundHint, setSentRoundHint] = useState<{ owner: string; roundId: bigint } | null>(null);
+  useEffect(() => {
+    loadPendingBet().then(stored => { if (stored) { setPending(cur => cur ?? stored); setSentRoundHint(cur => cur ?? { owner: stored.owner, roundId: stored.roundId }); } }).catch(() => undefined);
+  }, []);
+  const myRead = useMyAccount(rpc, owner, sessionKey?.address ?? null, pending?.owner === owner ? pending.roundId : sentRoundHint?.owner === owner ? sentRoundHint.roundId : null);
   const {
     owner: myOwner,
     vaultAddress: myVaultAddress,
@@ -188,17 +196,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // their Position accounts (a day after the round ends).
   const [kept, setKept] = useState<{ owner: string; records: readonly HistoryRecord[] } | null>(null);
   useEffect(() => {
+    if (!sentRoundHint) return;
+    const done = myRaw.owner === sentRoundHint.owner && myRaw.positions.some(p => p.round?.id === sentRoundHint.roundId && p.round.account.status === RoundStatus.Final && p.account.claimed);
+    const archived = kept?.owner === sentRoundHint.owner && kept.records.some(r => r.roundId === sentRoundHint.roundId);
+    if (done || archived) setSentRoundHint(null);
+  }, [myRaw.owner, myRaw.positions, sentRoundHint, kept]);
+  useEffect(() => {
     setKept(null);
     if (!owner) return undefined;
     let alive = true;
-    historyStore
-      .load(owner)
-      .catch(() => [] as HistoryRecord[])
-      .then((records) => {
-        if (alive) setKept({ owner, records });
-      });
+    const controller = new AbortController();
+    const localReady = historyStore.load(owner).catch(() => [] as HistoryRecord[]).then(records => {
+      if (alive) setKept({ owner, records });
+    });
+    const restore = async () => {
+      await localReady;
+      try {
+        const remote = await fetchRemoteHistory(owner, controller.signal);
+        if (!alive || !remote.length) return;
+        setKept(current => {
+          if (!current || current.owner !== owner) return current;
+          const merged = new Map(remote.map(r => [r.position, r]));
+          for (const r of current.records) if (!merged.get(r.position)?.claimed || r.claimed) merged.set(r.position, r);
+          const records = [...merged.values()].sort((a, b) => a.roundId > b.roundId ? -1 : a.roundId < b.roundId ? 1 : 0).slice(0, HISTORY_CAP);
+          return { owner, records };
+        });
+      } catch { /* local results remain visible; retry while this wallet is open */ }
+    };
+    void restore();
+    const retry = setInterval(() => { void restore(); }, 60_000);
     return () => {
       alive = false;
+      controller.abort();
+      clearInterval(retry);
     };
   }, [owner]);
   useEffect(() => {
@@ -206,26 +236,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const next = reconcileHistory(kept.records, myRaw.positions, { cap: HISTORY_CAP, nowMs: Date.now() });
     if (next === kept.records) return;
     setKept({ owner, records: next });
-    void historyStore.save(owner, next).catch(() => undefined);
   }, [myReady, owner, myRaw.positions, kept]);
+  useEffect(() => {
+    if (!kept || !kept.records.length || kept.owner !== owner) return;
+    void historyStore.save(kept.owner, kept.records).catch(() => { recordEvent('storage_failed'); setPendingNote('History could not be saved on this device. Free storage and reopen; the server archive may restore indexed results.'); });
+  }, [kept, owner]);
 
-  // Pending bet: shown as pending (never as a placed bet) until its Position account exists, and
-  // dropped only when its signature proves it refused or expired (never on a transport error).
-  const [pending, setPending] = useState<PendingBet | null>(null);
+  // The recovery record remains until its position/result is read, or the signature proves refusal/expiry.
+  // A confirmed signature may show a receipt while the position itself is still being read.
   const [pendingNote, setPendingNote] = useState<string | null>(null);
   /** The pending bet's signature once the chain shows it confirmed, and when that was seen. */
   const [landed, setLanded] = useState<{ signature: string; at: number } | null>(null);
-  useEffect(() => {
-    loadPendingBet()
-      .then((stored) => {
-        if (stored) setPending((cur) => cur ?? stored);
-      })
-      .catch(() => undefined);
-  }, []);
 
   const faceBytes = useMemo(() => faceToBytes(face), [face]);
   const onPending = useCallback((bet: PendingBet | null) => {
     setPending(bet);
+    setSentRoundHint(bet ? { owner: bet.owner, roundId: bet.roundId } : null);
     if (bet) setPendingNote(null);
   }, []);
   const clearPendingNote = useCallback(() => setPendingNote(null), []);
@@ -241,16 +267,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!pending) return;
-    const hasPosition =
-      (arena.positions.get(pending.roundId) ?? []).some((p) => p.account.authority === pending.owner && !p.account.isHouse) ||
-      (myRaw.owner === pending.owner && myRaw.positions.some((p) => p.round?.id === pending.roundId));
-    // Confirmed but its position never showed (already closed, or unreadable): it is placed all the same.
-    const landedLongAgo = landed !== null && landed.signature === pending.signature && Date.now() - landed.at > LANDED_GRACE_MS;
-    if (hasPosition || landedLongAgo) {
+    const hasPosition = myRaw.owner === pending.owner && myRaw.positions.some(p => p.round?.id === pending.roundId);
+    const archived = kept?.owner === pending.owner && kept.records.some(r => r.roundId === pending.roundId);
+    if (hasPosition || archived) {
       void clearPendingBet(pending.signature).catch(() => undefined);
       setPending(null);
     }
-  }, [pending, landed, arena.positions, myRaw.owner, myRaw.positions, myRaw.updatedAt]);
+  }, [pending, kept, myRaw.owner, myRaw.positions]);
 
   // While no send is running, the pending bet's signature is looked up until the chain answers:
   // confirmed (placed), refused (the reason is shown) or expired (nothing was taken).
@@ -268,15 +291,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (stopped) return;
       if (check?.verdict === 'confirmed') {
         setLanded({ signature: bet.signature, at: Date.now() });
+        betting.recoverConfirmed(bet);
         refreshAll();
         return;
       }
       if (check?.verdict === 'failed' || check?.verdict === 'expired') {
         void clearPendingBet(bet.signature).catch(() => undefined);
         setPending((cur) => (cur?.signature === bet.signature ? null : cur));
+        setSentRoundHint(cur => cur?.owner === bet.owner && cur.roundId === bet.roundId ? null : cur);
         setPendingNote(
           check.verdict === 'failed'
-            ? `Bet in round #${bet.roundId} refused: ${humanError(settledError(bet.signature, 'failed', check, null), 'bet')}`
+            ? `NOT PLACED #${bet.roundId}: ${humanError(settledError(bet.signature, 'failed', check, null), 'bet')}`
             : `Your bet in round #${bet.roundId} did not go through - nothing was taken.`,
         );
         return;
@@ -288,7 +313,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       stopped = true;
       if (timer) clearTimeout(timer);
     };
-  }, [pending, betSending, pendingLanded, rpc, refreshAll]);
+  }, [pending, betSending, pendingLanded, rpc, refreshAll, betting.recoverConfirmed]);
 
   // Price feeds: the pool of the round now open (or the latest started), plus my round's pool if different.
   const pools = useMemo(() => {
@@ -364,6 +389,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fresh.push(resultToast(p.account.side, p.account.stake, p.account.claimed, p.account.payout, round, chainNow()));
     }
     if (fresh.length > 0) {
+      for (const _ of fresh) recordEvent('result');
       setToasts((prev) => [...prev, ...fresh]);
       // Seen here, so not news on the next launch.
       saveAck(owner, fresh.reduce((m, t) => (t.roundId > m ? t.roundId : m), 0n));
@@ -392,6 +418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const link = parseRoundLink(url);
       if (!link) return;
       const next: Challenge = { ...link, at: Date.now() };
+      recordEvent('invite_opened');
       challengeTouched.current = true;
       setChallenge(next);
       setTab('arena');
@@ -519,8 +546,6 @@ const NO_POSITIONS: MyPosition[] = [];
 const NO_RECORDS: readonly HistoryRecord[] = [];
 /** How often a pending bet's signature is looked up. */
 const PENDING_CHECK_MS = 3_000;
-/** A confirmed bet stops showing as pending this long after, even if its position never shows. */
-const LANDED_GRACE_MS = 30_000;
 
 function resultToast(
   side: number,

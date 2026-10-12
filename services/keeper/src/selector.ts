@@ -150,9 +150,9 @@ export class PoolSelector {
     this.warnUnreadable = throttled(opts.logger, 5 * 60_000);
   }
 
-  /** Minimum quote reserve for a pool to qualify: K x min_bank (50 SOL at the devnet params). */
+  /** Minimum quote reserve for a pool to qualify: 4 x K x min_bank (200 SOL at the devnet params), covering overlapping rounds. */
   minReserve(): bigint {
-    return DEPTH_K * this.minBank();
+    return 4n * DEPTH_K * this.minBank();
   }
 
   async refresh(nowMs: number): Promise<void> {

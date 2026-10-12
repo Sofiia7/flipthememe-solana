@@ -9,9 +9,9 @@ import { MAX_DEPTH_CHECKS, PoolSelector, type PoolChain, type Selection } from '
 import type { TokenVerdict } from '../src/tokencheck.ts';
 import { HOUR, MINUTE, NOW, SOL, candidate, testAddress, withFlow } from './pool-fixtures.ts';
 
-const MIN_BANK = 20_000_000n; // 0.02 SOL, so the depth gate (2500 x min_bank) is 50 SOL
-const DEEP = 80n * SOL;
-const SHALLOW = 49n * SOL;
+const MIN_BANK = 20_000_000n; // 0.02 SOL, so the depth gate (4 x 2500 x min_bank) is 200 SOL
+const DEEP = 320n * SOL;
+const SHALLOW = 199n * SOL;
 
 type Harness = {
   selector: PoolSelector;
@@ -24,7 +24,7 @@ type Harness = {
   tokenReads: Address[];
 };
 
-/** Every candidate is 80 SOL deep unless `reserves` says otherwise; unknown pools throw on read. */
+/** Every candidate is 320 SOL deep unless `reserves` says otherwise; unknown pools throw on read. */
 function harness(
   candidates: PoolCandidate[],
   opts: {
@@ -277,7 +277,7 @@ describe('PoolSelector: rotation', () => {
     const shallow = harness([candidate(1, 100, 30 * MINUTE), candidate(2, 60, 40 * MINUTE)], { initial: selection(1, 0, NOW - MINUTE), reserves: [[1, SHALLOW]] });
     await shallow.selector.refresh(NOW);
     assert.equal(shallow.selector.current?.pool, testAddress(2));
-    assert.equal(last(shallow)?.reason, 'quote reserve below 50000000000 lamports or unreadable');
+    assert.equal(last(shallow)?.reason, 'quote reserve below 200000000000 lamports or unreadable');
 
     const unreadable = harness([candidate(2, 60, 40 * MINUTE)], { initial: selection(1, 0, NOW - MINUTE) });
     unreadable.reserves.delete(testAddress(1));
@@ -304,7 +304,7 @@ describe('PoolSelector: rotation', () => {
     await h.selector.refresh(NOW + MINUTE);
     assert.equal(h.selector.current, null, 'no pool, so the scheduler opens no round');
     assert.deepEqual(h.changes.map((s) => s?.pool ?? null), [testAddress(1), null], 'the state file drops it too');
-    assert.deepEqual(last(h), { event: 'pool_dropped', pool: testAddress(1), name: 'T1 / SOL', reason: 'quote reserve below 50000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete: true });
+    assert.deepEqual(last(h), { event: 'pool_dropped', pool: testAddress(1), name: 'T1 / SOL', reason: 'quote reserve below 200000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete: true });
 
     await h.selector.refresh(NOW + 2 * MINUTE);
     assert.equal(h.selector.current, null);
@@ -337,7 +337,7 @@ describe('PoolSelector: rotation', () => {
       assert.equal(h.selector.current?.pool, testAddress(1));
       assert.deepEqual(h.changes, [], 'onChange is not called, so never with null');
       assert.deepEqual(h.logs.map((l) => l.event), ['pool_check_failed', 'pool_none_qualifies']);
-      assert.deepEqual(last(h), { event: 'pool_none_qualifies', reason: 'quote reserve below 50000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete, keeping: testAddress(1) });
+      assert.deepEqual(last(h), { event: 'pool_none_qualifies', reason: 'quote reserve below 200000000000 lamports or unreadable', candidates: 0, depthChecks: 0, complete, keeping: testAddress(1) });
     };
     await keptAfterFailedRead(true);
     await keptAfterFailedRead(false); // GeckoTerminal failed as well

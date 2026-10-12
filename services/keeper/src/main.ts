@@ -1,5 +1,6 @@
 import { shadowSamplingWindow } from './market-reserve.ts';
 import { marketStatus } from './market-status.ts';
+import { OracleHealth } from './oracle-health.ts';
 /**
  * FlipTheMeme keeper (devnet). One process, no HTTP server:
  * - pool selection every 60 s (GeckoTerminal, at most 4 requests, + mainnet depth and token checks),
@@ -29,7 +30,7 @@ import { loadRoleSigners } from './keypair.ts';
 import { hostOf, log, throttled } from './log.ts';
 import { ObservationPersister, ObservationStore } from './observations.ts';
 import { MINUTE_MS, RUNG_NAMES } from './poolgate.ts';
-import { FailoverRpc, makeRpc, shortError } from './rpc.ts';
+import { FailoverRpc, makeDevnetRpc, shortError } from './rpc.ts';
 import { RoundLog } from './roundlog.ts';
 import { Leaderboard } from './leaderboard.ts';
 import { dirname, join } from 'node:path';
@@ -83,7 +84,7 @@ async function main(): Promise<void> {
   const attestor = cfg.attestUrl ? new AttestorClient({ url: cfg.attestUrl, token: cfg.attestToken }) : null;
   const startMs = Date.now();
   const state = new StateStore(cfg.stateFile, startMs);
-  const devnet = makeRpc(cfg.devnetRpc, 15_000);
+  const devnet = makeDevnetRpc([cfg.devnetRpc, ...(process.env.DEVNET_RPC_FALLBACKS?.split(',').map(u => u.trim()).filter(Boolean) ?? ['https://solana-devnet.api.onfinality.io/public', 'https://api.devnet.solana.com'])]);
   const mainnet = new FailoverRpc(cfg.mainnetRpcs, log, { timeoutMs: 5_000 });
   const store = new ObservationStore();
   const persister = new ObservationPersister({ store, path: cfg.observationsFile, logger: log });
@@ -176,13 +177,19 @@ async function main(): Promise<void> {
     log({ event: 'chain_clock_failed', error: describeError(error), assumedOffsetMs: clock.offsetMs });
   }
 
+  let leaderboard: Leaderboard | null = null;
+  const oracleHealth = new OracleHealth(cfg.attestUrl);
   scheduler = new Scheduler({
+    canClosePosition: position => leaderboard?.archived(position) ?? false,
     rpc: devnet,
     signer,
     priceSigner: roles.price,
     houseSigner: roles.house,
     attestor,
-    marketReady: (pool, nowMs) => cfg.poolGate.neutral ? shadow.readiness(pool, nowMs) : null,
+    marketReady: async (pool, nowMs) => {
+      if (!cfg.legacyPrices && oracleHealth.refusal(nowMs)) await oracleHealth.check();
+      return (!leaderboard ? 'History archive is unavailable; new rounds wait.' : null) ?? (!cfg.legacyPrices ? oracleHealth.refusal(Date.now()) : null) ?? (cfg.poolGate.neutral ? shadow.readiness(pool, Date.now()) : null);
+    },
     cfg,
     state,
     selector,
@@ -254,7 +261,6 @@ async function main(): Promise<void> {
   };
 
   const errors = new LoopErrorLog(log);
-  let leaderboard: Leaderboard | null = null;
   try {
     leaderboard = new Leaderboard(join(dirname(cfg.stateFile), 'leaderboard.json'), devnet, signer);
   } catch (error) {
@@ -265,9 +271,12 @@ async function main(): Promise<void> {
   // is the error log's business, a loop that stopped completing is the watchdog's.
   let lastTickDoneMs = Date.now();
   const loops: Loop[] = [
-    every('market-status', 120_000, 12_000, errors, async () => {
+    every('oracle-readiness', 5_000, 1_000, errors, () => oracleHealth.check()),
+    every('market-status', 10_000, 12_000, errors, async () => {
+      if (!cfg.legacyPrices && oracleHealth.refusal(Date.now())) await oracleHealth.check();
       const pool = selector.current;
-      await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, cfg.poolGate.neutral ? pool ? shadow.readiness(pool.pool, Date.now()) : selector.watching.map(p => shadow.bias(p.pool, Date.now())).find(Boolean) ?? null : null, sched.snapshot?.config?.paused ?? false, selector.watching.length));
+      const oracleRefusal = !cfg.legacyPrices ? oracleHealth.refusal(Date.now()) : null;
+      await leaderboard?.publish(shadow.summary(Date.now()), marketStatus(pool, oracleRefusal ?? (cfg.poolGate.neutral ? pool ? shadow.readiness(pool.pool, Date.now()) : selector.watching.map(p => shadow.bias(p.pool, Date.now())).find(Boolean) ?? null : null), (sched.snapshot?.config?.paused ?? false) || oracleRefusal !== null, selector.watching.length));
     }),
     every('leaderboard', 120_000, 45_000, errors, async () => { await leaderboard?.tick(shadow.summary(Date.now())); }),
     every('selector', 60_000, 5_000, errors, () => selector.refresh(Date.now())),

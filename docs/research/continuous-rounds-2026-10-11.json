@@ -1,0 +1,89 @@
+{
+  "keeperBundleSha256": "e6abe7562d2261f747aaa68829e327660ea99ccf1e0016ae4c2e8b09d6c2aad9",
+  "network": "solana:devnet",
+  "creationOnly": true,
+  "consecutiveMinuteStarts": true,
+  "count": 10,
+  "rounds": [
+    {
+      "at": "2026-10-11T15:49:46.577Z",
+      "roundId": "7596",
+      "opensAt": "2026-10-11T15:50:00Z",
+      "pool": "FkkNXVYbRt22BQEf9mbmSwiW35oiG5ion2QmnAsfvRAt",
+      "maxBank": "65678570",
+      "signature": "2jHebsCmZnisoFWWufU7oNbfioDpm9en4eYppSH1SiQekS3ziob87gLE1Zsk79fo6CGVN2aZwBgjaexyFzAGDkwN"
+    },
+    {
+      "at": "2026-10-11T15:50:46.581Z",
+      "roundId": "7597",
+      "opensAt": "2026-10-11T15:51:00Z",
+      "pool": "FkkNXVYbRt22BQEf9mbmSwiW35oiG5ion2QmnAsfvRAt",
+      "maxBank": "65703905",
+      "signature": "nvcnpgBTvr9KUuFY56e8JbPx64MRaN6FyBtRNHCeqmiS1rdJBreZFPU2kcv1yGngGzSndERze8NvrEeZPSGFyqF"
+    },
+    {
+      "at": "2026-10-11T15:51:49.064Z",
+      "roundId": "7598",
+      "opensAt": "2026-10-11T15:52:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "169838159",
+      "signature": "5a3hKyBUtD2bsiEtrwm5YMMBK8sicUpa1SRcBeNYhErsiaXSfzYWxeDxRdsCG2mSUxqiPyqjAYLEY1bkYvaXv4AJ"
+    },
+    {
+      "at": "2026-10-11T15:52:46.575Z",
+      "roundId": "7599",
+      "opensAt": "2026-10-11T15:53:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "169644109",
+      "signature": "teuk8RA85FAbzAwSCKioBuD7AmPXnNawNec5kmvfXonrHWfqUqQXJuWpwZpdJt5YnmG6yCtgoqDAu8ZBWBBxt68"
+    },
+    {
+      "at": "2026-10-11T15:53:46.583Z",
+      "roundId": "7600",
+      "opensAt": "2026-10-11T15:54:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "170564263",
+      "signature": "5RceYZ9gpXnvhn1UQyD1qKAzvknHnkrTznb2CWq9a6X2d75wecpbnFmZUNbetWM61azHffLU99Dz6djzW5oPnraA"
+    },
+    {
+      "at": "2026-10-11T15:54:46.578Z",
+      "roundId": "7601",
+      "opensAt": "2026-10-11T15:55:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "169056280",
+      "signature": "3LuQw6bw12CRbU7EkjZLRMMkLg6Kfe3dwchXqmbzNi8gQyCxTqQ5oySUZteACjaq7HJXMbr65Laoqv5nukn5FDgo"
+    },
+    {
+      "at": "2026-10-11T15:55:46.574Z",
+      "roundId": "7602",
+      "opensAt": "2026-10-11T15:56:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "169050620",
+      "signature": "4dTJs5dHK5fiNsoYWgLPE9Yc2h1V5YQ2ABpAywn37HXvt2LxiiLR6C6YLbV9cRjgdfRx8DJyUZCCGrpcizgqvkVw"
+    },
+    {
+      "at": "2026-10-11T15:56:49.133Z",
+      "roundId": "7603",
+      "opensAt": "2026-10-11T15:57:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "167071608",
+      "signature": "4FUWbmBpsJXNjvvuWAxzQeVTpAg3tdaQqNkQchQSwhu2JeyinpR6Jpd1LAacn3K3HtJrFFGpJjPAAY9MDFf57yS7"
+    },
+    {
+      "at": "2026-10-11T15:57:46.625Z",
+      "roundId": "7604",
+      "opensAt": "2026-10-11T15:58:00Z",
+      "pool": "Fe7bpDYCs74GqiCUF14HwgUMToPKV1d9mDYVX5BTohFr",
+      "maxBank": "166232242",
+      "signature": "4Fs7BBDxtDAy6PrkScc6T5RDFHJaVqrMu3K9ubMAGpEwxNFHpGV6FECmEuNWv2Q85BafV6jtkE7JPSTVvpZNros6"
+    },
+    {
+      "at": "2026-10-11T15:58:46.581Z",
+      "roundId": "7605",
+      "opensAt": "2026-10-11T15:59:00Z",
+      "pool": "FkkNXVYbRt22BQEf9mbmSwiW35oiG5ion2QmnAsfvRAt",
+      "maxBank": "65025065",
+      "signature": "2NCnimvq78zoJnaPtYqsiX7AnJkeYfyDbNPyzKqsfgpVXitmgnQrtYtsf73BvGSPmjX1zLffcSjRnPoCGMKcRCfj"
+    }
+  ]
+}

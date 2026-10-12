@@ -38,7 +38,7 @@ export function ChallengeCard({
   nowSec: number;
   onClose: () => void;
 }) {
-  const { rpc, arena, rivalScore } = useApp();
+  const { rpc, arena, rivalScore, wallet, myReady } = useApp();
   // The name in a link is whatever its sender typed, so the card shows the inviter's real Seeker ID
   // (looked up for `by`), else their short address; a link without `by` stays A FRIEND.
   const verified = useSkrNames(link.by ? [link.by] : []).get(link.by ?? '') ?? null;
@@ -56,12 +56,14 @@ export function ChallengeCard({
       <View style={styles.head}>
         {challenge.by ? <RivalTag /> : null}
         <Text style={styles.headline}>{challengeHeadline(challenge)}</Text>
-        <Pressable onPress={onClose} hitSlop={8} accessibilityRole="button" accessibilityLabel="Dismiss the challenge">
+        <Pressable onPress={onClose} style={{ minWidth: 48, minHeight: 48, alignItems: 'center', justifyContent: 'center' }} hitSlop={8} accessibilityRole="button" accessibilityLabel="Dismiss the challenge">
           <Text style={styles.ok}>OK</Text>
         </Pressable>
       </View>
       {stateText ? <Text style={[styles.line, { color: stateColor(state) }]}>{stateText}</Text> : null}
       <Text style={[styles.line, { color: met ? C.accentText : C.subtle }]}>{meetLine(challenge, open?.id ?? null, met?.account.side ?? null)}</Text>
+      <Text style={[styles.line, { color: C.white }]}>YOU: {wallet.owner && myReady ? 'wallet connected' : 'prepare your wallet'} · FRIEND: {met ? 'bet confirmed in this round' : 'not yet confirmed in this round'}</Text>
+      {!met ? <Text style={[styles.line, { color: C.subtle }]}>Shared meetup: {new Date((Math.floor(nowSec / 300) + 1) * 300_000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Keep this invite; entry opens only when market checks pass.</Text> : null}
       {/* The personal score against this friend: rounds where we called opposite sides, since the app opened. */}
       {rivalScore && challenge.by ? <Text style={[styles.line, styles.duel]}>{scoreLine(rivalScore, verified?.replace(/\.skr$/, '') ?? null)}</Text> : null}
     </View>

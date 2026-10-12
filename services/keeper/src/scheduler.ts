@@ -136,6 +136,7 @@ export function retryDelayMs(error: unknown, failures: number): number {
 const isProgramError = (error: unknown): boolean => PROGRAM_ERRORS.includes(describeError(error) as ProgramErrorName);
 
 export type SchedulerDeps = {
+  canClosePosition?: (position: string) => boolean;
   rpc: SolanaRpc;
   /** The keeper key: fee payer of every transaction, and the admin that creates rounds. */
   signer: KeyPairSigner;
@@ -145,7 +146,7 @@ export type SchedulerDeps = {
   /** Present when ATTEST_URL is set. */
   attestor?: AttestorClient | null;
   certificates?: typeof certificateInstructions;
-  marketReady?: (pool: string, nowMs: number) => string | null;
+  marketReady?: (pool: string, nowMs: number) => string | null | Promise<string | null>;
   closer?: PositionCloser;
   /** rounds.jsonl: a line per swept round (humans, wallets, outcome); absent = no such record. */
   roundLog?: RoundLog | null;
@@ -171,7 +172,7 @@ export class Scheduler {
   private readonly houseSigner: KeyPairSigner;
   private readonly attestor: AttestorClient | null;
   private readonly certificates: typeof certificateInstructions;
-  private readonly marketReady: (pool: string, nowMs: number) => string | null;
+  private readonly marketReady: (pool: string, nowMs: number) => string | null | Promise<string | null>;
   private readonly closer: PositionCloser;
   private readonly cfg: KeeperConfig;
   private readonly state: StateStore;
@@ -213,6 +214,7 @@ export class Scheduler {
     this.certificates = deps.certificates ?? certificateInstructions;
     this.marketReady = deps.marketReady ?? (() => null);
     this.closer = deps.closer ?? new PositionCloser({ rpc: deps.rpc, signer: deps.signer, logger: deps.logger, closeAfterSecs: deps.cfg.closeAfterSecs });
+    if (deps.canClosePosition) this.closer.canClosePosition = deps.canClosePosition;
     this.cfg = deps.cfg;
     this.state = deps.state;
     this.selector = deps.selector;
@@ -596,7 +598,7 @@ export class Scheduler {
       this.warn('no-pool', { event: 'create_skipped', reason: 'no pool selected yet' });
       return;
     }
-    const notReady = this.marketReady(pool.pool, nowMs);
+    const notReady = await this.marketReady(pool.pool, nowMs);
     if (notReady) {
       this.warn('market-ready', { event: 'create_skipped', reason: notReady, pool: pool.pool });
       return;
@@ -609,7 +611,14 @@ export class Scheduler {
     }
     const reserve = latest.quoteAmount;
     const byDepth = reserve / DEPTH_K;
-    const maxBank = byDepth < MAX_BANK_CEILING ? byDepth : MAX_BANK_CEILING;
+    // Several overlapping windows on one pool share the same manipulation budget.
+    const committed = [...(this.snapshot?.rounds.values() ?? [])].reduce((sum, r) => sum + (r && r.pool === pool.pool && r.status !== RoundStatus.Final ? r.maxBank : 0n), 0n);
+    const room = byDepth > committed ? byDepth - committed : 0n;
+    // A result window lasts 160 seconds and we precreate the next minute's round.
+    // Reserve capacity for four overlapping rounds instead of lending it all to the first.
+    const perRound = byDepth / 4n;
+    const available = room < perRound ? room : perRound;
+    const maxBank = available < MAX_BANK_CEILING ? available : MAX_BANK_CEILING;
     // The depth gate again, on the newest reserve and Config's min_bank. A round activates once
     // 2 x its smaller side reaches min_bank, and the depth rule keeps that at most max_bank: with
     // max_bank below min_bank it never activates, and a one-sided bet only waits for its refund.

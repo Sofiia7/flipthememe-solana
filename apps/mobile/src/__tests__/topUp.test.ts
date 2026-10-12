@@ -4,7 +4,7 @@
 //   node --test "apps/mobile/src/__tests__/*.test.ts"
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getAddressDecoder, getAddressEncoder, type Address } from '@solana/kit';
+import { getAddressDecoder, getAddressEncoder } from '@solana/kit';
 import { ACCOUNT, IX, SYSTEM_PROGRAM_ID, decodeVault } from '@flipthememe/client';
 import { SESSION_RULES } from '../config.ts';
 import { ACCOUNT_SPACE, NETWORK_FEE, RENT_FALLBACK, U64_MAX, rentExempt, sessionCapFor, topUpPlan } from '../wallet/topUpPlan.ts';

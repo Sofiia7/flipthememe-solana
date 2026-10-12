@@ -6,8 +6,8 @@ import { C, FONT_CAP, MONO } from '../theme';
 import { PixelText } from './PixelText';
 
 /** The system "remove animations" setting; the timer pulse stays off while it is on. */
-function useReduceMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
+export function useReduceMotion(): boolean {
+  const [reduced, setReduced] = useState(true);
   useEffect(() => {
     let alive = true;
     AccessibilityInfo.isReduceMotionEnabled()

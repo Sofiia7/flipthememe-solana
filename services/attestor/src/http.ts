@@ -149,6 +149,13 @@ async function health(request: Request, api: AttestorApi, ctx: HttpContext): Pro
 export async function handle(request: Request, api: AttestorApi, env: HttpEnv = {}, ctx: HttpContext = {}): Promise<Response> {
   const { pathname } = new URL(request.url);
   try {
+    if (pathname === '/live' || pathname === '/v1/attestor/live') return json({ live: true });
+    if (pathname === '/ready' || pathname === '/v1/attestor/ready') {
+      if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'));
+      const result = await api.health();
+      const ready = (result.body.readiness as { ready?: boolean } | undefined)?.ready === true;
+      return json(result.body, ready && result.status === 200 ? 200 : 503);
+    }
     if (pathname === '/v1/attestation') {
       if (request.method !== 'GET') return answer(failure(405, 'method_not_allowed', 'GET only'), { allow: 'GET' });
       const url = new URL(request.url);

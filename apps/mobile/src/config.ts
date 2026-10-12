@@ -7,7 +7,7 @@ export const DEVNET_RPCS = [DEVNET_RPC, 'https://solana-devnet.api.onfinality.io
 export const MAINNET_RPCS = ['https://api.mainnet-beta.solana.com', 'https://solana-rpc.publicnode.com'] as const;
 
 export const CLUSTER = { id: 'solana:devnet', url: DEVNET_RPC } as const;
-export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://flipthememe.com', icon: 'icon-512.png' };
+export const APP_IDENTITY = { name: 'FlipTheMeme', uri: 'https://sol.flipthememe.com', icon: 'icon-512.png' };
 
 /** The public faucet: the fallback when the project's own test SOL faucet (FAUCET_API) cannot be reached. */
 export const FAUCET_URL = 'https://faucet.solana.com';
@@ -57,8 +57,9 @@ export const DEFAULT_MIN_STAKE = sol(1n);
 
 export const SESSION_RULES = {
   /**
-   * Session lifetime granted by Top up & play: 7 days, the program's maximum, less 10 minutes so a
-   * phone clock a little ahead of the chain never asks for more than the program allows.
+   * Longest session the program allows (the 7-day preset in wallet/sessionPolicy.ts), less 10 minutes so a
+   * phone clock a little ahead of the chain never asks for more than the program allows. The default
+   * preset is 1 hour; the player picks a longer one.
    */
   durationSecs: 7 * 24 * 60 * 60 - 10 * 60,
   maxPerBet: sol(10n),

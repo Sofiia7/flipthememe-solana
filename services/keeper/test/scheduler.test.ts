@@ -135,7 +135,7 @@ async function byRound(h: Harness, id: bigint): Promise<SentInstruction[][]> {
 describe('scheduler', () => {
   test('an unobserved market never accepts a round; a ready one can open normally', async () => {
     let reason: string | null = 'observing market: 9/10 priced shadow minutes';
-    const h = await harness({ marketReady: () => reason });
+    const h = await harness({ marketReady: async () => reason });
     const now = MINUTE + 50;
     h.store.add(POOL, obs(now * 1000 - 400, 1));
     await tick(h, now);
@@ -149,7 +149,7 @@ describe('scheduler', () => {
   test('creates the next minute round 10 s before it opens, sized by the pool depth, once', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT));
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT, { maxBank: 40_000_000n }));
     h.store.add(POOL, obs(now * 1000 - 400, 1));
     await tick(h, now);
     const ix = only(h);
@@ -160,7 +160,7 @@ describe('scheduler', () => {
     assert.equal(readI64(ix.data, 80), BigInt(MINUTE + 60)); // opens_at: next minute boundary
     assert.equal(readI64(ix.data, 88), BigInt(MINUTE + 120)); // cutoff_at
     assert.equal(readI64(ix.data, 128), BigInt(MINUTE + 60 + 760)); // settle_deadline
-    assert.equal(readU64(ix.data, 136), 160_000_000n); // max_bank = 400 SOL / 2500
+    assert.equal(readU64(ix.data, 136), 40_000_000n); // a quarter of the shared 400 SOL / 2500 budget, with 0.04 already committed
     assert.deepEqual(ix.accounts, [await configAddress(), await roundAddress(10n), h.signer.address, SYSTEM_PROGRAM_ID]);
     assert.ok(h.logs.some((l) => l.step === 'create' && l.round === 10n && typeof l.sig === 'string'));
     // The chain has not caught up yet (the fake never applies it): no second create.
@@ -194,12 +194,12 @@ describe('scheduler', () => {
       event: 'round_skipped_shallow_pool',
       pool: POOL,
       reserve: SOL,
-      maxBank: 400_000n,
+      maxBank: 0n,
       minBank: 20_000_000n,
     });
   });
 
-  test('max_bank must reach min_bank as Config sets it: K x min_bank opens a round, one lamport less does not', async () => {
+  test('max_bank must reach min_bank as Config sets it: 4 x K x min_bank sustains overlapping rounds, one lamport less does not', async () => {
     const now = MINUTE + 50;
     const minBank = SOL / 10n; // not the 0.02 SOL default: the check reads Config
     const open = async (reserve: bigint): Promise<Harness> => {
@@ -210,11 +210,31 @@ describe('scheduler', () => {
       await tick(h, now);
       return h;
     };
-    const below = await open(DEPTH_K * minBank - 1n);
+    const below = await open(4n * DEPTH_K * minBank - 1n);
     assert.equal(below.chain.sent.length, 0);
     assert.equal(below.logs.find((l) => l.event === 'round_skipped_shallow_pool')?.maxBank, minBank - 1n);
-    const at = await open(DEPTH_K * minBank);
+    const at = await open(4n * DEPTH_K * minBank);
     assert.equal(readU64(only(at).data, 136), minBank); // max_bank
+  });
+
+  test('four overlapping same-pool rounds fit the depth budget; the fifth cannot exceed it', async () => {
+    const h = await harness();
+    const now = MINUTE + 50;
+    for (let i = 0; i < 4; i++) {
+      h.store.add(POOL, obs((now + i * 60) * 1000 - 400, i + 1));
+      await tick(h, now + i * 60);
+      const creates = h.chain.sent.flat().filter(ix => ix.name === 'createRound');
+      assert.equal(creates.length, i + 1);
+      const ix = creates.at(-1)!;
+      assert.equal(readU64(ix.data, 136), 40_000_000n);
+      const id = BigInt(10 + i);
+      h.chain.rounds.set(id, makeRound(id, BigInt(MINUTE + (i + 1) * 60), POOL, MINT, { maxBank: 40_000_000n }));
+      h.chain.config = { ...h.chain.config!, nextRoundId: id + 1n };
+    }
+    h.store.add(POOL, obs((now + 240) * 1000 - 400, 5));
+    await tick(h, now + 240);
+    assert.equal(h.chain.sent.flat().filter(ix => ix.name === 'createRound').length, 4);
+    assert.ok(h.logs.some(l => l.event === 'round_skipped_shallow_pool' && l.maxBank === 0n));
   });
 
   test('house fill: tops up the empty side of a lone bet and books it against the daily budget', async () => {
@@ -304,7 +324,7 @@ describe('scheduler', () => {
   test('at most two transactions at once, time-critical steps first', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.store.add(POOL, obs(now * 1000 - 300, 1));
+    h.store.add(POOL, { ...obs(now * 1000 - 300, 1), quoteAmount: 10_000n * SOL });
     h.chain.rounds.set(9n, makeRound(9n, BigInt(now - 65), POOL, MINT, { rawUp: 50_000_000n, positionCount: 1 })); // fill
     h.chain.rounds.set(8n, makeRound(8n, BigInt(now - 102), POOL, MINT)); // strike
     h.chain.rounds.set(7n, makeRound(7n, BigInt(now - 400), POOL, MINT, { status: RoundStatus.Final, outcome: Outcome.NotActivated })); // close
@@ -1130,7 +1150,7 @@ describe('scheduler: clock drift and a second keeper', () => {
   test('a round this process created is not a sign of anything', async () => {
     const h = await harness();
     const now = MINUTE + 50;
-    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT));
+    h.chain.rounds.set(9n, makeRound(9n, BigInt(MINUTE), POOL, MINT, { maxBank: 40_000_000n }));
     h.store.add(POOL, obs(now * 1000 - 300, 1));
     await tick(h, now);
     assert.equal(only(h).name, 'createRound'); // round 10, opens at MINUTE + 60

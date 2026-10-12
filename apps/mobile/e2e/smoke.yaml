@@ -1,0 +1,19 @@
+appId: com.flipthememe.app
+---
+- launchApp
+- assertVisible: "DEVNET"
+- tapOn: "WALLET"
+- assertVisible: "Test SOL only.*"
+- tapOn: "HISTORY"
+- tapOn: "LEADERS"
+- tapOn: "PROFILE"
+- scrollUntilVisible:
+    element: "EXPORT LOCAL DIAGNOSTICS"
+    direction: DOWN
+    timeout: 10000
+- assertVisible: "EXPORT LOCAL DIAGNOSTICS"
+- back
+- assertVisible: "DEVNET"
+- tapOn: "Rules and current round"
+- back
+- assertVisible: "DEVNET"

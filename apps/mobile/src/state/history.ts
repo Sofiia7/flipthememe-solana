@@ -442,8 +442,19 @@ export function parseHistory(raw: string | null): HistoryRecord[] {
 }
 
 export function createHistoryStore(storage: KeyValueStorage) {
+  const writes = new Map<string, Promise<void>>();
   return {
-    load: async (owner: string): Promise<HistoryRecord[]> => parseHistory(await storage.getItem(historyEntry(owner))),
-    save: (owner: string, records: readonly HistoryRecord[]) => storage.setItem(historyEntry(owner), serializeHistory(records)),
+    load: async (owner: string): Promise<HistoryRecord[]> => {
+      await writes.get(owner)?.catch(() => undefined);
+      return parseHistory(await storage.getItem(historyEntry(owner)));
+    },
+    save: (owner: string, records: readonly HistoryRecord[]) => {
+      const raw = serializeHistory(records);
+      const write = (writes.get(owner) ?? Promise.resolve()).catch(() => undefined).then(() => storage.setItem(historyEntry(owner), raw));
+      writes.set(owner, write);
+      const clear = () => { if (writes.get(owner) === write) writes.delete(owner); };
+      void write.then(clear, clear);
+      return write;
+    },
   };
 }

@@ -4,6 +4,9 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { MobileWalletProvider } from '@wallet-ui/react-native-kit';
 import { APP_IDENTITY, CLUSTER } from './src/config';
 import { loadPrefs } from './src/lib/prefs';
+import { loadSessionPolicy } from './src/wallet/sessionPolicy';
+import { recordEvent } from './src/lib/diagnostics';
+import { ErrorBoundary } from './src/ui/ErrorBoundary';
 import { ArenaScreen } from './src/screens/ArenaScreen';
 import { HistoryScreen } from './src/screens/HistoryScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
@@ -22,6 +25,8 @@ function Shell() {
 
   useEffect(() => {
     loadPrefs();
+    void loadSessionPolicy();
+    recordEvent('app_open');
     preloadSounds();
   }, []);
 
@@ -46,7 +51,7 @@ function Shell() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" />
       <View style={styles.content}>
-        {tab === 'arena' ? <ArenaScreen /> : null}
+        <View style={tab === 'arena' ? styles.content : { display: 'none' }}><ArenaScreen /></View>
         {tab === 'wallet' ? <WalletScreen /> : null}
         {tab === 'history' ? <HistoryScreen /> : null}
         {tab === 'profile' ? <ProfileScreen /> : null}
@@ -62,11 +67,11 @@ function Shell() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <MobileWalletProvider cluster={CLUSTER} identity={APP_IDENTITY}>
+      <ErrorBoundary><MobileWalletProvider cluster={CLUSTER} identity={APP_IDENTITY}>
         <AppProvider>
-          <Shell />
+          <ErrorBoundary><Shell /></ErrorBoundary>
         </AppProvider>
-      </MobileWalletProvider>
+      </MobileWalletProvider></ErrorBoundary>
     </SafeAreaProvider>
   );
 }

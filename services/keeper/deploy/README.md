@@ -1,5 +1,35 @@
 # FlipTheMeme keeper: deploy
 
+## Verified operator target (10 October 2026)
+
+The existing deployment is reached from the operator workstation with SSH alias
+`openclaw-bot_TEST` (user `openclaw`, port 2222). Its project root is
+`/home/openclaw/ftm-sol-keeper`; run Compose in its `deploy/` directory. The container
+and Compose project are both `ftm-sol-keeper`. Use this existing deployment for updates.
+Keys and `.env` remain on the VPS; do not copy them into the repository or release package.
+
+Audit keeper source `49c965e` was installed on 10 October at 07:12 UTC. The verified
+bundle SHA-256 is `1cb5626a9c0a9cc3246e008bed2a1a9808e4212128e5d7910be048a8f2c908b5`;
+the file inside the running container matches. The previous bundle, Compose files and
+data are preserved in `audit-backup-20261010T071250Z` under the project root.
+The container is healthy and ranking publication works. Oracle readiness is still false
+because upstream devnet RPCs return 429/403; this rollout does not establish working sampling.
+
+At 07:26 UTC the attestor's `DEVNET_RPC` was switched to the existing second Alchemy
+credential, `ALCHEMY_SOLANA_URL_2` from the operator's `~/.hermes/.env` on that VPS,
+using the Solana devnet endpoint. The first credential reports a monthly capacity limit;
+the second passed devnet genesis and Config/OracleConfig account checks. Do not request
+new credentials before checking these existing operator entries. The Hermes configuration
+was not modified, and credential values are stored only as Worker secrets. Readiness
+returned true and round 6532 was created; certificate and settlement checks follow separately.
+
+At 07:28 UTC `MAINNET_RPC` was also switched to that second credential after the first
+price window exposed mainnet HTTP 429. At 07:32 UTC a public strike certificate for
+round 6536 contained ten observations and passed independent Ed25519 signature verification.
+The attestor reported ready with no current RPC errors and the arena returned `ready`.
+These checks verify RPC recovery, sampling and signing; they do not attest a matched player
+bet, payout or end-to-end history archival. No player bet was placed for this verification.
+
 **Continuous rounds with a measured reserve (8 October).** Production uses `POOL_BALANCED=true`, `POOL_NEUTRAL=false`, `POOL_YOUTH_WEIGHT=0`, with trending discovery disabled. Up to six qualified pools of distinct base tokens (including the active pool) are sampled in parallel. A prepared balanced pool replaces a biased one without a blank minute; ten directional samples measure readiness, while readiness and momentum never block round creation. With no better candidate the valid current market keeps serving. Token/quote-depth failures still fail closed. Reserve addresses are refreshed even after the new-token age window and activity discovery scans five pages. New-listing endpoint outages do not stop reserve refreshes. Qualified reserve pools survive temporary discovery outages and their token/depth checks repeat. Background price polling only runs around the ten-second measurement windows. Mature (24h+) reserves can have non-`pump` mints; every reserve still passes the same token and quote-depth checks. The optional `POOL_NEUTRAL=true` strict mode can create gaps. Actual UP/DOWN statistics remain public; no price outcome is changed or promised to be 50/50.
 
 One container, `ftm-sol-keeper`, on a Linux VPS with Docker Compose (the host may run other compose
@@ -20,6 +50,16 @@ Placeholders used below:
   A key file never goes into the repository, an image or a log.
 
 ## Canonical price rollout
+
+The audit keeper refuses new rounds when the attestor readiness check is unavailable or stale.
+Existing settlement, refunds and withdrawals remain independent of that creation gate. Set
+`DEVNET_RPC_FALLBACKS` in `deploy/.env` to a comma-separated list of operator-approved alternate
+devnet RPC URLs; Compose passes it through to the bundled keeper. Each provider still needs usable
+quota. The attestor has its own `DEVNET_RPC` secret and must also pass `/v1/attestor/ready`.
+Before replacing the bundle, stop the existing container and back up `deploy/data/` (including
+`leaderboard.json`) and the previous bundle outside the build context. Keep `deploy/.env` and
+`deploy/secrets/` on the server. After restarting, verify fresh status and history publication;
+unarchived player positions remain protected from this keeper's automatic account closure.
 
 The deployed program and keeper must use the same price protocol. `LEGACY_PRICES=true` is only for the previous program during a coordinated upgrade. Pause new bets, finish or refund existing rounds, deploy the verified program, then set `LEGACY_PRICES=false` and recreate the keeper container before resuming. The upgraded required-oracle program rejects priced legacy instructions; this flag cannot bypass it.
 

@@ -74,6 +74,24 @@ async function finalRound(
 const owners = async (n: number): Promise<Address[]> => Promise.all(Array.from({ length: n }, async () => (await generateKeyPairSigner()).address));
 
 describe('PositionCloser', () => {
+  test('a player archive must remain acknowledged between scan and close', async () => {
+    const { chain, closer } = await setup();
+    const [owner] = await owners(1);
+    if (!owner) throw new Error('owner');
+    await finalRound(chain, 99n, 2n * 86_400n, [{ owner, claimed: true }]);
+    const pc = closer();
+    let published = false;
+    pc.canClosePosition = () => published;
+    await pc.scan(0, NOW);
+    assert.equal(pc.queue.length, 0);
+    published = true;
+    await pc.scan(1, NOW);
+    assert.equal(pc.queue.length, 1);
+    published = false;
+    await pc.closeNext(2);
+    assert.equal(pc.status().closed, 0);
+    assert.equal(pc.queue.length, 0);
+  });
   test('the keeper waits a day after exit_end (phones keep history while positions exist), never less than the program hour', () => {
     assert.equal(CLOSE_AFTER_SECS, 86_400n);
     assert.equal(POSITION_CLOSE_DELAY_SECS, HOUR);

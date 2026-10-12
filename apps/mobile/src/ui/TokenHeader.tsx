@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Image, Linking, PixelRatio, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import type { Address } from '@solana/kit';
 import { explorer } from '../config';
@@ -22,6 +22,7 @@ function tradesText(count: number): string {
 export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool: Address | null; nowMs: number }) {
   const info = useTokenInfo(mint, pool);
   const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [mint, info?.imageUrl]);
   const [metaWidth, setMetaWidth] = useState(0);
   const onTextsLayout = (e: LayoutChangeEvent) => setMetaWidth(Math.round(e.nativeEvent.layout.width));
   if (!mint) {
@@ -71,13 +72,13 @@ export function TokenHeader({ mint, pool, nowMs }: { mint: Address | null; pool:
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  row: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10 },
   logo: { width: 40, height: 40, backgroundColor: C.panel, borderWidth: 2, borderColor: C.neonPurple },
   logoEmpty: { alignItems: 'center', justifyContent: 'center' },
   logoLetter: { color: C.accentText, fontSize: 18, fontWeight: '900' },
   waiting: { color: C.subtle, fontSize: 13, fontWeight: '800' },
   texts: { flex: 1, gap: 1 },
-  titleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  titleRow: { minHeight: 28, justifyContent: 'center' },
   symbol: { color: C.white, fontSize: 24, fontWeight: '900', flexShrink: 1 },
   name: { color: C.subtle, fontSize: 12, flexShrink: 1 },
   // Context, not an action: quiet next to the money and the round stage.

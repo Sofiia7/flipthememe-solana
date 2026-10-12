@@ -1,0 +1,5 @@
+[
+  { "name": "Illustrative cold start, same-currency monthly inputs; NOT a forecast", "rawStake": 1000, "matchedShare": 0.1, "feeBps": 200, "rpc": 40, "transactions": 10, "archive": 5, "support": 100, "acquisition": 100, "houseNetCost": 50 },
+  { "name": "Illustrative growing shared arena; NOT a forecast", "rawStake": 50000, "matchedShare": 0.7, "feeBps": 200, "rpc": 40, "transactions": 20, "archive": 5, "support": 150, "acquisition": 200, "houseNetCost": 300 },
+  { "name": "Illustrative stronger matching and repeat use; NOT a forecast", "rawStake": 150000, "matchedShare": 0.8, "feeBps": 200, "rpc": 100, "transactions": 60, "archive": 15, "support": 400, "acquisition": 400, "houseNetCost": 600 }
+]
