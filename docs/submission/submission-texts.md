@@ -1,6 +1,6 @@
-# Submission texts — audit revision, 10 October 2026
+# Submission texts, revised 12 October 2026
 
-These texts describe the implementation. Replace bracketed links and attach verification for the exact public APK before submitting. A build, a devnet deployment and a physical Seeker acceptance test are separate evidence.
+These texts describe the implementation. Fill the TODO items below and attach verification for the exact public APK before submitting. A build, a devnet deployment and a physical Seeker acceptance test are separate evidence.
 
 ## Shared facts
 
@@ -8,12 +8,14 @@ These texts describe the implementation. Replace bracketed links and attach veri
 - One-liner: A shared mobile arena for UP/DOWN calls on a Solana memecoin’s next one-minute TOKEN/SOL move, with a bounded stake and one-to-one matching.
 - Repository: https://github.com/Sofiia7/flipthememe-solana
 - Install page: https://sol.flipthememe.com/get
-- Demo video: [record the current APK on Seeker; add link]. Pitch: [add current deck link].
+- APK: https://github.com/Sofiia7/flipthememe-apk/releases/latest/download/FlipTheMeme.apk (the install page names the exact version and SHA-256)
+- Demo video: TODO before submitting: link to the three-minute recording of the submitted APK on a Seeker.
+- Pitch deck: TODO before submitting: public PDF link (the Slides artifact is private).
 - Money: Solana devnet test SOL. Price reads: Solana mainnet PumpSwap. Program: `5kUCKYAYxZyaSz18xEajhSDNwdXvVLp2AvBp4LDxWuCz`.
 
 ## Description
 
-Memecoin attention moves quickly. FlipTheMeme turns a view about a token into a small, shared UP/DOWN call without buying that token. The arena opens rounds when market and oracle checks pass. A scheduled round accepts entries for 60 seconds, waits 30 seconds, averages a ten-second reference window, then averages a ten-second exit window one minute later. A result normally arrives 100–160 seconds after entry, plus network confirmation and claim time.
+Memecoin attention moves quickly. FlipTheMeme turns a view about a token into a small, shared UP/DOWN call without buying that token. The arena opens rounds when market and oracle checks pass. A scheduled round accepts entries for 60 seconds, waits 30 seconds, averages a ten-second reference window, then averages a ten-second exit window one minute later. A result normally arrives 100-160 seconds after entry, plus network confirmation and claim time.
 
 The price is TOKEN/SOL, not USD. Stakes match one to one against the other side. A win returns 1.96 times the matched stake at the configured 2% fee; unmatched surplus comes back separately in the same payout. A tie, no match, unavailable price or expired settlement returns the stake under the program’s refund rules. Position rent is a separate refundable account deposit, and device transaction fees are another separate cost. The receipt shows stake, matching, total return and net change.
 
@@ -46,3 +48,19 @@ Show the actual phone journey: understand TOKEN/SOL → choose a side and amount
 ## Solana Perps & Prediction Markets emphasis
 
 This is a short-horizon binary spot prediction market, not leveraged perpetual futures. Its strongest differentiators are the delayed reference, fixed payout on the matched stake, visible unmatched refunds and mobile session permissions. Its largest remaining validation risks are oracle/custody trust, manipulation of young pools, thin matching, correlated overlapping exposure and operation through RPC outages. Confirm organizer eligibility before submitting to a separate competition. Mainnet requires independent review, measured PumpSwap adversarial replay, sustainable costs and a stronger authority/oracle model.
+
+## Clock In form answers (paste)
+
+**Has the team or project received venture or angel funding?** No.
+
+**Built in the last 3 months?** Yes. The round rules were designed in an earlier EVM web prototype (April 2026). The Anchor program, keeper, attestor and the Android app were written from scratch from 10 September 2026.
+
+**Won a previous hackathon with this project?** N/A.
+
+**Major new mobile development:** Mobile Wallet Adapter top-up and session flow with one approval, a device key in Android secure storage for one-tap bets, Android App Links for challenge pages, local reminders after leaving a round, native share sheets, Seed Vault Wallet support on Seeker, .skr names, a Seeker Genesis Token badge, and a non-scrolling arena tuned on a Seeker at 360 to 412 dp widths.
+
+**SKR integration:** No SKR token flows. Seeker identity is used instead: .skr names replace wallet addresses in the arena and on the leaderboard, and Seeker Genesis Token holders get a SEEKER badge. SKR cosmetics for pixel faces are a planned next step, not part of this build.
+
+**Repository:** https://github.com/Sofiia7/flipthememe-solana
+
+**Android APK:** https://github.com/Sofiia7/flipthememe-apk/releases/latest/download/FlipTheMeme.apk
