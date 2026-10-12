@@ -268,9 +268,16 @@ export function ArenaScreen() {
   const arenaStaleSec = arena.updatedAt ? Math.floor((nowMs - arena.updatedAt) / 1000) : null;
   let blocked: string | null = null;
   let blockedByFunds = false;
+  // A passing refusal (the device key is still loading, arena data is a few seconds old): a remembered first call waits through it.
+  let blockedPassing = false;
   if (!open) blocked = waiting.detail;
-  else if (owner && !app.sessionKey) blocked = app.sessionKeyError ? 'Device key unavailable. Open Wallet to recover.' : 'Loading device key - try again shortly.';
-  else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
+  else if (owner && !app.sessionKey) {
+    blocked = app.sessionKeyError ? 'Device key unavailable. Open Wallet to recover.' : 'Loading device key - try again shortly.';
+    blockedPassing = !app.sessionKeyError;
+  } else if (arenaStaleSec !== null && arenaStaleSec > 10) {
+    blocked = 'Reconnecting to devnet - bets wait for fresh data.';
+    blockedPassing = true;
+  }
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
   else if (secondsLeft <= ENTRY_GUARD_SECS) blocked = 'Entry is closing - catch the next round.';
@@ -303,6 +310,8 @@ export function ArenaScreen() {
     }
     setIntentNotice(null);
     app.clearPendingNote();
+    // A bet placed by hand ends any remembered first call, so the two can never both go in.
+    setIntent(null);
     void betting.place(open.id, side, wanted);
   };
 
@@ -312,7 +321,7 @@ export function ArenaScreen() {
     if (wallet.busy !== null) return;
     setIntentNotice(null);
     recordEvent('intent');
-    setIntent(armIntent({ side, amount, roundId: open?.id ?? null, nowMs: Date.now() }));
+    setIntent(armIntent({ side, amount, roundId: open?.id ?? null, pool: open?.account.pool ?? null, nowMs: Date.now() }));
     setTopUpOpen(true);
   };
   useEffect(() => {
@@ -325,15 +334,23 @@ export function ArenaScreen() {
     myReady,
     sessionActive: status === 'active',
     openRoundId: open?.id ?? null,
+    openRoundPool: open?.account.pool ?? null,
     secondsLeft,
-    refusal: blocked === null ? null : blockedByFunds ? 'funds' : 'other',
+    refusal: blocked === null ? null : blockedByFunds ? 'funds' : blockedPassing ? 'transient' : 'other',
     working,
     alreadyIn: !!inOpen || !!pendingHere,
     guardSecs: ENTRY_GUARD_SECS,
   });
   useEffect(() => {
     if (intentDecision.kind === 'drop') {
-      if (intentDecision.reason !== 'already-in') setIntentNotice('NOT PLACED: round closed. Tap a side again.');
+      if (intentDecision.reason !== 'already-in') {
+        setIntentNotice(
+          intentDecision.reason === 'token-changed' ? 'NOT PLACED: the coin changed. Tap a side again.'
+            : intentDecision.reason === 'expired' ? 'NOT PLACED: it took too long. Tap a side again.'
+            : intentDecision.reason === 'no-wallet' ? 'NOT PLACED: wallet not connected.'
+            : 'NOT PLACED: ' + (blocked ?? 'could not place. Tap a side again.'),
+        );
+      }
       setIntent(null);
     }
     else if (intentDecision.kind === 'place' && intent) {
