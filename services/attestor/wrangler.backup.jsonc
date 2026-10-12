@@ -1,0 +1,36 @@
+{
+  // Price attestor: independently samples each round's mainnet PumpSwap pool.
+  // Public certificates serve canonical pricing; the authenticated transaction co-signing
+  // endpoint remains for compatibility with the previous program. See README.md.
+  //
+  // Secrets (wrangler secret put NAME, value on stdin):
+  //   ATTESTOR_SECRET  required: base58 of the attestor's 64-byte Solana secret key, or of its 32-byte seed
+  //   MAINNET_RPC      optional: keyed mainnet RPC URL, tried before publicnode
+  //   DEVNET_RPC       optional: keyed devnet RPC URL, tried before OnFinality
+  //   ATTEST_TOKEN     required in production: POST /v1/attest needs "Authorization: Bearer <token>"
+  //                    (with none set the Worker accepts every caller; the keeper sends the same token)
+  "name": "ftm-attestor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  // @solana/kit's workerd build imports node:events, node:fs/promises and node:path.
+  "compatibility_flags": ["nodejs_compat"],
+  // BACKUP attestor for a second, free Cloudflare account (workers.dev only, no custom route).
+  // Same code, same signing key, its own Durable Object quota. The keeper points ATTEST_URL at it.
+  "workers_dev": true,
+  "vars": {
+    // Largest gap between the keeper's mean price and the attestor's, in basis points of the attestor's.
+    // Not calibrated yet: tighten it after a day of attests.maxDiffBps in GET /v1/attestor (see README.md).
+    "ATTEST_TOLERANCE_BPS": "150",
+    // Attempts per round and window (strike or exit) that reach the samples before the attestor answers
+    // "too_many_attempts". Once a sample set is signed for a window, any other set is "already_signed".
+    "ATTEST_MAX_TRIES": "6"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ATTESTOR", "class_name": "Attestor" }]
+  },
+  // SQLite-backed: the only Durable Object storage on the Workers Free plan.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Attestor"] }],
+  // Wakes the object every minute, so the sampling loop restarts after an eviction or a dropped alarm.
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true }
+}
