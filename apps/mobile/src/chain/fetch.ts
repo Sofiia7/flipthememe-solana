@@ -10,8 +10,8 @@ import {
   type RoundAccount,
   type SessionAccount,
 } from '@flipthememe/client';
-import { setBounded } from '../lib/limits';
-import { SESSION_SPACE } from '../wallet/sessionList';
+import { setBounded } from '../lib/limits.ts';
+import { SESSION_SPACE } from '../wallet/sessionList.ts';
 import type { SolanaRpc } from './rpc';
 
 export type RoundView = { id: bigint; address: Address; account: RoundAccount };

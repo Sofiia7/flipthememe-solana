@@ -1,7 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Address } from '@solana/kit';
 import {
-  OFFSETS,
   RoundStatus,
   decodeSession,
   decodeVault,
@@ -13,8 +12,9 @@ import {
 import { POLL } from '../config';
 import { describeNetworkError } from '../lib/errors';
 import { usePolling } from '../lib/usePolling';
-import { decodeRoundSafe, fetchAccounts, fetchPositionsBy, type PositionView, type RawAccount, type RoundView } from './fetch';
+import { decodeRoundSafe, fetchAccounts, type PositionView, type RawAccount, type RoundView } from './fetch';
 import { recentRound } from './roundStore';
+import { readPositionSnapshot } from './recoverPosition';
 import { rateLimitWaitMs, type SolanaRpc } from './rpc';
 
 export type MyPosition = PositionView & { round: RoundView | null };
@@ -67,6 +67,7 @@ export function useMyAccount(
   rpc: SolanaRpc,
   owner: Address | null,
   sessionKey: Address | null,
+  sentRoundId: bigint | null = null,
 ): MyAccountData & { refresh: () => void } {
   const [data, setData] = useState<MyAccountData>(EMPTY);
   // Final rounds never change in a way the history needs, so they are read once (and kept while a position points at them).
@@ -106,17 +107,24 @@ export function useMyAccount(
         prev = { key: startedFor, stamp, atMs: 0, list: prev?.key === startedFor ? prev.list : [], readsLeft: 2 };
       }
       let positions = prev.list;
-      if (prev.readsLeft > 0 || Date.now() - prev.atMs > POLL.positionsMaxAgeMs) {
-        positions = await fetchPositionsBy(rpc, OFFSETS.positionAuthority, owner);
-        prev = { ...prev, atMs: Date.now(), list: positions, readsLeft: Math.max(0, prev.readsLeft - 1) };
+      const scan = prev.readsLeft > 0 || Date.now() - prev.atMs > POLL.positionsMaxAgeMs;
+      const snapshot = await readPositionSnapshot(rpc, owner, sentRoundId, positions, scan);
+      const positionError = snapshot.error ? describeNetworkError(snapshot.error) : null;
+      if (snapshot.scanSucceeded) {
+        if (scan) prev = { ...prev, atMs: Date.now(), readsLeft: Math.max(0, prev.readsLeft - 1) };
       }
+      const recovered = snapshot.recovered;
+      positions = snapshot.positions;
+      prev = { ...prev, list: positions };
       known.current = prev;
 
       const roundAddrs = new Set(positions.map((p) => p.account.round));
       for (const a of [...finalRounds.current.keys()]) if (!roundAddrs.has(a)) finalRounds.current.delete(a);
       const rounds = new Map<Address, RoundView>();
+      if (recovered) rounds.set(recovered.round.address, recovered.round);
       const toFetch: Address[] = [];
       for (const a of roundAddrs) {
+        if (rounds.has(a)) continue;
         const view = finalRounds.current.get(a) ?? recentRound(a, POLL.sharedRoundMs);
         if (view) rounds.set(a, view);
         else toFetch.push(a);
@@ -146,9 +154,9 @@ export function useMyAccount(
         walletLamports,
         positions: mine,
         updatedAt: Date.now(),
-        error: null,
+        error: positionError,
       });
-      return inPlay(mine, Date.now()) || Date.now() < fastUntil.current ? POLL.accountMs : POLL.accountIdleMs;
+      return sentRoundId !== null || positionError || inPlay(mine, Date.now()) || Date.now() < fastUntil.current ? POLL.accountMs : POLL.accountIdleMs;
     } catch (error) {
       if (keyRef.current === startedFor) {
         setData((prev) => ({ ...(prev.owner === owner ? prev : { ...EMPTY, owner }), error: describeNetworkError(error) }));
@@ -157,7 +165,7 @@ export function useMyAccount(
       if (force) forceRef.current = true;
       return Math.max(POLL.accountMs, rateLimitWaitMs(error) ?? 0);
     }
-  }, [rpc, owner, sessionKey]);
+  }, [rpc, owner, sessionKey, sentRoundId]);
 
   const pollNow = usePolling(poll, POLL.accountMs, true, key);
   // After my own action (bet, top up, claim...): read everything now and keep the fast pace a little while.
@@ -166,6 +174,7 @@ export function useMyAccount(
     fastUntil.current = Date.now() + POLL.accountAfterActionMs;
     pollNow();
   }, [pollNow]);
+  useEffect(() => { if (sentRoundId !== null) refresh(); }, [sentRoundId, refresh]);
   return { ...data, refresh };
 }
 

@@ -32,14 +32,15 @@ export function Pulse({ color, size = 8 }: { color: string; size?: number }) {
 
 /** One stable row of players for the single-screen Arena. Full player cards remain available elsewhere. */
 function CompactRoundPanel({ round, positions, me, rival, previewFace, stage, position, standing }: { round: RoundView; positions: readonly PositionView[]; me: string | null; rival: string | null; previewFace?: Face; stage: string; position?: PositionView; standing?: string | null }) {
+  const count = Math.max(positions.length, round.account.positionCount);
   return <View style={[styles.panel, styles.panelOpen, { padding: 4, gap: 2, height: 78 }]}>
     <View style={[styles.head, { minHeight: 24 }]}>
       <Text numberOfLines={1} style={styles.title}>#{String(round.id)} - {stage}</Text>
-      {!position && previewFace && positions.length > 0 ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}><PixelFace face={previewFace} size={16} /><Text style={styles.houseTag}>YOU</Text></View> : null}
-      <Text style={[styles.stageText, { color: standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow }]}>{standing ? standing.toUpperCase() + ' NOW' : position ? sideText(position.account.side) + ' ' + formatSol(position.account.stake) + ' SOL' : positions.length + ' IN'}</Text>
+      {!position && previewFace && count > 0 ? <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}><PixelFace face={previewFace} size={16} /><Text style={styles.houseTag}>YOU</Text></View> : null}
+      <Text style={[styles.stageText, { color: standing === 'winning' ? C.neonGreen : standing === 'losing' ? C.neonRed : C.neonYellow }]}>{standing ? standing.toUpperCase() + ' NOW' : position ? sideText(position.account.side) + ' ' + formatSol(position.account.stake) + ' SOL' : count + ' IN'}</Text>
     </View>
-    {!position && previewFace && positions.length === 0 ? <View style={styles.previewPlayer}><PixelFace face={previewFace} size={32} /><Text style={styles.previewLabel}>YOU · CHOOSE UP OR DOWN</Text></View> : null}
-    {positions.length > 0 || !previewFace ? <View style={styles.sides}>{[Side.Up, Side.Down].map(side => {
+    {!position && previewFace && count === 0 ? <View style={styles.previewPlayer}><PixelFace face={previewFace} size={32} /><Text style={styles.previewLabel}>YOU · CHOOSE UP OR DOWN</Text></View> : null}
+    {count > 0 || !previewFace ? <View style={styles.sides}>{[Side.Up, Side.Down].map(side => {
       const players = sortPlayers(positions.filter(p => p.account.side === side), me, rival);
       const color = side === Side.Up ? C.neonGreen : C.neonRed;
       return <View key={side} style={[styles.compactSide, { borderColor: color }]}>
@@ -51,7 +52,7 @@ function CompactRoundPanel({ round, positions, me, rival, previewFace, stage, po
             {player.account.isHouse ? <HouseFace size={32} /> : <PixelFace face={faceFromBytes(player.account.face)} size={32} expression={mine ? standing === 'winning' ? 'happy' : standing === 'losing' ? 'sad' : undefined : undefined} />}
             <Text numberOfLines={1} style={[styles.houseTag, { fontSize: 8, lineHeight: 8, color: mine ? color : isRival ? C.neonPink : C.subtle }]}>{mine ? 'YOU' : player.account.isHouse ? 'HOUSE' : isRival ? 'RIVAL' : 'PLAYER'}</Text>
           </View>;
-        })}{players.length === 0 ? <Text style={styles.houseTag}>NO CALLS YET</Text> : players.length > MAX_CHIPS ? <Text style={styles.houseTag}>+{players.length - MAX_CHIPS}</Text> : null}</View>
+        })}{players.length === 0 ? <Text style={styles.houseTag}>{(side === Side.Up ? round.account.rawUp : round.account.rawDown) > 0n ? 'READING...' : 'NO CALLS YET'}</Text> : players.length > MAX_CHIPS ? <Text style={styles.houseTag}>+{players.length - MAX_CHIPS}</Text> : null}</View>
       </View>;
     })}</View> : null}
   </View>;

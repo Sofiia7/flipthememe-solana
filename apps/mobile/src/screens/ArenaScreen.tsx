@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RoundStatus, Side, acceptedStake } from '@flipthememe/client';
 import { BET_AMOUNTS, ENTRY_GUARD_SECS, SESSION_RULES, explorer } from '../config';
 import type { PositionView, RoundView } from '../chain/fetch';
+import { withOwnPosition, showBetReceipt } from '../chain/arenaPositions';
 import { useSkrNames } from '../chain/skr';
 import {
   OVERDUE_SECS,
@@ -208,7 +209,8 @@ export function ArenaScreen() {
   };
 
   // Header and chart describe the same pool: my round's while it plays, else the open round's, else the latest started one.
-  const panelRound = panel.kind === 'empty' ? null : panel.round;
+  const panelRound = focus?.round ?? (panel.kind === 'empty' ? null : panel.round);
+  const panelPositions = panelRound ? withOwnPosition(arena.positions.get(panelRound.id) ?? NO_PLAYERS, mine.get(panelRound.id)?.position) : NO_PLAYERS;
   const tokenRound =
     (focus && focus.round.account.pool === stageFeed.pool ? focus.round : null) ??
     (open && open.account.pool === stageFeed.pool ? open : null) ??
@@ -268,6 +270,7 @@ export function ArenaScreen() {
   let blocked: string | null = null;
   let blockedByFunds = false;
   if (!open) blocked = waiting.detail;
+  else if (owner && !app.sessionKey) blocked = app.sessionKeyError ? 'Device key unavailable. Open Wallet to recover.' : 'Loading device key - try again shortly.';
   else if (arenaStaleSec !== null && arenaStaleSec > 10) blocked = 'Reconnecting to devnet - bets wait for fresh data.';
   else if (paused) blocked = 'Betting is paused by the operator.';
   else if (inOpen || pendingHere) blocked = null;
@@ -288,9 +291,19 @@ export function ArenaScreen() {
   const winProfit = maxWinProfit(betAmount, feeWinBps);
 
   const placeBet = (side: Side, wanted: bigint = betAmount) => {
-    if (!open || blocked || working || inOpen || pendingHere) return;
+    if (working || pendingHere) return;
+    if (!open || blocked || inOpen) {
+      setIntentNotice(inOpen ? `Call #${open!.id} already saved.` : `NOT PLACED: ${blocked ?? 'Next round is not open yet.'}`);
+      return;
+    }
     // The screen's clock is up to a second old: the entry guard is read again at the tap itself.
-    if (Number(open.account.cutoffAt) - chainNowSec(offsetSec, Date.now()) <= ENTRY_GUARD_SECS) return;
+    const tapSecondsLeft = Number(open.account.cutoffAt) - chainNowSec(offsetSec, Date.now());
+    if (tapSecondsLeft <= ENTRY_GUARD_SECS) {
+      setIntentNotice(`NOT PLACED: entry ${tapSecondsLeft <= 0 ? 'closed' : 'closing'}. Choose the next round.`);
+      return;
+    }
+    setIntentNotice(null);
+    app.clearPendingNote();
     void betting.place(open.id, side, wanted);
   };
 
@@ -333,6 +346,7 @@ export function ArenaScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intentDecision.kind, intent]);
   const intentWaiting = intent?.committed === true && intentDecision.kind === 'wait';
+  const betNotice = intentNotice ?? app.pendingNote;
 
   // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
   // invites them to any later round and carries my wallet and name for their RIVAL tag. It names the
@@ -447,7 +461,7 @@ export function ArenaScreen() {
               compact
               round={focus.round}
               position={focus.position}
-              positions={arena.positions.get(focus.round.id) ?? NO_PLAYERS}
+              positions={panelPositions}
               stage={panel.stage}
               standing={standingOf(focus)}
               me={owner}
@@ -458,7 +472,7 @@ export function ArenaScreen() {
               compact
               previewFace={app.face}
               round={panelRound}
-              positions={panelRound ? (arena.positions.get(panelRound.id) ?? NO_PLAYERS) : NO_PLAYERS}
+              positions={panelPositions}
               me={owner}
               rival={rival}
               upcoming={panel.kind !== 'open'}
@@ -469,7 +483,15 @@ export function ArenaScreen() {
 
       <View style={styles.dock}>
         <Btn small kind="ghost" title={challengeFocus ? 'CHALLENGE A FRIEND' : 'PLAY WITH A FRIEND'} busy={sharing} onPress={() => challengeFocus ? challenge(challengeFocus, nowSec >= Number(challengeFocus.round.account.cutoffAt)) : invite(inviteRound)} style={styles.friend} />
-        <View style={styles.betContext}>{working || pending || betting.bet.phase === 'failed' ? <BetStatusLine openId={open?.id ?? null} visible={(roundId) => mine.has(roundId)} /> : <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={styles.nextExplanation} numberOfLines={1}>{open ? `${focus && focus.round.id !== open.id ? 'NEXT ' : ''}CALL #${open.id} - ${openSymbol ? '$' + openSymbol : 'TOKEN'} - ${inOpen ? 'SAVED' : 'matched payout ' + multiplier}` : 'Next round - preparing entry'}</Text></Pressable>}</View>
+        <View style={styles.betContext}>
+          {betNotice ? (
+            <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={[styles.nextExplanation, { color: C.neonRed }]} numberOfLines={1}>{betNotice}</Text></Pressable>
+          ) : pending || showBetReceipt(betting.bet.phase, betting.bet.roundId, betting.bet.roundId !== null && mine.has(betting.bet.roundId)) ? (
+            <BetStatusLine visible={(roundId) => mine.has(roundId)} />
+          ) : (
+            <Pressable onPress={() => setHowOpen(true)} style={{ flex: 1 }}><Text style={styles.nextExplanation} numberOfLines={1}>{open ? `${focus && focus.round.id !== open.id ? 'NEXT ' : ''}CALL #${open.id} - ${openSymbol ? '$' + openSymbol : 'TOKEN'} - ${inOpen ? 'SAVED' : 'matched payout ' + multiplier}` : 'Next round - preparing entry'}</Text></Pressable>
+          )}
+        </View>
             <View style={styles.amounts}>
               {chips.map(({ amount: a, fits }) => {
                 const active = (owner ? betAmount : amount) === a;
@@ -577,7 +599,7 @@ export function ArenaScreen() {
 }
 
 /** One line about the bet in progress; the YOU'RE IN card takes over once the arena shows the position. */
-function BetStatusLine({ openId, visible }: { openId: bigint | null; visible: (roundId: bigint) => boolean }) {
+function BetStatusLine({ visible }: { visible: (roundId: bigint) => boolean }) {
   const { betting, pending } = useApp();
   const b = betting.bet;
   if (b.phase === 'idle') {
@@ -605,7 +627,7 @@ function BetStatusLine({ openId, visible }: { openId: bigint | null; visible: (r
     );
   }
   if (b.phase === 'confirmed') {
-    if (b.roundId === null || b.roundId !== openId || visible(b.roundId)) return null;
+    if (b.roundId === null || visible(b.roundId)) return null;
     return (
       <View style={styles.status}>
         <Text style={[styles.statusText, { color: C.neonGreen }]} numberOfLines={1}>

@@ -45,7 +45,10 @@ export function useBetting(input: {
   const place = useCallback(
     async (roundId: bigint, side: Side, amount: bigint) => {
       if (busy.current) return; // double-tap guard
-      if (!owner || !sessionKey) return;
+      if (!owner || !sessionKey) {
+        setBet({ phase: 'failed', roundId, side, amount, signature: null, error: !owner ? 'Connect your wallet. Bet not sent.' : 'Device key is not ready. Bet not sent; retry when loaded.', at: Date.now() });
+        return;
+      }
       busy.current = true;
       const startedAt = Date.now();
       setBet({ phase: 'signing', roundId, side, amount, signature: null, error: null, at: Date.now() });
@@ -111,6 +114,10 @@ export function useBetting(input: {
   );
 
   const reset = useCallback(() => setBet(IDLE), []);
+  const recoverConfirmed = useCallback((pending: PendingBet) => {
+    if (pending.owner !== owner || busy.current) return;
+    setBet({ phase: 'confirmed', roundId: pending.roundId, side: pending.side, amount: pending.amount, signature: pending.signature, error: null, at: Date.now() });
+  }, [owner]);
 
   /**
    * Manual claim (the keeper normally does it). Permissionless: the session key pays the fee
@@ -143,7 +150,7 @@ export function useBetting(input: {
   );
 
   // One object per change, so the app context (and everything reading it) does not see a new one on every render.
-  return useMemo(() => ({ bet, place, reset, claiming, claimError, claimPosition }), [bet, place, reset, claiming, claimError, claimPosition]);
+  return useMemo(() => ({ bet, place, reset, recoverConfirmed, claiming, claimError, claimPosition }), [bet, place, reset, recoverConfirmed, claiming, claimError, claimPosition]);
 }
 
 export type Betting = ReturnType<typeof useBetting>;
