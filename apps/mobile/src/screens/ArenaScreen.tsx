@@ -34,6 +34,7 @@ import { useNow } from '../lib/usePolling';
 import { shareCard } from '../share/ShareCard';
 import { sessionStatusOf, useApp, type SessionStatus } from '../state/AppProvider';
 import { awayText } from '../state/away';
+import { inviterName } from '../state/challenge';
 import { dayWindow, streakLabel, streakOf, todayLine, todayStats } from '../state/history';
 import { armIntent, commitIntent, decideIntent, intentAfterSheetClosed, intentText, type BetIntent } from '../state/intent';
 import { C, MONO, T } from '../theme';
@@ -377,6 +378,8 @@ export function ArenaScreen() {
   const intentWaiting = intent?.committed === true && intentDecision.kind === 'wait';
   // The coin changed during the wallet trip: a card with the facts and one button, so the first call never ends in silence.
   const [coinChanged, setCoinChanged] = useState<{ side: Side; amount: bigint; fromMint: string | null } | null>(null);
+  // A friend's challenge offers the other side once per app run; NOT NOW hides the offer, the RIVAL tag and the RULES card stay.
+  const [challengeHidden, setChallengeHidden] = useState(false);
   const betNotice = intentNotice ?? app.pendingNote;
 
   // A challenge for my round, open or already live: the friend can rarely make it in time, so the link
@@ -511,6 +514,28 @@ export function ArenaScreen() {
       </View>
 
       <View style={styles.dock}>
+        {!coinChanged && app.challenge?.side && app.challenge.by && !challengeHidden && !inOpen && !pendingHere ? (
+          <View style={[styles.coinCard, { borderColor: C.neonPink }]} accessibilityLiveRegion="polite">
+            <Text style={[styles.coinTitle, { color: C.neonPink }]}>{`${inviterName(app.challenge).toUpperCase()} CALLED ${app.challenge.side.toUpperCase()}${app.challenge.ticker ? ' ON $' + app.challenge.ticker.toUpperCase() : ''}`}</Text>
+            <Text style={styles.coinText} numberOfLines={2}>{`Take the other side${openSymbol ? ' on $' + openSymbol : ''}. Only matched stake plays; a win pays ${multiplier}.`}</Text>
+            <View style={styles.sides}>
+              <NeonButton
+                title={`${app.challenge.side === 'up' ? 'DOWN ▼' : 'UP ▲'} ON ${openSymbol ? '$' + openSymbol : 'THIS COIN'}`}
+                subtitle={open ? `${formatSol(owner ? betAmount : amount)} SOL${owner && myReady && !topUpReason ? ', one tap' : ', top up & play'}` : 'NEXT ROUND SOON'}
+                kind={app.challenge.side === 'up' ? 'down' : 'up'}
+                disabled={!open || working}
+                onPress={() => {
+                  const other = app.challenge?.side === 'up' ? Side.Down : Side.Up;
+                  setChallengeHidden(true);
+                  if (owner && myReady && !topUpReason && status === 'active') placeBet(other);
+                  else tapAsVisitor(other);
+                }}
+                style={styles.flex}
+              />
+              <Btn small kind="ghost" title="NOT NOW" onPress={() => setChallengeHidden(true)} style={styles.coinCancel} />
+            </View>
+          </View>
+        ) : null}
         {coinChanged ? (
           <View style={styles.coinCard} accessibilityLiveRegion="polite">
             <Text style={styles.coinTitle}>THE COIN CHANGED WHILE YOU APPROVED</Text>
