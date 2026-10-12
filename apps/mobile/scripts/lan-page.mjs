@@ -37,18 +37,18 @@ if (!newest) {
   process.exit(1);
 }
 const sha = createHash('sha256').update(readFileSync(join(dir, newest.file))).digest('hex');
-const when = (d) => d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+const when = (d) => d.toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
 
 const olderRows = (list) =>
   list.map((b) => `<li><a href="${escape(b.file)}">${escape(b.file)}</a> <span>${mb(b.size)}, ${escape(when(b.modified))}</span></li>`).join('\n');
 
 const html = `<!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-store">
-<title>FlipTheMeme: установка</title>
+<title>FlipTheMeme: install</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #100d1f; color: #e6e0f1; font-family: system-ui, sans-serif; }
@@ -68,19 +68,19 @@ const html = `<!doctype html>
 <body>
 <main>
   <h1>FLIPTHEMEME</h1>
-  <p class="sub">Сборка ${newest.build} (версия ${escape(newest.version)}), devnet, тестовые SOL</p>
-  <a class="go" href="${escape(newest.file)}">СКАЧАТЬ APK, ${mb(newest.size)}</a>
-  <p class="meta">${escape(newest.file)}<br>собрана ${escape(when(newest.modified))}<br>sha256 ${sha}</p>
-  <h2>Как поставить</h2>
+  <p class="sub">Build ${newest.build} (version ${escape(newest.version)}), devnet, test SOL</p>
+  <a class="go" href="${escape(newest.file)}">DOWNLOAD APK, ${mb(newest.size)}</a>
+  <p class="meta">${escape(newest.file)}<br>built ${escape(when(newest.modified))}<br>sha256 ${sha}</p>
+  <h2>How to install</h2>
   <ol>
-    <li>Телефон и ноутбук в одной сети Wi-Fi, ноутбук не спит.</li>
-    <li>Нажми кнопку, дождись загрузки.</li>
-    <li>Открой файл. Если телефон просит, разреши этому браузеру устанавливать приложения.</li>
-    <li>Открой FlipTheMeme. Кошелёк: Seed Vault Wallet (Settings, Network, Devnet) или Solflare.</li>
+    <li>Keep the phone and the laptop on the same Wi-Fi network and the laptop awake.</li>
+    <li>Tap the button and wait for the download.</li>
+    <li>Open the file. If the phone asks, allow this browser to install apps.</li>
+    <li>Open FlipTheMeme. Wallet: Seed Vault Wallet, Solflare or Jupiter Mobile (Settings, Network, Devnet).</li>
   </ol>
-  <div class="warn">Если стоит сборка с другой подписью (например dev client), Android не даст обновить поверх: сначала удали старую. Ключ устройства сотрётся, деньги в игровом балансе останутся, в приложении нажми «PLAY WITH MY X SOL».</div>
-${releases.length > 1 ? `  <h2>Прошлые сборки</h2>\n  <ul>\n${olderRows(releases.slice(1))}\n  </ul>` : ''}
-${devclients.length ? `  <h2>Dev client (для Metro)</h2>\n  <ul>\n${olderRows(devclients)}\n  </ul>` : ''}
+  <div class="warn">If a build with another signature is installed (for example the dev client), Android will not update over it: uninstall the old one first. The device key is erased, the money in the game balance stays, and the app offers "PLAY WITH MY X SOL".</div>
+${releases.length > 1 ? `  <h2>Earlier builds</h2>\n  <ul>\n${olderRows(releases.slice(1))}\n  </ul>` : ''}
+${devclients.length ? `  <h2>Dev client (for Metro)</h2>\n  <ul>\n${olderRows(devclients)}\n  </ul>` : ''}
 </main>
 </body>
 </html>

@@ -1,52 +1,52 @@
-# FlipTheMeme Solana: план сборки к 9 октября
+# FlipTheMeme Solana: build plan for 9 October
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** рабочий APK на Seeker с MWA, программа банка 1:1 в devnet без блокировок, keeper на настоящей цене PumpSwap, видео и презентация к 8 октября.
+**Goal:** a working APK on the Seeker with MWA, the 1:1 bank program on devnet without lockups, a keeper on the real PumpSwap price, a video and a presentation by 8 October.
 
-**Architecture:** Anchor-программа держит все деньги и правила; keeper (Node) создаёт раунд каждую минуту, добирает сторону домом и подписывает цены из mainnet-пула; приложение (Expo) читает devnet и mainnet напрямую, ставит ключом сессии. Общий TS-клиент `packages/client` используют keeper, приложение и сверочные тесты.
+**Architecture:** The Anchor program holds all the money and rules; the keeper (Node) creates a round every minute, tops up a side with the house and signs prices from the mainnet pool; the app (Expo) reads devnet and mainnet directly and bets with a session key. The shared TS client `packages/client` is used by the keeper, the app and the cross-check tests.
 
-**Tech Stack:** Rust + anchor-lang 1.1.2, Agave CLI 3.1.x (Windows), litesvm (Rust, тесты), TypeScript + @solana/kit 7, Node 22, Expo 57 / React Native 0.86, @wallet-ui/react-native-kit 4.3 (MWA), GitHub Actions (APK), edge-tts + ffmpeg (видео).
+**Tech Stack:** Rust + anchor-lang 1.1.2, Agave CLI 3.1.x (Windows), litesvm (Rust, tests), TypeScript + @solana/kit 7, Node 22, Expo 57 / React Native 0.86, @wallet-ui/react-native-kit 4.3 (MWA), GitHub Actions (APK), edge-tts + ffmpeg (video).
 
-**Спецификация:** [2026-10-05-flipthememe-solana-hackathon-build-design.md](../specs/2026-10-05-flipthememe-solana-hackathon-build-design.md).
+**Specification:** [2026-10-05-flipthememe-solana-hackathon-build-design.md](../specs/2026-10-05-flipthememe-solana-hackathon-build-design.md).
 
-**Отступление от формата скилла:** из-за срока план фиксирует интерфейсы, файлы, команды и критерии приёмки, но не дублирует весь код: код пишется один раз в задаче. Интерфейсы ниже обязательны для всех исполнителей.
+**Deviation from the skill format:** because of the deadline the plan fixes interfaces, files, commands and acceptance criteria, but does not duplicate all the code: the code is written once, in the task. The interfaces below are mandatory for all executors.
 
 ---
 
-## Общие правила для исполнителей
+## General rules for executors
 
-- Не коммитить: коммиты делает координатор после проверки. Не запускать `pnpm install` без координатора (один lockfile, Windows).
-- Никаких длинных тире (U+2014) и en dash (U+2013) ни в коде, ни в текстах. Только `-`.
-- Секреты (keypair, keystore, пароли) только вне репозитория: `<secrets-dir>` (a folder outside the repository on the developer machine).
-- Для VPS - только через обёртку `<your VPS wrapper>`, один заход за раз, и только по команде координатора.
+- Do not commit: commits are made by the coordinator after review. Do not run `pnpm install` without the coordinator (one lockfile, Windows).
+- No long dashes (U+2014) or en dash (U+2013), neither in code nor in texts. Only `-`.
+- Secrets (keypair, keystore, passwords) only outside the repository: `<secrets-dir>` (a folder outside the repository on the developer machine).
+- For the VPS - only through the wrapper `<your VPS wrapper>`, one visit at a time, and only on the coordinator's command.
 
-## Карта файлов
+## File map
 
 ```
-programs/flip-the-meme/src/lib.rs        программа: аккаунты, инструкции, события, ошибки
-programs/flip-the-meme/src/payout.rs     чистая математика выплаты (unit-тесты)
-programs/flip-the-meme/tests/flow.rs     litesvm: сценарии раундов
-programs/flip-the-meme/tests/vectors.rs  печать эталонных байт для TS-клиента
-packages/client/src/constants.ts         program id, seeds, параметры, mainnet-адреса
+programs/flip-the-meme/src/lib.rs        program: accounts, instructions, events, errors
+programs/flip-the-meme/src/payout.rs     pure payout math (unit tests)
+programs/flip-the-meme/tests/flow.rs     litesvm: round scenarios
+programs/flip-the-meme/tests/vectors.rs  printing reference bytes for the TS client
+packages/client/src/constants.ts         program id, seeds, parameters, mainnet addresses
 packages/client/src/pda.ts               findConfig/Vault/Session/Round/PositionPda
-packages/client/src/accounts.ts          декодеры Config/Vault/Session/Round/Position
-packages/client/src/instructions.ts      сборщики всех инструкций
-packages/client/src/payout.ts            зеркало payout.rs + превью для UI
-packages/client/src/pumpswap.ts          чтение пула PumpSwap, цена, выбор пула
-packages/client/src/index.ts             реэкспорт
-packages/client/test/*.test.ts           эталоны против Rust, математика, pumpswap
-services/keeper/src/*.ts                 keeper (раздел C)
-apps/mobile/...                          приложение (раздел D)
-.github/workflows/android.yml            сборка APK
+packages/client/src/accounts.ts          decoders for Config/Vault/Session/Round/Position
+packages/client/src/instructions.ts      builders for all instructions
+packages/client/src/payout.ts            mirror of payout.rs + preview for the UI
+packages/client/src/pumpswap.ts          reading the PumpSwap pool, price, pool selection
+packages/client/src/index.ts             re-export
+packages/client/test/*.test.ts           reference vectors against Rust, math, pumpswap
+services/keeper/src/*.ts                 keeper (section C)
+apps/mobile/...                          app (section D)
+.github/workflows/android.yml            APK build
 ```
 
-## Контракт программы (источник истины для клиента)
+## Program contract (source of truth for the client)
 
 Seeds: `config` = [`config`]; `vault` = [`vault`, authority]; `session` = [`session`, vault, signer];
 `round` = [`round`, id u64 LE]; `position` = [`position`, round, authority].
-Дискриминаторы Anchor: инструкция `sha256("global:<snake_name>")[..8]`, аккаунт `sha256("account:<Name>")[..8]`.
-Enum в Borsh - один байт: `Side {Up, Down}`, `RoundStatus {Open, Live, Final}`,
+Anchor discriminators: instruction `sha256("global:<snake_name>")[..8]`, account `sha256("account:<Name>")[..8]`.
+An enum in Borsh is one byte: `Side {Up, Down}`, `RoundStatus {Open, Live, Final}`,
 `Outcome {Pending, Up, Down, Refund, NotActivated}`, `RefundReason {None, Tie, Unpriceable, Expired}`.
 
 ```rust
@@ -71,9 +71,9 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
   strike_start: i64, strike_end: i64, exit_start: i64, exit_end: i64, settle_deadline: i64, max_bank: u64 }
 ```
 
-Инструкции и порядок аккаунтов (`w` - writable, `s` - signer):
+Instructions and account order (`w` - writable, `s` - signer):
 
-| Инструкция | Аргументы | Аккаунты |
+| Instruction | Arguments | Accounts |
 |---|---|---|
 | `initialize_config` | `params: ConfigParams` | config w, admin ws, system_program |
 | `update_config` | `params: ConfigParams` | config w, admin s |
@@ -93,89 +93,89 @@ pub struct CreateRoundArgs { token_mint: Pubkey, pool: Pubkey, opens_at: i64, cu
 | `sweep_fees` | - | config w, round w, treasury w |
 | `close_empty_round` | - | config, round w, admin w |
 
-Выплата позиции - раздел 3 спецификации; `payout.rs` и `payout.ts` обязаны совпадать на общих векторах.
+The position payout - section 3 of the spec; `payout.rs` and `payout.ts` must match on shared vectors.
 
 ---
 
-## Трек A. Программа
+## Track A. The program
 
-### A0. Тулчейн Solana на Windows
-- [ ] Скачать `solana-release-x86_64-pc-windows-msvc.tar.bz2` (Agave 3.1.x, последний патч с Windows-сборкой) из GitHub `anza-xyz/agave`, распаковать в `<tools-dir>\agave\`, добавить `bin` в PATH сессии.
+### A0. Solana toolchain on Windows
+- [ ] Download `solana-release-x86_64-pc-windows-msvc.tar.bz2` (Agave 3.1.x, the latest patch with a Windows build) from GitHub `anza-xyz/agave`, unpack into `<tools-dir>\agave\`, add `bin` to the session PATH.
 - [ ] `solana --version`, `cargo-build-sbf --version`.
-- [ ] `cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml` на текущем черновике. Ожидание: `target/deploy/flip_the_meme.so`.
-- [ ] Если сборка под Windows не идёт за 40 минут: собирать `.so` в GitHub Actions (ubuntu, `agave-install`), скачивать артефакт `gh run download`.
-- [ ] Ключи: `solana-keygen new --no-bip39-passphrase -o <secrets-dir>\keeper.json` и `...\program-id.json`. Airdrop devnet на keeper: `solana airdrop 2 -u devnet` (повторить до 6 SOL; при 429 - попросить Софию пополнить через faucet.solana.com).
+- [ ] `cargo build-sbf --manifest-path programs/flip-the-meme/Cargo.toml` on the current draft. Expected: `target/deploy/flip_the_meme.so`.
+- [ ] If the Windows build does not work within 40 minutes: build the `.so` in GitHub Actions (ubuntu, `agave-install`) and download the artifact with `gh run download`.
+- [ ] Keys: `solana-keygen new --no-bip39-passphrase -o <secrets-dir>\keeper.json` and `...\program-id.json`. Devnet airdrop to the keeper: `solana airdrop 2 -u devnet` (repeat up to 6 SOL; on a 429, ask Sofia to top up via faucet.solana.com).
 
-### A1. Переписать программу по контракту
-- [ ] `payout.rs`: `pub fn position_payout(raw_up, raw_down, outcome, fee_win_bps, fee_refund_bps, side, stake) -> Option<u64>` и `pub fn is_activated(raw_up, raw_down, min_bank) -> bool`, u128 внутри.
-- [ ] Unit-тесты `payout.rs` (`cargo test -p flip-the-meme --lib`): равные стороны 1.96x; книга 0.40/0.10 (излишек 0.30 возвращается); проигрыш с излишком; возврат 1% активированного; неактивированный целиком; сумма выплат по раунду не больше банка на 1000 случайных книг.
-- [ ] `lib.rs` по таблице инструкций, `declare_id!` из `program-id.json`, `Anchor.toml` с тем же id.
-- [ ] `cargo check` и `cargo build-sbf` без предупреждений об ошибках.
+### A1. Rewrite the program per the contract
+- [ ] `payout.rs`: `pub fn position_payout(raw_up, raw_down, outcome, fee_win_bps, fee_refund_bps, side, stake) -> Option<u64>` and `pub fn is_activated(raw_up, raw_down, min_bank) -> bool`, u128 inside.
+- [ ] Unit tests of `payout.rs` (`cargo test -p flip-the-meme --lib`): equal sides 1.96x; book 0.40/0.10 (the excess 0.30 is returned); loss with excess; refund of 1% of an activated round; non-activated in full; the sum of payouts per round is no more than the bank on 1000 random books.
+- [ ] `lib.rs` per the instruction table, `declare_id!` from `program-id.json`, `Anchor.toml` with the same id.
+- [ ] `cargo check` and `cargo build-sbf` without error warnings.
 
-### A2. Интеграционные тесты litesvm
-- [ ] `programs/flip-the-meme/tests/flow.rs`, dev-dependency `litesvm` (версия, совместимая по сборке; при конфликте типов - конвертер Pubkey/Instruction через байты).
-- [ ] Сценарии: полный раунд UP с неравной книгой и излишком; дом выравнивает одиночную ставку и раунд играет; неактивированный; ничья; меньше 5 наблюдений; истёкший срок через `refund_expired`; повторный claim и settle отклонены; ставка ровно в `cutoff_at` отклонена; ставка после `expiry` сессии отклонена; лимит сессии; правило глубины; withdraw больше available отклонён; sweep до последнего claim отклонён, после - treasury получает `U + D - total_paid`; закрытие пустого раунда; чужой signer для admin, price_authority, house_authority, session.
-- [ ] Команда: `cargo test --manifest-path programs/flip-the-meme/Cargo.toml` - все зелёные.
+### A2. litesvm integration tests
+- [ ] `programs/flip-the-meme/tests/flow.rs`, dev-dependency `litesvm` (a version compatible for the build; on a type conflict - a Pubkey/Instruction converter via bytes).
+- [ ] Scenarios: a full UP round with an uneven book and excess; the house equalizes a lone bet and the round is played; non-activated; tie; fewer than 5 observations; expired deadline via `refund_expired`; repeated claim and settle rejected; a bet exactly at `cutoff_at` rejected; a bet after the session `expiry` rejected; session limit; depth rule; withdraw above available rejected; sweep before the last claim rejected, after it - the treasury receives `U + D - total_paid`; closing an empty round; a foreign signer for admin, price_authority, house_authority, session.
+- [ ] Command: `cargo test --manifest-path programs/flip-the-meme/Cargo.toml` - all green.
 
-### A3. Эталоны для клиента
-- [ ] `tests/vectors.rs` пишет `packages/client/test/vectors.json`: байты данных каждой инструкции на фиксированных аргументах, байты сериализованных аккаунтов, выплаты на 50 книгах.
+### A3. Reference vectors for the client
+- [ ] `tests/vectors.rs` writes `packages/client/test/vectors.json`: the data bytes of each instruction on fixed arguments, the bytes of serialized accounts, payouts on 50 books.
 
-### A4. Деплой devnet
+### A4. Devnet deploy
 - [ ] `solana program deploy target/deploy/flip_the_meme.so --program-id program-id.json -u devnet -k keeper.json`.
-- [ ] Скрипт `services/keeper/scripts/init-config.ts`: `initialize_config` с параметрами devnet (min_stake 0.01, max_stake 0.1, min_bank 0.02 SOL, 200/100 bps), `open_vault` + `deposit 3 SOL` для дома. Поправка 5.10: возврат переведён в 0 bps (`services/keeper/scripts/set-fees.ts --refund-bps 0`, `DEVNET_PARAMS.feeRefundBps = 0`), см. спецификацию, раздел 2.
-- [ ] Записать program id и адреса в `docs/implementation/deployments.md`.
+- [ ] Script `services/keeper/scripts/init-config.ts`: `initialize_config` with devnet parameters (min_stake 0.01, max_stake 0.1, min_bank 0.02 SOL, 200/100 bps), `open_vault` + `deposit 3 SOL` for the house. Amendment 5.10: the refund was switched to 0 bps (`services/keeper/scripts/set-fees.ts --refund-bps 0`, `DEVNET_PARAMS.feeRefundBps = 0`), see the spec, section 2.
+- [ ] Write the program id and addresses into `docs/implementation/deployments.md`.
 
-## Трек B. Клиент `packages/client`
+## Track B. Client `packages/client`
 
-- [ ] B1. `package.json` (`@flipthememe/client`, `type: module`, `@solana/kit` ^7.1.1, тесты `node --test` через `tsx` или `--experimental-strip-types`).
-- [ ] B2. `constants.ts`, `pda.ts`, `accounts.ts` (декодеры с проверкой дискриминатора), `instructions.ts` (по одному сборщику на инструкцию, возвращают `Instruction` kit).
-- [ ] B3. `payout.ts`: зеркало `payout.rs` на bigint + `previewBet(round, side, stake)` для UI (что будет принято и сколько выйдет при победе, если книга не изменится).
-- [ ] B4. `pumpswap.ts`: `readPool(rpc, pool)` -> `{ baseMint, quoteMint, baseVault, quoteVault }` (проверка owner и quote = wSOL), `readPrice(rpc, vaults)` -> `{ slot, price, quoteReserve }`, `priceOf(base, quote) = quote * 10^12 / base`; `discoverPools(fetch)` - GeckoTerminal, фильтры спецификации.
-- [ ] B5. Тесты: эталоны `vectors.json` побайтно; payout против векторов; `priceOf` на числах пула HIGGS из замера 5.10.
+- [ ] B1. `package.json` (`@flipthememe/client`, `type: module`, `@solana/kit` ^7.1.1, tests `node --test` via `tsx` or `--experimental-strip-types`).
+- [ ] B2. `constants.ts`, `pda.ts`, `accounts.ts` (decoders with a discriminator check), `instructions.ts` (one builder per instruction, returning a kit `Instruction`).
+- [ ] B3. `payout.ts`: a mirror of `payout.rs` on bigint + `previewBet(round, side, stake)` for the UI (what will be accepted and how much comes out on a win, if the book does not change).
+- [ ] B4. `pumpswap.ts`: `readPool(rpc, pool)` -> `{ baseMint, quoteMint, baseVault, quoteVault }` (check owner and quote = wSOL), `readPrice(rpc, vaults)` -> `{ slot, price, quoteReserve }`, `priceOf(base, quote) = quote * 10^12 / base`; `discoverPools(fetch)` - GeckoTerminal, the spec's filters.
+- [ ] B5. Tests: the `vectors.json` reference vectors byte for byte; payout against the vectors; `priceOf` on the numbers of the HIGGS pool from the 5.10 measurement.
 
-## Трек C. Keeper `services/keeper`
+## Track C. Keeper `services/keeper`
 
-- [ ] C1. Конфиг из env: `DEVNET_RPC`, `MAINNET_RPCS` (список), `KEEPER_KEYPAIR`, `STATE_FILE`, `HOUSE_DAILY_BUDGET`, `HOUSE_ROUND_CAP`.
-- [ ] C2. `selector.ts`: выбор пула раз в 60 с, удержание не меньше 10 минут (`POOL_HOLD_MIN`), проверка на цепочке.
-- [ ] C3. `sampler.ts`: опрос токен-счетов раз в 1 с, кольцо наблюдений на пул, выборка окна `[start, end)` по времени сервера; лог отставания часов devnet.
-- [ ] C4. `scheduler.ts`: на каждом тике для раундов `next_round_id - 3 .. next_round_id` выполнить первый невыполненный шаг: create (за 10 с до minute boundary), house_fill (cutoff + 2 с), set_strike (strike_end + 1 с), settle (exit_end + 1 с), claim пачками по 6, sweep, close_empty. Каждый шаг идемпотентен по состоянию аккаунта, ошибки не роняют цикл.
-- [ ] C5. `house.ts`: сумма заполнения `min(разница, кап раунда, max_bank/2 - меньшая сторона, остаток бюджета)`; бюджет по суткам UTC в файле состояния.
-- [ ] C6. Восстановление при старте и `refund_expired` для просроченных.
-- [ ] C7. Прогон на ноутбуке 30 минут против devnet: раунды каждую минуту, пустые закрываются, лог без исключений.
-- [ ] C8. Сборка в один файл (esbuild), `Dockerfile`, `docker-compose.yml` (volume для состояния и ключа). Деплой на VPS одним вызовом `<your VPS wrapper> push` после согласия Софии.
+- [ ] C1. Config from env: `DEVNET_RPC`, `MAINNET_RPCS` (a list), `KEEPER_KEYPAIR`, `STATE_FILE`, `HOUSE_DAILY_BUDGET`, `HOUSE_ROUND_CAP`.
+- [ ] C2. `selector.ts`: pool selection once per 60 s, a hold of at least 10 minutes (`POOL_HOLD_MIN`), an on-chain check.
+- [ ] C3. `sampler.ts`: polling the token accounts once per 1 s, a ring of observations per pool, sampling the window `[start, end)` by server time; a log of the devnet clock lag.
+- [ ] C4. `scheduler.ts`: on each tick, for rounds `next_round_id - 3 .. next_round_id`, execute the first unexecuted step: create (10 s before the minute boundary), house_fill (cutoff + 2 s), set_strike (strike_end + 1 s), settle (exit_end + 1 s), claim in batches of 6, sweep, close_empty. Each step is idempotent by account state, errors do not bring down the loop.
+- [ ] C5. `house.ts`: the fill amount `min(difference, round cap, max_bank/2 - smaller side, remaining budget)`; the budget by UTC day in the state file.
+- [ ] C6. Recovery on start and `refund_expired` for overdue ones.
+- [ ] C7. A 30-minute run on a laptop against devnet: rounds every minute, empty ones are closed, a log without exceptions.
+- [ ] C8. Build into a single file (esbuild), `Dockerfile`, `docker-compose.yml` (a volume for the state and key). Deploy to the VPS with one call to `<your VPS wrapper> push` after Sofia's consent.
 
-## Трек D. Приложение `apps/mobile`
+## Track D. App `apps/mobile`
 
-- [ ] D1. Зависимости (через координатора): `@solana/kit@^7.1.1`, `expo-secure-store`, `react-native-svg`, `@react-native-async-storage/async-storage`, `expo-linking`, `@flipthememe/client`. `app.json`: имя, иконка, `scheme: flipthememe`, identity MWA `https://flipthememe.com`.
-- [ ] D2. `src/chain/`: `useArena()` (Config, раунды, позиции, опрос 2 с), `useMyAccount()` (Vault, Session, мои позиции), `usePoolPrice(pool)` (mainnet, 1.5 с, кольцо 10 минут), `useTokenInfo(mint)`.
-- [ ] D3. `src/wallet/`: `topUpAndPlay(amount)`, `withdraw(amount)`, `revokeSession()`, `airdrop()`; MWA `signTransactions`, отправка в devnet, ожидание подтверждения.
-- [ ] D4. `src/session/`: ключ сессии в secure-store, `placeBet(round, side, amount, face)`, `claim(position)`; защита от двойного тапа, восстановление ожидающей ставки после перезапуска по PDA позиции.
-- [ ] D5. Arena: график (svg), таймер с подписью фазы, группы UP/DOWN с лицами, превью 1.96x, выбор суммы, мои раунды в полёте, тост результата.
-- [ ] D6. Wallet, History, Profile (редактор лица), нижняя навигация.
-- [ ] D7. Share: вызов на другую сторону и карточка результата.
-- [ ] D8. Состояния ошибок и офлайна из спецификации; `tsc --noEmit` зелёный.
-- [ ] D9. Иконка и сплэш из пиксельного лица (PIL), 1024x1024.
+- [ ] D1. Dependencies (via the coordinator): `@solana/kit@^7.1.1`, `expo-secure-store`, `react-native-svg`, `@react-native-async-storage/async-storage`, `expo-linking`, `@flipthememe/client`. `app.json`: name, icon, `scheme: flipthememe`, MWA identity `https://flipthememe.com`.
+- [ ] D2. `src/chain/`: `useArena()` (Config, rounds, positions, polling 2 s), `useMyAccount()` (Vault, Session, my positions), `usePoolPrice(pool)` (mainnet, 1.5 s, a ring of 10 minutes), `useTokenInfo(mint)`.
+- [ ] D3. `src/wallet/`: `topUpAndPlay(amount)`, `withdraw(amount)`, `revokeSession()`, `airdrop()`; MWA `signTransactions`, sending to devnet, waiting for confirmation.
+- [ ] D4. `src/session/`: the session key in secure-store, `placeBet(round, side, amount, face)`, `claim(position)`; double-tap protection, recovery of a pending bet after a restart by the position PDA.
+- [ ] D5. Arena: chart (svg), a timer with a phase label, UP/DOWN groups with faces, the 1.96x preview, amount selection, my rounds in flight, a result toast.
+- [ ] D6. Wallet, History, Profile (face editor), bottom navigation.
+- [ ] D7. Share: a challenge to the other side and a result card.
+- [ ] D8. Error and offline states from the spec; `tsc --noEmit` green.
+- [ ] D9. Icon and splash from the pixel face (PIL), 1024x1024.
 
-## Трек E. Сборка и репозиторий
+## Track E. Build and repository
 
-- [ ] E1. `.gitattributes` (`* text=auto eol=lf`), приватный репозиторий `Sofiia7/flipthememe-solana`, первый push.
-- [ ] E2. Ключ подписи (PKCS12) в `<secrets-dir>\release.p12` + пароль в `release.txt`; секреты GitHub `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`.
-- [ ] E3. `.github/workflows/android.yml`: pnpm, `expo prebuild --platform android`, подпись через config-плагин `apps/mobile/plugins/withReleaseSigning.js`, `assembleRelease`, артефакт `FlipTheMeme-<version>.apk`.
-- [ ] E4. Первая сборка текущего каркаса - проверить, что нативная часть (MWA, quick-crypto, nitro) собирается, до готовности фич.
+- [ ] E1. `.gitattributes` (`* text=auto eol=lf`), private repository `Sofiia7/flipthememe-solana`, first push.
+- [ ] E2. Signing key (PKCS12) in `<secrets-dir>\release.p12` + password in `release.txt`; GitHub secrets `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`.
+- [ ] E3. `.github/workflows/android.yml`: pnpm, `expo prebuild --platform android`, signing through the config plugin `apps/mobile/plugins/withReleaseSigning.js`, `assembleRelease`, artifact `FlipTheMeme-<version>.apk`.
+- [ ] E4. The first build of the current skeleton - check that the native part (MWA, quick-crypto, nitro) builds, before the features are ready.
 
-## Трек F. Материалы
+## Track F. Materials
 
-- [ ] F1. README для судей (английский): что это, как играть на Seeker в devnet, правила банка 1:1, источник цены и граница доверия, program id, сборка, тесты, ограничения.
-- [ ] F2. Сценарий видео и список кадров для Софии; озвучка edge-tts; монтаж ffmpeg; до 3 минут.
-- [ ] F3. Презентация 10-12 слайдов (Artifact slides), экспорт PDF.
-- [ ] F4. Тексты заявок CLOCK IN и Perps and Prediction Markets.
+- [ ] F1. README for judges (English): what this is, how to play on the Seeker in devnet, the 1:1 bank rules, the price source and trust boundary, program id, build, tests, limitations.
+- [ ] F2. Video script and a list of shots for Sofia; edge-tts voice-over; ffmpeg editing; up to 3 minutes.
+- [ ] F3. Presentation of 10-12 slides (Artifact slides), PDF export.
+- [ ] F4. Application texts for CLOCK IN and Perps and Prediction Markets.
 
-## Порядок и параллельность
+## Order and parallelism
 
-| Когда | Координатор | Исполнители параллельно |
+| When | Coordinator | Executors in parallel |
 |---|---|---|
-| 5.10 день | A1 программа | A0 тулчейн; E1-E4 репозиторий и APK каркаса; B4 pumpswap |
-| 5.10 вечер | A2-A3 тесты, A4 деплой | B1-B3, B5 клиент |
-| 6.10 | приёмка, интеграция | C keeper (прогон на ноутбуке); D1-D5 приложение |
-| 7.10 | тест на Seeker с Софией | D6-D9; C8 деплой VPS; F1, F3 |
-| 8.10 | съёмка с Софией, монтаж | F2, F4; финальный APK; репозиторий публичный с согласия Софии |
+| 5.10 day | A1 program | A0 toolchain; E1-E4 repository and skeleton APK; B4 pumpswap |
+| 5.10 evening | A2-A3 tests, A4 deploy | B1-B3, B5 client |
+| 6.10 | acceptance, integration | C keeper (run on a laptop); D1-D5 app |
+| 7.10 | test on the Seeker with Sofia | D6-D9; C8 VPS deploy; F1, F3 |
+| 8.10 | filming with Sofia, editing | F2, F4; final APK; repository public with Sofia's consent |

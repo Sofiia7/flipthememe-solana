@@ -1,24 +1,24 @@
-# Mobile Wallet Adapter: выбранная связка
+# Mobile Wallet Adapter: the chosen stack
 
-Используется текущий для новых React Native приложений пакет `@wallet-ui/react-native-kit` с `@solana/kit`, devnet и `MobileWalletProvider` в `apps/mobile/App.tsx`.
+We use `@wallet-ui/react-native-kit`, the package that is current for new React Native apps, together with `@solana/kit`, devnet and `MobileWalletProvider` in `apps/mobile/App.tsx`.
 
-`apps/mobile/polyfill.js` вызывается до импорта Solana-кода. Это обязательный порядок для `react-native-quick-crypto`.
+`apps/mobile/polyfill.js` is called before any Solana code is imported. This order is mandatory for `react-native-quick-crypto`.
 
-Для MWA нельзя использовать Expo Go: нужны Kotlin native modules и custom Expo development build. После `pnpm install` запускать:
+MWA cannot be used with Expo Go: it needs Kotlin native modules and a custom Expo development build. After `pnpm install`, run:
 
 ```powershell
 pnpm android
 ```
 
-Identity MWA: `https://flipthememe.com` и относительная `icon-512.png` (`APP_IDENTITY` в `apps/mobile/src/config.ts`). `favicon.ico` на сайте отдаёт HTML, поэтому иконка указана явно. Digital Asset Links для ключа подписи публикует `services/link` на `sol.flipthememe.com` (App Links для ссылок `/r/<round>`); для домена identity `flipthememe.com` они не проверялись, а без проверки домена кошелёк имеет право отклонить авторизацию.
+MWA identity: `https://flipthememe.com` and the relative `icon-512.png` (`APP_IDENTITY` in `apps/mobile/src/config.ts`). `favicon.ico` on the site returns HTML, so the icon is specified explicitly. Digital Asset Links for the signing key are published by `services/link` on `sol.flipthememe.com` (App Links for `/r/<round>` links); they were not verified for the identity domain `flipthememe.com`, and without domain verification a wallet is allowed to reject the authorization.
 
-Проверено на devnet: Seed Vault Wallet на Seeker (Settings, Network, Devnet) Solflare и Jupiter Mobile (на втором телефоне, 12 октября) подписывают; Phantom в наших тестах открывался, но не возвращал подписи через MWA.
+Verified on devnet: Seed Vault Wallet on Seeker (Settings, Network, Devnet), Solflare and Jupiter Mobile (on a second phone, October 12) sign; in our tests Phantom opened but did not return signatures through MWA.
 
-Через MWA подписываются только операции владельца:
+Only owner operations are signed through MWA:
 
-- **Top up & play** - одна транзакция: `open_vault` (при первом пополнении), `deposit`, `start_session` (7 дней, не больше 0.1 SOL на ставку, запас оборота в 100 раз больше игрового баланса: программа считает ставки нарастающим итогом, поэтому лимит ограничивает частоту ставок ключа, а не потерю, ведь ставки берутся из vault) и перевод 0.005 SOL ключу устройства (device key), когда у него мало SOL на комиссии сети (rent позиций берётся из игрового баланса);
-- `withdraw` и `revoke_session`.
+- **Top up & play** - one transaction: `open_vault` (on the first top-up), `deposit`, `start_session` (7 days, at most 0.1 SOL per bet, a turnover allowance 100 times the in-game balance: the program counts bets as a running total, so the limit bounds how often the key can bet, not the loss, since bets are drawn from the vault) and a transfer of 0.005 SOL to the device key when it has little SOL for network fees (position rent is taken from the in-game balance);
+- `withdraw` and `revoke_session`.
 
-Кошелёк только подписывает (`signTransactions`), в devnet транзакцию отправляет приложение. Если кошелёк отклоняет кэшированную авторизацию (истекла или выдана прошлой установке), приложение запрашивает её заново в новой MWA-сессии.
+The wallet only signs (`signTransactions`); on devnet the app sends the transaction. If the wallet rejects a cached authorization (expired or issued to a previous install), the app requests it again in a new MWA session.
 
-`place_bet` подписывает ключ устройства (device key: ed25519, хранится в `expo-secure-store`), без окна кошелька. Инструкции собирает `packages/client` на кодеках `@solana/kit`, без генератора Anchor. У ключа устройства нет инструкции вывода средств или изменения своих лимитов; его ставки программа проверяет по сроку, лимиту на ставку и бюджету сессии.
+`place_bet` is signed by the device key (ed25519, stored in `expo-secure-store`), with no wallet window. The instructions are built by `packages/client` on `@solana/kit` codecs, without an Anchor generator. The device key has no instruction to withdraw funds or change its own limits; the program checks its bets against the expiry, the per-bet limit and the session budget.

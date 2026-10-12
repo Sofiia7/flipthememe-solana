@@ -2,13 +2,13 @@
 
 Target length 2:45-2:55 (the hackathon accepts up to 3 minutes). English voiceover generated with edge-tts, captions burned in, assembled with ffmpeg. Earlier audio in `media/voice/build29` matches most lines below; lines 3, 7 and 8 changed and are regenerated at edit time.
 
-## Как снимать (для Софии)
+## How to record (for Sofia)
 
-- Только на сборке 41 (на той, что уйдёт в форму). Два телефона: Seeker с Seed Vault Wallet и второй с Jupiter Mobile, оба на devnet.
-- Seeker: шторка быстрых настроек, **Screen record**, звук выключен (голос накладывается потом), «показывать касания» включить, если есть. Вертикально.
-- Каждый кадр отдельным клипом по 10-40 секунд. Дубли дешёвые, оставляем лучший. Кадры 6 и 7 из одного раунда: начать запись до закрытия входа и не останавливать до результата, примерно две с половиной минуты.
-- Перед записью: приложение открыто заново (лента X появляется через несколько секунд), на Seeker баланс в игре не меньше 0.1 SOL, на втором телефоне кошелёк пустой, чтобы показать GET TEST SOL.
-- Клипы в `C:\Server\memepred_solana\media\raw\` (папка не в git) или на Drive.
+- Only on build 41 (the one that goes into the form). Two phones: a Seeker with Seed Vault Wallet and a second one with Jupiter Mobile, both on devnet.
+- Seeker: quick settings shade, **Screen record**, sound off (the voice is added later), turn on "show touches" if available. Portrait orientation.
+- Each shot is a separate clip of 10-40 seconds. Retakes are cheap, we keep the best one. Shots 5 to 7 come from one round: start recording before entry closes and do not stop until the result, about two and a half minutes.
+- Before recording: reopen the app (the X feed appears after a few seconds), the in-game balance on the Seeker is at least 0.1 SOL, and the wallet on the second phone is empty so that GET TEST SOL is shown.
+- Clips go in `C:\Server\memepred_solana\media\raw\` (the folder is not in git) or on Drive.
 
 ## Shots and voiceover
 

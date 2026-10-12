@@ -1,244 +1,244 @@
-# FlipTheMeme Solana: сборка к сдаче 9 октября
+# FlipTheMeme Solana: build for the 9 October submission
 
-Дата: 5 октября 2026. Статус: согласовано с Софией в сессии 5 октября (подход, механика с RHC, тайминги, дом).
-Заменяет денежную механику [DEVELOPMENT_BRIEF.md](../../archive/DEVELOPMENT_BRIEF.md) §6-8 и mock-режим программы.
-Арена, пиксельные лица, сессия MWA и запреты брифа (§3 «Не реализовывать») остаются в силе.
+Date: 5 October 2026. Status: agreed with Sofia in the session of 5 October (approach, mechanics from RHC, timings, the house).
+Replaces the money mechanics of [DEVELOPMENT_BRIEF.md](../../archive/DEVELOPMENT_BRIEF.md) §6-8 and the program's mock mode.
+The arena, pixel faces, the MWA session and the brief's prohibitions (§3 "Do not implement") remain in force.
 
-## 1. Что сдаём и когда
+## 1. What we submit and when
 
-| Хакатон | Срок | Что нужно |
+| Hackathon | Deadline | What is needed |
 |---|---|---|
-| [CLOCK IN](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon) (Solana Mobile) | 12.10, 13:59 GMT+2 (по времени Софии, CEST; перенесено организаторами, было 9.10 08:59; судейство 13.10-9.11, итоги 11.11) | APK с MWA, исходники на GitHub, демо-видео, презентация |
-| [Perps and Prediction Markets](https://hackathons.solana.com/hackathons/perps-and-prediction-markets) (Solana Foundation) | на странице хакатона сейчас стоит 5.12.2026 (было 9.10), Софии проверить | то же приложение; ориентир по прошлому хакатону фонда: рабочий прототип, видео до 3 минут, GitHub |
+| [CLOCK IN](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon) (Solana Mobile) | 12.10, 13:59 GMT+2 (Sofia's local time, CEST; moved by the organizers, was 9.10 08:59; judging 13.10-9.11, results 11.11) | APK with MWA, source code on GitHub, demo video, presentation |
+| [Perps and Prediction Markets](https://hackathons.solana.com/hackathons/perps-and-prediction-markets) (Solana Foundation) | the hackathon page currently says 5.12.2026 (was 9.10), for Sofia to check | the same app; reference from the Foundation's previous hackathon: a working prototype, a video of up to 3 minutes, GitHub |
 
-Внутренний срок готовности всех материалов: вечер 8 октября. Одно видео до 3 минут на английском для обоих.
+Internal deadline for all materials: the evening of 8 October. One video of up to 3 minutes in English for both.
 
-Принятые решения по сдаче: тестовое устройство и съёмка - Seeker Софии; APK собирает GitHub Actions в
-приватном репозитории `Sofiia7`, публичным он становится перед подачей только с согласия Софии; видео - запись
-экрана Софией по сценарию, монтаж и английская озвучка (TTS) - ассистент.
+Decisions taken on the submission: the test device and filming - Sofia's Seeker; the APK is built by GitHub Actions in the
+private `Sofiia7` repository, which becomes public before submission only with Sofia's consent; the video - screen
+recording by Sofia following a script, editing and English voice-over (TTS) by the assistant.
 
-## 2. Что перенесено из memepred (Robinhood Chain)
+## 2. What is carried over from memepred (Robinhood Chain)
 
-Решения 23, 24 и 26 из `docs/rhc/DECISIONS.md` прежнего проекта memepred и правила `POSITIVE-EV.md` переносятся на Solana:
+Decisions 23, 24 and 26 from `docs/rhc/DECISIONS.md` of the earlier memepred project and the rules of `POSITIVE-EV.md` are carried over to Solana:
 
-1. **Банк 1:1.** В игру идёт `m = min(UP, DOWN)`. Излишек большей стороны возвращается пропорционально и без
-   комиссии. Победитель получает ровно **1.96x принятой суммы** при любой книге. Тотализатор брифа отменён:
-   при плавающем множителе ставка на обе стороны зарабатывает на перекосе книги без прогноза цены.
-2. **Комиссия:** 2% принятого банка `2m` при исходе UP/DOWN; 1% при возврате активированного раунда (ничья,
-   нет цены, истёк срок). Неактивированный раунд возвращает ставки целиком, без комиссии.
-   **Изменено 5.10 (после аудита `docs/audits/2026-10-05-product-code-ux-audit.md`, A10):** возвраты бесплатные,
-   `update_config` поставил `fee_refund_bps = 0` (devnet tx
-   `Cvi4ce8bW9bLnxXHQjRvsxSrQ6tKNx1dcRbxaCKDzo81urHX6bWJrupqpMvTXhpvKUtCKJCM4CBwp5SJRtvMQNv`, скрипт
-   `services/keeper/scripts/set-fees.ts`). Раунды, созданные раньше, сохраняют 1% из своего snapshot.
-3. **Активация:** обе стороны есть и `2m >= min_bank`. Иначе раунд не играется.
-4. **Страйк в будущем:** цена отсчёта берётся после паузы от закрытия приёма. Игрок ставит на движение между
-   страйком и выходом, а не от цены в момент ставки; интерфейс говорит это до подписи.
-5. **Лимит банка от глубины пула:** `max_bank = quote_reserve / K`, `K = 2500` (как на RHC). Ставка, которая
-   увеличила бы `2m` сверх `max_bank`, отклоняется; ставка на большую сторону `m` не увеличивает и проходит.
-6. Одна ставка на игрока в раунде, ставки видны всем, выход в деньги по любому сбою, расчёт и возврат не
-   блокируются паузой, получатель выплаты - только Vault владельца позиции.
-7. **Дом добирает недостающую сторону** (решение Софии 5.10 для devnet): после закрытия приёма keeper-дом
-   ставит на меньшую сторону до равенства, в пределах капа на раунд и суточного бюджета. В интерфейсе подписан
-   `HOUSE`. Рефералы RHC не переносятся.
+1. **1:1 bank.** What goes into play is `m = min(UP, DOWN)`. The excess of the larger side is returned proportionally and
+   without a fee. The winner receives exactly **1.96x the accepted amount** with any book. The brief's pari-mutuel betting is cancelled:
+   with a floating multiplier, betting on both sides earns on the skew of the book without any price prediction.
+2. **Fee:** 2% of the accepted bank `2m` on an UP/DOWN outcome; 1% on a refund of an activated round (tie,
+   no price, expired). A non-activated round returns the stakes in full, with no fee.
+   **Changed 5.10 (after the audit `docs/audits/2026-10-05-product-code-ux-audit.md`, A10):** refunds are free,
+   `update_config` set `fee_refund_bps = 0` (devnet tx
+   `Cvi4ce8bW9bLnxXHQjRvsxSrQ6tKNx1dcRbxaCKDzo81urHX6bWJrupqpMvTXhpvKUtCKJCM4CBwp5SJRtvMQNv`, script
+   `services/keeper/scripts/set-fees.ts`). Rounds created earlier keep 1% from their own snapshot.
+3. **Activation:** both sides are present and `2m >= min_bank`. Otherwise the round is not played.
+4. **Strike in the future:** the reference price is taken after a pause from the close of betting. The player bets on the movement between the
+   strike and the exit, not from the price at the moment of the bet; the interface says this before signing.
+5. **Bank cap from pool depth:** `max_bank = quote_reserve / K`, `K = 2500` (as on RHC). A bet that
+   would raise `2m` above `max_bank` is rejected; a bet on the larger side does not increase `m` and goes through.
+6. One bet per player per round, bets are visible to everyone, any failure exits into money, settlement and refund are not
+   blocked by the pause, the payout recipient is only the position owner's Vault.
+7. **The house tops up the missing side** (Sofia's decision of 5.10 for devnet): after betting closes, the keeper house
+   bets on the smaller side until equal, within the per-round cap and the daily budget. It is labeled
+   `HOUSE` in the interface. RHC referrals are not carried over.
 
-Тайминг devnet (движение 60 с, пауза 30 с, окно страйка 10 с) на RHC не замерялся: замеры с банком 1:1 есть
-только для раундов от 300 с. Ближайший к нему замер (`POSITIVE-EV.md`, таблица «Что даёт пауза»; решение 26 в
-`DECISIONS.md`): на 300-секундных раундах с паузой 300 с окно страйка 60 с вместо 300 с поднимает потерю обычного
-игрока при худшем боте с 4.3% до 7.2% при 2 ставках в час и с 2.2% до 3.3% при 5. Все эти цифры получены на
-Robinhood Chain (15 пулов Uniswap v3, 743 127 свопов, 15-29.09), а не на Solana. Для devnet короткий тайминг принят
-и назван в README ограничением.
+The devnet timing (movement 60 s, pause 30 s, strike window 10 s) was not measured on RHC: measurements with the 1:1 bank exist
+only for rounds of 300 s and up. The closest measurement (`POSITIVE-EV.md`, the table "What the pause gives"; decision 26 in
+`DECISIONS.md`): on 300-second rounds with a 300 s pause, a 60 s strike window instead of 300 s raises the loss of an ordinary
+player against the worst bot from 4.3% to 7.2% at 2 bets per hour and from 2.2% to 3.3% at 5. All these figures were obtained on
+Robinhood Chain (15 Uniswap v3 pools, 743 127 swaps, 15-29.09), not on Solana. For devnet the short timing is accepted and
+named a limitation in the README.
 
-## 3. Раунд
+## 3. The round
 
-Новый раунд каждые 60 с, границы выровнены по минутам UTC. Пока один раунд принимает ставки, предыдущие два
-идут в паузе и в измерении. `T0 = opens_at`:
+A new round every 60 s, with boundaries aligned to UTC minutes. While one round accepts bets, the previous two
+are in the pause and in measurement. `T0 = opens_at`:
 
-| Момент | Время | Что происходит |
+| Moment | Time | What happens |
 |---|---|---|
-| `opens_at` | T0 | приём ставок открыт (keeper создал Round заранее, за 5-15 с) |
-| `cutoff_at` | T0 + 60 | приём закрыт по часам программы; следующий раунд уже открыт |
-| дом | cutoff + 1..29 | keeper-дом выравнивает стороны (`house_fill`) |
-| `strike_start`..`strike_end` | cutoff + 30 .. + 40 | окно страйка, 10 с |
-| `exit_start`..`exit_end` | cutoff + 90 .. + 100 | окно выхода: через 60 с после начала окна страйка |
-| расчёт | после `exit_end` | keeper отправляет цену; затем claim по всем позициям |
-| `settle_deadline` | exit_end + 600 | после него любой переводит нерассчитанный раунд в возврат |
+| `opens_at` | T0 | betting is open (the keeper created the Round in advance, 5-15 s ahead) |
+| `cutoff_at` | T0 + 60 | betting is closed by the program clock; the next round is already open |
+| house | cutoff + 1..29 | the keeper house equalizes the sides (`house_fill`) |
+| `strike_start`..`strike_end` | cutoff + 30 .. + 40 | strike window, 10 s |
+| `exit_start`..`exit_end` | cutoff + 90 .. + 100 | exit window: 60 s after the start of the strike window |
+| settlement | after `exit_end` | the keeper submits the price; then claim for all positions |
+| `settle_deadline` | exit_end + 600 | after it anyone moves an unsettled round into refund |
 
-Результат примерно через 105 с после закрытия приёма; от ставки до результата 100-160 с плюс подтверждения
-транзакций (60 с - это измеряемое движение, а не ожидание игрока). Часы devnet отстают от реальных на 1-2 с
-(замер 5.10), приём ограничивает время программы.
+The result comes about 105 s after betting closes; from bet to result is 100-160 s plus transaction confirmations
+(60 s is the measured movement, not the player's wait). The devnet clock lags real time by 1-2 s
+(measured 5.10); betting is limited by the program's time.
 
-Параметры devnet (snapshot в Round при создании, изменение Config действует только на будущие раунды):
+Devnet parameters (snapshot into the Round at creation; a change to Config applies only to future rounds):
 `min_stake = 0.01 SOL`, `max_stake = 0.1 SOL`, `min_bank = 0.02 SOL`, `fee_win_bps = 200`,
-`fee_refund_bps = 0` (до 5.10 было 100), `max_bank = min(quote_reserve / 2500, 1 SOL)`.
+`fee_refund_bps = 0` (was 100 before 5.10), `max_bank = min(quote_reserve / 2500, 1 SOL)`.
 
-**Выплата позиции** (целые lamports, округление вниз). `U`, `D` - суммы ставок сторон, `m = min(U, D)`,
+**Position payout** (whole lamports, rounded down). `U`, `D` are the stake totals of the sides, `m = min(U, D)`,
 `L = max(U, D)`:
 
-- принятое: на меньшей стороне (или при `U = D`) `accepted = stake`; на большей `accepted = stake * m / L`;
+- accepted: on the smaller side (or when `U = D`) `accepted = stake`; on the larger side `accepted = stake * m / L`;
   `excess = stake - accepted`;
-- победа: `excess + accepted * 2 * (10000 - fee_win_bps) / 10000` (то есть `1.96 * accepted`);
-- проигрыш: `excess`;
-- возврат активированного раунда: `excess + accepted * (10000 - fee_refund_bps) / 10000`;
-- неактивированный раунд: `stake`.
+- win: `excess + accepted * 2 * (10000 - fee_win_bps) / 10000` (that is, `1.96 * accepted`);
+- loss: `excess`;
+- refund of an activated round: `excess + accepted * (10000 - fee_refund_bps) / 10000`;
+- non-activated round: `stake`.
 
-После обработки всех позиций `U + D - total_paid` (комиссия плюс пыль округления) уходит в treasury отдельной
-инструкцией. Программа проверяет `total_paid <= U + D` на каждом claim.
+After all positions are processed, `U + D - total_paid` (the fee plus rounding dust) goes to the treasury by a separate
+instruction. The program checks `total_paid <= U + D` on every claim.
 
-Ничья: среднее выхода равно среднему страйка (точное равенство целых). Нет цены: в окне меньше 5 наблюдений.
+Tie: the exit average equals the strike average (exact equality of integers). No price: fewer than 5 observations in the window.
 
-## 4. Источник цены
+## 4. Price source
 
-- **Тип пула:** только PumpSwap (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) на mainnet, quote = wSOL.
-  С `POOL_PUMP_ONLY=true` (так в деплое) keeper берёт только пулы, чей base mint оканчивается на `pump` (суффикс
-  адресов pump.fun): это признак выпускника pump.fun, а не строгое доказательство, а возраст пула не равен
-  проверенному моменту graduation. Цена - TOKEN/SOL, не USD. Раскладка проверена 5.10 на живом пуле:
-  `base_mint` @43, `quote_mint` @75, `pool_base_token_account` @139, `pool_quote_token_account` @171; сумма токен-счёта @64 (Token и Token-2022).
-- **Цена:** `price = quote_amount * 10^12 / base_amount` (u128, результат u64). Читается напрямую из двух
-  токен-счетов пула (`getMultipleAccounts`, commitment `confirmed`), с номером слота.
-- **Выбор токена** (изменено 5.10 после замечания владельца: на арене был пул возрастом 17-38 ч, а молодой - это
-  около 40 минут, как на pump.fun). Допуск: пул 10-120 минут, не меньше 50 сделок за 5 минут, quote-резерв от
-  50 SOL (`K x min_bank`) на цепочке. Оценка `txM5 * (1 + (120 - возраст_мин) / 120)`: активность с надбавкой за
-  молодость. Токен держится не меньше 10 минут; потом сменяется, если кандидат набирает в 1.5 раза больше или
-  текущий выпал из допуска (меньше 20 сделок за 5 минут, старше 180 минут); меньше 50 SOL - сразу. Если свежих
-  нет - лестница: возраст до 6 ч, до 24 ч, потом самый активный пул любого возраста. Источник: GeckoTerminal
-  не умеет сортировать один dex по времени создания, поэтому keeper раз в минуту читает `new_pools` (все dex,
-  новые сверху) и следит за пулами PumpSwap 180 минут, цифры обновляет через `pools/multi`, для лестницы берёт
-  топ PumpSwap по сделкам за 24 ч; не больше 4 запросов в минуту, при ошибке пауза 1, 2, 4, 8 минут. Пороги
-  задаются переменными `POOL_*` (services/keeper/deploy/README.md).
-- **Наблюдения:** keeper читает пул раз в секунду. Страйк и выход - целое среднее наблюдений своего окна
-  (минимум 5, максимум 16 штук; простое среднее, не взвешенное по времени). Программа проверяет, что слоты
-  растут и цены положительны, но не может доказать, что наблюдения взяты из этого пула mainnet. Сами наблюдения
-  (слот mainnet и цена) передаются в инструкцию и лежат в транзакции навсегда; среднее считает программа. Любой может сверить их с историей пула.
-- **Граница доверия:** цену подписывает keeper (`price_authority`), программа devnet не читает mainnet. Это
-  прямо пишется в README и в приложении: расчёт денег в программе, источник исхода доверенный.
+- **Pool type:** only PumpSwap (`pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`) on mainnet, quote = wSOL.
+  With `POOL_PUMP_ONLY=true` (as in the deployment) the keeper takes only pools whose base mint ends in `pump` (the suffix of
+  pump.fun addresses): this is a sign of a pump.fun graduate, not strict proof, and a pool's age is not equal to a
+  verified moment of graduation. The price is TOKEN/SOL, not USD. The layout was verified on 5.10 on a live pool:
+  `base_mint` @43, `quote_mint` @75, `pool_base_token_account` @139, `pool_quote_token_account` @171; the amount of a token account @64 (Token and Token-2022).
+- **Price:** `price = quote_amount * 10^12 / base_amount` (u128, the result is u64). Read directly from the pool's two
+  token accounts (`getMultipleAccounts`, commitment `confirmed`), with the slot number.
+- **Token selection** (changed 5.10 after the owner's remark: the arena had a pool aged 17-38 h, while a young one is
+  about 40 minutes, as on pump.fun). Eligibility: a pool of 10-120 minutes, at least 50 trades in 5 minutes, a quote reserve of
+  50 SOL or more (`K x min_bank`) on chain. Score `txM5 * (1 + (120 - age_min) / 120)`: activity with a bonus for
+  youth. A token is held for at least 10 minutes; then it is replaced if a candidate scores 1.5 times more or
+  the current one dropped out of eligibility (fewer than 20 trades in 5 minutes, older than 180 minutes); below 50 SOL - immediately. If there are no fresh
+  ones - a ladder: age up to 6 h, up to 24 h, then the most active pool of any age. Source: GeckoTerminal
+  cannot sort a single dex by creation time, so the keeper reads `new_pools` once a minute (all dexes,
+  newest on top) and watches PumpSwap pools for 180 minutes, refreshes the figures via `pools/multi`, and for the ladder takes
+  the top PumpSwap pool by trades over 24 h; no more than 4 requests per minute, on error a pause of 1, 2, 4, 8 minutes. Thresholds
+  are set by the `POOL_*` variables (services/keeper/deploy/README.md).
+- **Observations:** the keeper reads the pool once a second. Strike and exit are the integer average of the observations of their window
+  (minimum 5, maximum 16; a simple average, not time-weighted). The program checks that the slots
+  grow and the prices are positive, but cannot prove that the observations were taken from this mainnet pool. The observations themselves
+  (mainnet slot and price) are passed into the instruction and stay in the transaction forever; the program computes the average. Anyone can check them against the pool history.
+- **Trust boundary:** the price is signed by the keeper (`price_authority`), the devnet program does not read mainnet. This is
+  stated plainly in the README and in the app: the money settlement is in the program, the source of the outcome is trusted.
 
-## 5. Программа (Anchor 1.1.2, devnet)
+## 5. Program (Anchor 1.1.2, devnet)
 
-Новый program ID (свой keypair), `MOCK_ONLY` удаляется целиком. Все SOL пользователей лежат на PDA Config,
-учёт по Vault.
+A new program ID (its own keypair), `MOCK_ONLY` is removed entirely. All users' SOL lies on the Config PDA,
+accounting is by Vault.
 
-**Аккаунты:**
+**Accounts:**
 
 - `Config` [`config`]: admin, price_authority, house_authority, treasury, paused, next_round_id,
   min_stake, max_stake, min_bank, fee_win_bps, fee_refund_bps, total_available, total_locked.
 - `Vault` [`vault`, authority]: authority, available, locked.
 - `Session` [`session`, vault, signer]: authority, vault, signer, expiry, max_per_bet, session_cap, spent, revoked.
-- `Round` [`round`, id u64 LE]: id, token_mint, pool, семь времён, snapshot параметров, max_bank, raw_up, raw_down,
+- `Round` [`round`, id u64 LE]: id, token_mint, pool, seven times, snapshot of parameters, max_bank, raw_up, raw_down,
   house_amount, position_count, claimed_count, total_paid, fees_swept, status, outcome, refund_reason,
   strike_price, exit_price, strike_samples, exit_samples.
 - `Position` [`position`, round, authority]: round, authority, side, stake, face `[u8; 8]`, is_house, claimed, payout.
 
-**Инструкции:**
+**Instructions:**
 
-| Инструкция | Кто подписывает | Правило |
+| Instruction | Who signs | Rule |
 |---|---|---|
-| `initialize_config`, `update_config`, `set_pause` | admin | update влияет только на новые раунды |
-| `open_vault`, `deposit`, `withdraw` | владелец (MWA) | withdraw только из available |
-| `start_session`, `revoke_session` | владелец (MWA) | ключ сессии не выводит деньги и не меняет лимиты |
-| `create_round(id, args)` | admin | `id == next_round_id`, порядок времён, `max_bank > 0` |
-| `place_bet(side, amount, face)` | ключ сессии, он же payer | `[opens_at, cutoff_at)`, лимиты сессии и раунда, правило глубины |
-| `house_fill(amount)` | house_authority | после cutoff и до strike_start; только меньшая сторона, не больше разницы |
-| `set_strike(samples)` | price_authority | с `strike_end`; сначала активация: нет - NotActivated; меньше 5 наблюдений - Refund |
-| `settle(samples)` | price_authority | с `exit_end` до deadline; Up / Down / Refund(Tie, Unpriceable) |
-| `refund_expired` | кто угодно | после deadline; неактивированный - целиком, активированный - минус `fee_refund_bps` раунда (0 у раундов с 5.10, 1% у более ранних) |
-| `claim` | кто угодно | один раз на позицию, деньги в Vault владельца |
-| `sweep_fees` | кто угодно | после claim всех позиций; остаток банка в treasury |
-| `close_empty_round` | кто угодно | финальный раунд без позиций; rent возвращается admin |
+| `initialize_config`, `update_config`, `set_pause` | admin | update affects only new rounds |
+| `open_vault`, `deposit`, `withdraw` | owner (MWA) | withdraw only from available |
+| `start_session`, `revoke_session` | owner (MWA) | the session key does not withdraw money and does not change limits |
+| `create_round(id, args)` | admin | `id == next_round_id`, order of times, `max_bank > 0` |
+| `place_bet(side, amount, face)` | session key, also the payer | `[opens_at, cutoff_at)`, session and round limits, depth rule |
+| `house_fill(amount)` | house_authority | after cutoff and before strike_start; only the smaller side, no more than the difference |
+| `set_strike(samples)` | price_authority | from `strike_end`; activation first: not activated - NotActivated; fewer than 5 observations - Refund |
+| `settle(samples)` | price_authority | from `exit_end` to deadline; Up / Down / Refund(Tie, Unpriceable) |
+| `refund_expired` | anyone | after deadline; non-activated - in full, activated - minus the round's `fee_refund_bps` (0 for rounds from 5.10, 1% for earlier ones) |
+| `claim` | anyone | once per position, the money goes to the owner's Vault |
+| `sweep_fees` | anyone | after all positions are claimed; the remainder of the bank goes to treasury |
+| `close_empty_round` | anyone | a final round with no positions; rent returns to admin |
 
-Пустые раунды закрываются, раунды со ставками и позиции остаются на цепочке как история. Rent позиции (100 байт,
-около 0.00116 SOL по RPC 5.10) платит ключ сессии; закрытия позиции с возвратом rent пока нет, это ограничение
-devnet-сборки. Events: `BetPlaced`, `StrikeSet`, `RoundSettled`, `Claimed`.
+Empty rounds are closed, rounds with bets and positions remain on chain as history. The rent of a position (100 bytes,
+about 0.00116 SOL by RPC on 5.10) is paid by the session key; closing a position with a rent refund does not exist yet, which is a limitation of the
+devnet build. Events: `BetPlaced`, `StrikeSet`, `RoundSettled`, `Claimed`.
 
-**Тесты** (LiteSVM из TypeScript, через тот же клиент, что у keeper и приложения): победа и проигрыш на неравной
-книге с излишком, дом выравнивает, неактивированный раунд, ничья, мало наблюдений, истёкший срок, повторный
-claim и settle, границы cutoff и expiry сессии, лимит сессии, правило глубины, вывод заблокированного, sweep до и
-после всех claim, закрытие пустого раунда, чужой signer на каждой роли, сумма выплат не больше банка.
+**Tests** (LiteSVM from TypeScript, through the same client as the keeper and the app): win and loss on an uneven
+book with excess, the house equalizes, non-activated round, tie, few observations, expired deadline, repeated
+claim and settle, cutoff and session expiry boundaries, session limit, depth rule, withdrawal of locked funds, sweep before and
+after all claims, closing an empty round, a foreign signer on every role, the sum of payouts is no more than the bank.
 
-## 6. Общий клиент `packages/client` (TypeScript, @solana/kit)
+## 6. Shared client `packages/client` (TypeScript, @solana/kit)
 
-PDA, кодеки аккаунтов, сборщики инструкций, расчёт выплаты (тот же, что в программе, для превью), чтение пула
-PumpSwap и цены. Пишется вручную на кодеках kit, без генератора. Используется keeper, тестами и приложением.
+PDAs, account codecs, instruction builders, payout calculation (the same as in the program, for the preview), reading the
+PumpSwap pool and the price. Written by hand on kit codecs, without a generator. Used by the keeper, the tests and the app.
 
 ## 7. Keeper (`services/keeper`)
 
-Один процесс Node 22, без публичного API. Циклы: выбор токена (раз в 60 с), наблюдения пула (раз в 1 с),
-планировщик раундов (тик 1 с): создать раунд, дом, страйк, расчёт, claim пачками, sweep, закрытие пустых.
-При старте поднимает незавершённые раунды с цепочки и доводит их; просроченные переводит в возврат.
+A single Node 22 process, no public API. Loops: token selection (every 60 s), pool observations (every 1 s),
+round scheduler (1 s tick): create the round, house, strike, settlement, claim in batches, sweep, closing empty ones.
+On start it picks up unfinished rounds from the chain and brings them to completion; overdue ones it moves to refund.
 
-Ключи devnet: один keeper-ключ = admin + price_authority + house_authority + treasury + upgrade authority
-программы. Дом - обычный Vault keeper-ключа. Кап дома на раунд `min(max_bank / 2, 0.05 SOL)`, суточный бюджет
-2 SOL; счётчик в файле состояния.
+Devnet keys: one keeper key = admin + price_authority + house_authority + treasury + program upgrade authority. The house is an ordinary
+Vault of the keeper key. The house cap per round is `min(max_bank / 2, 0.05 SOL)`, the daily budget is
+2 SOL; the counter is in a state file.
 
-Хостинг: Docker-контейнер на VPS оператора рядом с другим сервисом оператора, только исходящие соединения, без DNS и Caddy.
-Деплой одним заходом через `<your VPS wrapper> push`, перед деплоем - согласие Софии.
-Для разработки и съёмки keeper можно держать на ноутбуке.
+Hosting: a Docker container on the operator's VPS next to another operator service, outgoing connections only, no DNS and no Caddy.
+Deploy in one visit via `<your VPS wrapper> push`; before deploying - Sofia's consent.
+For development and filming the keeper can be kept on a laptop.
 
-## 8. Приложение (`apps/mobile`, Expo 57, React Native 0.86)
+## 8. The app (`apps/mobile`, Expo 57, React Native 0.86)
 
-Своего сервера нет. Приложение читает:
+There is no server of its own. The app reads:
 
-- devnet RPC: Config, последние раунды, позиции раундов (`getProgramAccounts` по round), свои Vault, Session,
-  позиции (по authority);
-- mainnet RPC: токен-счета пула текущего раунда раз в 1.5 с для графика;
-- GeckoTerminal/DexScreener: имя, тикер, картинка, возраст, ликвидность токена. Свечи 1m для истории графика
-  не подгружаются: история графика начинается с открытия приложения.
+- devnet RPC: Config, the latest rounds, the positions of rounds (`getProgramAccounts` by round), own Vault, Session,
+  positions (by authority);
+- mainnet RPC: the token accounts of the current round's pool every 1.5 s for the chart;
+- GeckoTerminal/DexScreener: name, ticker, image, age, liquidity of the token. 1m candles for the chart history
+  are not loaded: the chart history starts from the opening of the app.
 
-**Экраны** (интерфейс на английском):
+**Screens** (interface in English):
 
-1. **Arena:** токен и сигналы (возраст, ликвидность, сделки за 5 минут); график с линией страйка и окнами;
-   один подписанный таймер «Entry closes in» / «Result in» / «Confirming»; группы UP и DOWN с лицами, именами
-   (сокращённый адрес, `HOUSE`) и суммами; превью выплаты по правилам банка 1:1; выбор суммы и стороны; свои
-   раунды в полёте («winning now» относительно страйка); результат прошлого раунда.
-2. **Wallet:** available / locked, сессия (срок, расход из лимита, газ ключа), Top up, Withdraw, Revoke,
+1. **Arena:** the token and signals (age, liquidity, trades in 5 minutes); a chart with the strike line and windows;
+   one labeled timer "Entry closes in" / "Result in" / "Confirming"; UP and DOWN groups with faces, names
+   (shortened address, `HOUSE`) and amounts; a payout preview under the 1:1 bank rules; amount and side selection; own
+   rounds in flight ("winning now" relative to the strike); the result of the previous round.
+2. **Wallet:** available / locked, session (term, spend from the limit, key gas), Top up, Withdraw, Revoke,
    devnet airdrop.
-3. **History:** все свои позиции: токен, время, сторона, ставка, принятое, страйк и выход, исход, выплата,
-   ссылка на аккаунт в Explorer; кнопка Claim, если keeper не успел.
-4. **Profile:** редактор пиксельного лица (кожа, причёска, цвет волос, глаза, аксессуар), статистика.
+3. **History:** all own positions: token, time, side, stake, accepted, strike and exit, outcome, payout,
+   a link to the account in Explorer; a Claim button if the keeper did not make it in time.
+4. **Profile:** a pixel-face editor (skin, hairstyle, hair color, eyes, accessory), statistics.
 
-**Кошелёк и сессия.** Подключение через MWA (`solana:devnet`). «Top up & play» - одна подпись MWA на одну
-транзакцию: `open_vault` (если нет) + `deposit` + `start_session` (24 часа, `max_per_bet = 0.1`, лимит сессии
-равен пополнению) + перевод 0.03 SOL ключу сессии на комиссии и rent. Ключ сессии - ed25519, хранится в
-`expo-secure-store`. Транзакции MWA подписывает (`signTransactions`), отправляет приложение в devnet - так
-работает при любой сети, выбранной в кошельке. Ставка - один тап ключом сессии, без окна кошелька. Вывод и
-отзыв - через MWA.
+**Wallet and session.** Connection via MWA (`solana:devnet`). "Top up & play" is one MWA signature on one
+transaction: `open_vault` (if absent) + `deposit` + `start_session` (24 hours, `max_per_bet = 0.1`, the session limit
+equal to the top-up) + a transfer of 0.03 SOL to the session key for fees and rent. The session key is ed25519, stored in
+`expo-secure-store`. MWA signs the transactions (`signTransactions`), the app sends them to devnet - this
+works with whatever network is selected in the wallet. A bet is one tap with the session key, without a wallet window. Withdraw and
+revoke go through MWA.
 
-> Примечание от 6 октября 2026 (текст выше оставлен как был): сессия теперь длится 7 дней, а не 24 часа, и
-> ключу устройства (в интерфейсе он называется device key) приложение переводит 0.005 SOL, а не 0.03: rent
-> позиций берётся из игрового баланса, ключу нужны только комиссии сети.
+> Note of 6 October 2026 (the text above is left as it was): the session now lasts 7 days, not 24 hours, and
+> the app transfers 0.005 SOL to the device key (called "device key" in the interface), not 0.03: the rent of
+> positions is taken from the game balance, the key needs only network fees.
 
-**Состояния:** загрузка, нет сети / устаревшие данные, отправка, подтверждение, отказ транзакции, истёкшая сессия,
-приём закрыт, неактивирован, ждём расчёт, рассчитан, возврат. Позиция появляется в группе только после
-подтверждения на цепочке.
+**States:** loading, no network / stale data, sending, confirming, transaction rejected, expired session,
+betting closed, not activated, awaiting settlement, settled, refund. A position appears in a group only after
+confirmation on chain.
 
-**Лицо** едет в каждой ставке (`face`, 8 байт), отдельных транзакций нет. До подключения кошелька - случайное
-лицо из локального seed; правки сохраняются локально.
+**The face** travels in every bet (`face`, 8 bytes), there are no separate transactions. Before the wallet is connected - a random
+face from a local seed; edits are saved locally.
 
-**Share:** после ставки «Challenge a friend to take the other side» и карточка результата через системный Share;
-в подписи ссылка `https://sol.flipthememe.com/r/<round>` (`services/link`): Android App Links открывают приложение на
-этом раунде, без приложения страница предлагает APK.
+**Share:** after a bet "Challenge a friend to take the other side" and a result card via the system Share; in
+the caption the link `https://sol.flipthememe.com/r/<round>` (`services/link`): Android App Links open the app on
+this round, without the app the page offers the APK.
 
-## 9. Сборка и выпуск
+## 9. Build and release
 
-- Приватный репозиторий `Sofiia7/flipthememe-solana`; workflow собирает подписанный release APK
-  (`expo prebuild` + Gradle) и программу (`cargo build-sbf`) для сверки.
-- Ключ подписи APK генерируется один раз, хранится вне репозитория у Софии и в секретах GitHub. Тот же ключ
-  нужен для публикации в dApp Store.
-- README для судей: что это, как играть (кошелёк в devnet, airdrop), program ID, правила банка 1:1,
-  источник цены и граница доверия, сборка и тесты.
+- Private repository `Sofiia7/flipthememe-solana`; the workflow builds a signed release APK
+  (`expo prebuild` + Gradle) and the program (`cargo build-sbf`) for verification.
+- The APK signing key is generated once, kept outside the repository by Sofia and in GitHub secrets. The same key
+  is needed for publishing in the dApp Store.
+- README for judges: what this is, how to play (wallet on devnet, airdrop), program ID, the 1:1 bank rules,
+  price source and trust boundary, build and tests.
 
-## 10. Видео и презентация
+## 10. Video and presentation
 
-Видео до 3 минут: проблема, арена, подключение и одна подпись MWA, ставка в один тап, дом, результат и выплата,
-история, лица, транзакции в Explorer, честные ограничения devnet. Запись экрана Seeker - София; монтаж,
-титры и голос (edge-tts) - ассистент. Презентация 10-12 слайдов на английском.
+A video of up to 3 minutes: the problem, the arena, connecting and one MWA signature, a bet in one tap, the house, the result and payout,
+history, faces, transactions in Explorer, honest devnet limitations. Screen recording of the Seeker - Sofia; editing,
+titles and voice (edge-tts) - the assistant. A presentation of 10-12 slides in English.
 
-## 11. Готово, когда
+## 11. Done when
 
-- [ ] Тесты программы проходят; программа в devnet; keeper час без остановки создаёт и рассчитывает раунды.
-- [ ] На Seeker: установка APK, подключение MWA, Top up, ставка, исход, выплата в Vault, Withdraw.
-- [ ] Раунд, в котором играет дом, и раунд с двумя людьми рассчитаны на devnet, транзакции видны в Explorer.
-- [ ] README, видео, презентация, тексты заявок; репозиторий открыт с согласия Софии.
+- [ ] Program tests pass; the program is on devnet; the keeper creates and settles rounds for an hour without stopping.
+- [ ] On the Seeker: APK installation, MWA connection, Top up, bet, outcome, payout into the Vault, Withdraw.
+- [ ] A round in which the house plays and a round with two humans are settled on devnet, the transactions are visible in Explorer.
+- [ ] README, video, presentation, application texts; the repository is opened with Sofia's consent.
 
-## 12. Вне объёма до сдачи
+## 12. Out of scope before submission
 
-SGT, бесплатные прогнозы, SKR-косметика, push, рефералы, mainnet. `.skr`-имена - только если ядро готово к 7.10.
+SGT, free predictions, SKR cosmetics, push, referrals, mainnet. `.skr` names - only if the core is ready by 7.10.

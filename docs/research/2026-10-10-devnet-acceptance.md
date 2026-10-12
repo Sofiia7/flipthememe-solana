@@ -1,16 +1,16 @@
 # Live devnet acceptance - round 6622
 
-10 октября 2026 выполнен серверный денежный цикл двух новых операторских кошельков. Проверка отказывается работать вне Solana devnet по genesis hash. Ключи остаются в закрытой persistent-папке VPS; до broadcast сохраняется журнал подписанных транзакций для безопасного возобновления.
+On October 10, 2026, a server-side money cycle was run with two new operator wallets. The check refuses to run outside Solana devnet, as determined by the genesis hash. The keys remain in a closed persistent folder on the VPS; before broadcast, a journal of signed transactions is saved so that the run can be safely resumed.
 
-- UP и DOWN: по 0.02 тестового SOL, обе транзакции подтверждены.
-- Финал: DOWN, `refundReason=0`, по 10 samples в strike и exit; цена 187304844221 → 187304688097 в масштабе программы.
-- Позиции после claim: UP - 0, DOWN - 0.0392 SOL. Проверено совпадение с формулой контракта.
-- Обе claimed-позиции восстановлены через HTTP history без локальной истории клиента. PUT архива требует подпись keeper; GET возвращает сохранённые данные, отдельной detached-подписи в GET нет.
-- Для публикации устранён дневной лимит KV writes: новые snapshots/archive pages хранятся в SQLite Durable Objects, старые KV записи переносятся при чтении. Live Worker `e42bbbc9-1b3d-4bf9-bf82-a2ba07931516`, deployed 10:15 UTC. Проверки link 49/49 и Worker dry-run прошли.
-- Доступные средства выведены; vault available/locked - 0. Сессии отозваны и закрыты.
+- UP and DOWN: 0.02 test SOL each, both transactions confirmed.
+- Final: DOWN, `refundReason=0`, 10 samples each in strike and exit; price 187304844221 → 187304688097 in program scale.
+- Positions after claim: UP - 0, DOWN - 0.0392 SOL. The match with the contract formula was verified.
+- Both claimed positions were recovered through HTTP history without the client's local history. The archive PUT requires a keeper signature; GET returns the stored data, and there is no separate detached signature in GET.
+- To enable publication, the daily KV writes limit was eliminated: new snapshots/archive pages are stored in SQLite Durable Objects, and old KV entries are migrated on read. Live Worker `e42bbbc9-1b3d-4bf9-bf82-a2ba07931516`, deployed 10:15 UTC. Link checks 49/49 and the Worker dry-run passed.
+- Available funds were withdrawn; vault available/locked - 0. Sessions revoked and closed.
 
-Ставка UP: `TP6isZonukVN6UG2RFLAyEirvBmeiGMPuQsuDMKTJnyFQe2R7j3f4xLBJSHqGRf7TE5wSGijpH1nQe2SyqVxxVV`. Остальные подписи сохранены в [публичном журнале проверки](devnet-acceptance-6622.json) без ключей и wire payload.
+UP bet: `TP6isZonukVN6UG2RFLAyEirvBmeiGMPuQsuDMKTJnyFQe2R7j3f4xLBJSHqGRf7TE5wSGijpH1nQe2SyqVxxVV`. The remaining signatures are stored in the [public verification journal](devnet-acceptance-6622.json) without keys or wire payload.
 
-Закрытие position с возвратом rent и проверкой сохранности HTTP-истории выполняет отдельный одноразовый процесс на VPS после обязательной задержки программы. Самое раннее запланированное время: **11:14:55 UTC / 13:14:55 Budapest**. На момент публикации этого отчёта этот шаг ожидает задержки и не объявлен пройденным. Журнал: `/home/openclaw/ftm-sol-keeper/deploy/data/acceptance-20261010/close.log`; итог: `proof.json`, `closed=true` и stage `position-close-rent-and-archive-verified`.
+Closing the position with a rent refund and verifying that the HTTP history is preserved is done by a separate one-off process on the VPS after the program's mandatory delay. Earliest scheduled time: **11:14:55 UTC / 13:14:55 Budapest**. At the time this report was published, this step was waiting out the delay and is not declared passed. Log: `/home/openclaw/ftm-sol-keeper/deploy/data/acceptance-20261010/close.log`; result: `proof.json`, `closed=true` and stage `position-close-rent-and-archive-verified`.
 
-Это серверное доказательство работы на devnet. Мобильный UI, MWA, Seeker lifecycle и реальные пользовательские когорты им не проверены. Физический Seeker пользователь проверяет самостоятельно по `docs/android-seeker-checklist-ru.md`.
+This is server-side proof of operation on devnet. It does not verify the mobile UI, MWA, the Seeker lifecycle or real user cohorts. The user checks the physical Seeker independently using `docs/android-seeker-checklist.md`.

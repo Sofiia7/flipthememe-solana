@@ -1,200 +1,200 @@
-# FlipTheMeme / MemePred: проверка идеи для CLOCK IN
+# FlipTheMeme / MemePred: checking the idea for CLOCK IN
 
-Исследование на 10 сентября 2026 года. Это предложения к обсуждению, а не новые согласованные решения. Исходный дизайн не изменён. Прочитаны README и `docs/archive/2026-09-10-flipthememe-solana-mobile-design.md`, текст из сообщения и три изображения. В текущем репозитории реализации ещё нет; переносимость кода из других проектов не проверялась.
+Research as of September 10, 2026. These are proposals for discussion, not new agreed decisions. The original design is unchanged. Read: the README and `docs/archive/2026-09-10-flipthememe-solana-mobile-design.md`, the text from the message and three images. There is no implementation in the current repository yet; portability of code from other projects was not checked.
 
-**Рекомендация:** одна общая арена с короткими раундами на свежие токены, узнаваемыми игроками и явными правилами расчёта. Сохранить пиксельную стилистику, убрать карту, колоду и рилсы из первой версии. Проверять ценность самой игры и честность исхода раньше, чем делать дополнительные награды.
+**Recommendation:** one shared arena with short rounds on fresh tokens, recognizable players and explicit settlement rules. Keep the pixel style; remove the map, the deck and the reels from the first version. Check the value of the game itself and the fairness of the outcome before building additional rewards.
 
-## Условия участия: существенный пропуск
+## Participation conditions: a significant omission
 
-По [обязательным Terms, §6.1](https://solanamobile.radiant.nexus/legal/clock-in-terms.pdf), проект должен быть начат не ранее чем за три месяца до запуска хакатона. Разрешение дорабатывать существующий продукт не отменяет этого условия. При запуске 8 сентября граница - 8 июня 2026 года. Если MemePred старше, нужно описать организаторам возраст основы, переиспользуемый код и новую мобильную часть и получить письменное разъяснение о допуске. Новый репозиторий сам по себе не делает старый проект новым.
+Under the [mandatory Terms, §6.1](https://solanamobile.radiant.nexus/legal/clock-in-terms.pdf), a project must have been started no earlier than three months before the hackathon launch. Permission to continue developing an existing product does not cancel this condition. With a launch on September 8, the boundary is June 8, 2026. If MemePred is older, you need to describe to the organizers the age of the base, the reused code and the new mobile part, and obtain a written clarification on eligibility. A new repository does not by itself make an old project new.
 
-[Анонс CLOCK IN](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon): подача до 8 октября; $125 тысяч в USDC и отдельные $10 тысяч в SKR; APK, исходники, видео, презентация. На сайте и в Terms подтверждены четыре критерия по 25%, MWA и существенная мобильная разработка. Для получения приза требуется именно публикация в магазине в течение 30 дней после объявления, не только отправка на проверку. В анонсе результаты - начало ноября, в тексте сайта - 10 ноября; встроенный календарь содержит ещё одну дату окончания судейства. Не привязывать обязательства к точному дню без актуального подтверждения.
+[CLOCK IN announcement](https://solanamobile.com/blog/clock-in-the-solana-mobile-hackathon): submission by October 8; $125 thousand in USDC and a separate $10 thousand in SKR; APK, source code, video, presentation. The site and the Terms confirm four criteria at 25% each, MWA and substantial mobile development. To receive the prize, publication in the store within 30 days after the announcement is required, not merely submission for review. In the announcement the results are due in early November; the site text says November 10; the embedded calendar contains yet another judging end date. Do not tie commitments to an exact day without current confirmation.
 
-USDC-призы ограничены командами без VC/angel funding. Возраст, страна проживания и KYC также влияют на допуск. В проверенных требованиях видео обязательно, но жёсткий предел «ровно три минуты» не установлен; три минуты - разумная цель презентации.
+USDC prizes are limited to teams without VC/angel funding. Age, country of residence and KYC also affect eligibility. In the verified requirements a video is mandatory, but a hard limit of "exactly three minutes" is not established; three minutes is a reasonable presentation target.
 
-**Готовый вопрос организаторам, не отправлялся:**
+**Ready-made question for the organizers, not sent:**
 
 > I am building a new Android-first Solana application for CLOCK IN using parts of my existing MemePred project. The original project started on [date]; the new mobile application started on [date]. Reused components: [list]. New work includes the Android/MWA experience, synchronized rounds and Solana settlement. Under section 6.1, is this eligible as a new Project, or does the original project's start date control eligibility?
 
-## Кто выигрывал
+## Who won
 
-[Первый Solana Mobile Hackathon, 2025](https://solanamobile.com/blog/solana-mobile-hackathon-winners-announced): Nomadz, Gib Meme, Blormmy, SP3ND, Plutus, Memeshot, dePlay, DojoDuel, Scrolly, Mattle. BONK-приз получил Rampa. Среди honorary recipients - Crypto Fantasy League, Trepa, Lince и DOLERO. Страница перенесена в новый блог и показывает июль 2026; это не дата проведения первого конкурса.
+[First Solana Mobile Hackathon, 2025](https://solanamobile.com/blog/solana-mobile-hackathon-winners-announced): Nomadz, Gib Meme, Blormmy, SP3ND, Plutus, Memeshot, dePlay, DojoDuel, Scrolly, Mattle. The BONK prize went to Rampa. Honorary recipients include Crypto Fantasy League, Trepa, Lince and DOLERO. The page was moved to the new blog and shows July 2026; this is not the date the first contest was held.
 
-[MONOLITH, 2026](https://solanamobile.com/blog/solana-mobile-monolith-hackathon-winners-announced): NOMI, Echo Protocol, Pumpville, Tramplin, PredictTok, Cue, Backyard Fi, Foresee, SeekerClaw, Cashflow. SKR-приз - Seek. Honorable mentions: Cherry, Timebent, Kickr, Kinlog, Hunters of Faenora.
+[MONOLITH, 2026](https://solanamobile.com/blog/solana-mobile-monolith-hackathon-winners-announced): NOMI, Echo Protocol, Pumpville, Tramplin, PredictTok, Cue, Backyard Fi, Foresee, SeekerClaw, Cashflow. SKR prize - Seek. Honorable mentions: Cherry, Timebent, Kickr, Kinlog, Hunters of Faenora.
 
-Практические референсы: Gib Meme - карточки мемкоинов; CFL - соревнование на рыночных движениях; Pumpville - общий мир и короткие сессии; Foresee - социальные прогнозы; PredictTok - мобильная подача реальных рынков; Cherry - узнаваемая идентичность и сообщества; Cashflow - полезность SKR через оплату комиссий. Это разные способы сделать приложение полезным на телефоне. Из наград нельзя вывести требование к карте, свайпу, пиксельной графике или обязательным ежедневным ставкам.
+Practical references: Gib Meme - memecoin cards; CFL - competition on market moves; Pumpville - a shared world and short sessions; Foresee - social predictions; PredictTok - mobile presentation of real markets; Cherry - recognizable identity and communities; Cashflow - SKR utility through fee payment. These are different ways to make an app useful on a phone. No requirement for a map, swiping, pixel graphics or mandatory daily bets can be derived from the awards.
 
-## Что означает «в топе» и «живое»
+## What "in the top" and "alive" mean
 
-Скачана публичная выгрузка [Seeker Tracker](https://seekertracker.com/api/dappstore) 10.09.2026, около 18:33 UTC. Это сторонний индекс, а не прямой доступ к витрине телефона. В `dappstore-snapshot.json` - исходные данные; в `catalog-summary.json` - дедупликация по Android package. Получено **1 365 уникальных записей со статусом active**. Число оценок рассчитано как сумма `reviewsByRating`. Это не установки, DAU, платящие пользователи или число развёрнутых текстовых отзывов. Веб-страницы поискового индекса местами отстают от API.
+A public export from [Seeker Tracker](https://seekertracker.com/api/dappstore) was downloaded on September 10, 2026, around 18:33 UTC. This is a third-party index, not direct access to the phone's storefront. `dappstore-snapshot.json` contains the source data; `catalog-summary.json` contains the deduplication by Android package. Received **1,365 unique entries with active status**. The number of ratings is computed as the sum of `reviewsByRating`. This is not installs, DAU, paying users or the number of written text reviews. In places, the web pages of the search index lag behind the API.
 
-| Приложение | Оценок | Рейтинг | Последняя версия в индексе, UTC |
+| Application | Ratings | Rating | Latest version in the index, UTC (DD.MM.YYYY) |
 |---|---:|---:|---|
-| Jupiter Mobile | 7 098 | 4,8 | 09.09.2026 |
-| TokenRun | 6 630 | 4,5 | 06.07.2026 |
-| URnetwork | 5 939 | 4,4 | 25.03.2026 |
-| Crypto Fantasy League | 5 930 | 4,2 | 06.12.2025 |
-| MattleFun | 5 798 | 4,5 | 10.09.2026 |
-| Scrolly | 5 483 | 3,9 | 06.09.2025 |
-| Seed Vault Wallet | 5 255 | 4,7 | 05.09.2026 |
-| LootGO | 5 109 | 4,3 | 20.03.2026 |
-| Backpack | 4 744 | 4,6 | 29.08.2026 |
-| Jito | 4 690 | 4,6 | 29.08.2025 |
-| Cherry Messenger | 4 639 | 4,8 | 05.07.2026 |
-| PumpFun | 4 116 | 4,3 | 25.08.2026 |
-| SP3ND | 3 701 | 4,4 | 07.08.2026 |
-| Moonwalk Fitness | 3 694 | 4,3 | 04.09.2026 |
+| Jupiter Mobile | 7,098 | 4.8 | 09.09.2026 |
+| TokenRun | 6,630 | 4.5 | 06.07.2026 |
+| URnetwork | 5,939 | 4.4 | 25.03.2026 |
+| Crypto Fantasy League | 5,930 | 4.2 | 06.12.2025 |
+| MattleFun | 5,798 | 4.5 | 10.09.2026 |
+| Scrolly | 5,483 | 3.9 | 06.09.2025 |
+| Seed Vault Wallet | 5,255 | 4.7 | 05.09.2026 |
+| LootGO | 5,109 | 4.3 | 20.03.2026 |
+| Backpack | 4,744 | 4.6 | 29.08.2026 |
+| Jito | 4,690 | 4.6 | 29.08.2025 |
+| Cherry Messenger | 4,639 | 4.8 | 05.07.2026 |
+| PumpFun | 4,116 | 4.3 | 25.08.2026 |
+| SP3ND | 3,701 | 4.4 | 07.08.2026 |
+| Moonwalk Fitness | 3,694 | 4.3 | 04.09.2026 |
 
-Первые десять строк - десять лидеров по числу оценок в этой выгрузке. Ниже добавлены особенно полезные ориентиры. Свежие APK - положительный сигнал поддержки. Старый APK не доказывает смерть: веб-контент и сервер могут меняться независимо. APK на устройстве, успешные ставки/выводы и retention конкурентов в этом исследовании не проверены.
+The first ten rows are the ten leaders by number of ratings in this export. Especially useful reference points are added below them. Fresh APKs are a positive sign of support. An old APK does not prove death: web content and the server can change independently. The APK on the device, successful bets/withdrawals and competitors' retention were not checked in this research.
 
-В категории **Top Picks** сейчас: Cherry, Jito, LootGO, Lulo, Moonwalk Fitness, ORE, Sanctum. Это редакционная подборка. Она не совпадает со списком победителей. Её медиана не доказывает, что победа причинно даёт такой объём пользователей.
+The **Top Picks** category currently contains: Cherry, Jito, LootGO, Lulo, Moonwalk Fitness, ORE, Sanctum. This is an editorial selection. It does not coincide with the list of winners. Its median does not prove that winning causally produces such a volume of users.
 
-| Близкий продукт | Оценок | Рейтинг | Версия | Проверенное описание / значение |
+| Close product | Ratings | Rating | Version (DD.MM.YYYY) | Verified description / meaning |
 |---|---:|---:|---|---|
-| Gib Meme | 2 297 | 3,9 | 17.06.2026 | Карточки, сила которых меняется вместе с рынком |
-| BananaZone | 1 331 | 4,1 | 19.08.2026 | Подача торговли как аркады; полезнее как свежий сосед по категории |
-| Klout | 775 | 3,9 | 12.12.2025 | В магазине - прогнозирование трендов карточками; текущий сайт уже о другом |
-| Chartz | 527 | 3,8 | 10.11.2025 | Исторические графики; сайт также показывает PvP beta |
-| Polyswipe | 439 | 3,5 | 17.10.2025 | Свайпы по рынкам, заявлена ликвидность Polymarket |
-| TBD | 407 | 3,9 | 03.12.2025 | Прогноз популярных ответов, USDC |
-| Vibe Predict | 374 | 3,8 | 22.01.2026 | Токенизированные рынки Kalshi / DFlow |
-| PredictTok | 247 | 3,9 | 18.03.2026 | Jupiter prediction markets и видео |
-| Kickr | 162 | 4,1 | 09.09.2026 | Спортивные рынки; свежая версия |
-| Manic.Trade | 5 | 4,0 | 09.06.2026 | Higher/lower по разным активам, начальная open beta |
+| Gib Meme | 2,297 | 3.9 | 17.06.2026 | Cards whose strength changes with the market |
+| BananaZone | 1,331 | 4.1 | 19.08.2026 | Trading presented as an arcade; more useful as a fresh neighbor in the category |
+| Klout | 775 | 3.9 | 12.12.2025 | In the store - trend forecasting with cards; the current site is already about something else |
+| Chartz | 527 | 3.8 | 10.11.2025 | Historical charts; the site also shows a PvP beta |
+| Polyswipe | 439 | 3.5 | 17.10.2025 | Swipes on markets, Polymarket liquidity claimed |
+| TBD | 407 | 3.9 | 03.12.2025 | Forecasting popular answers, USDC |
+| Vibe Predict | 374 | 3.8 | 22.01.2026 | Tokenized Kalshi / DFlow markets |
+| PredictTok | 247 | 3.9 | 18.03.2026 | Jupiter prediction markets and video |
+| Kickr | 162 | 4.1 | 09.09.2026 | Sports markets; fresh version |
+| Manic.Trade | 5 | 4.0 | 09.06.2026 | Higher/lower across different assets, early open beta |
 
-По победителям MONOLITH: Tramplin 821 оценка; Seek 484; SeekerClaw 440, обновление 10 сентября; NOMI 410; Backyard Finance 390, обновление 6 сентября; Pumpville 389, обновление 30 августа; Cashflow 188; Echo 61; Cue 9. Cherry имеет 4 639, Hunters of Faenora - 1 562, Kinlog - 247, Timebent - 216. Победа и спрос - разные факты. Foresee, Memeshot, dePlay, Plutus и Blormmy под этими названиями в выгрузке не найдены; это не доказательство закрытия или отсутствия ребрендинга.
+Among the MONOLITH winners: Tramplin has 821 ratings; Seek 484; SeekerClaw 440, updated September 10; NOMI 410; Backyard Finance 390, updated September 6; Pumpville 389, updated August 30; Cashflow 188; Echo 61; Cue 9. Cherry has 4,639, Hunters of Faenora - 1,562, Kinlog - 247, Timebent - 216. Winning and demand are different facts. Foresee, Memeshot, dePlay, Plutus and Blormmy were not found under those names in the export; this is not proof of closure or of the absence of a rebrand.
 
-**Исправления исходной разведки:**
+**Corrections to the original reconnaissance:**
 
-- «На Seeker серьёзная торговля мертва» - не поддержано. Jupiter, PumpFun и Backpack имеют большой накопленный след и свежие версии. [Solana Mobile](https://solanamobile.com/blog/skr-season-1-claims-wrap-monolith-crowns-winners-and-seeker-goes-shopping) также сообщала о заметном объёме DEX-операций с Seeker в Q1; это данные организатора, не независимое исследование пользователей.
-- [Chartz](https://www.chartz.xyz/) использует историю, а не живой график. На сайте есть соревнование по одинаковым графикам. Нельзя заявлять уникальность просто по сочетанию графика и PvP.
-- [Карточка Klout](https://seekertracker.com/dapps/com.kloutgg.app) описывает игру на интернет-трендах; [текущий klout.gg](https://klout.gg/) - платное продвижение ссылок. Надёжность старого референса под вопросом.
-- «У конкурентов только симуляция и очки» неверно для всего списка: несколько продуктов прямо используют денежные prediction markets.
-- 3,5-3,9 звезды не означают лёгкость конкуренции: причиной могут быть непонятные выплаты, кошелёк, задержки или ожидания от наград. Чтобы выбрать, нужны реальные отзывы и тесты, которых здесь нет.
+- "Serious trading on Seeker is dead" - not supported. Jupiter, PumpFun and Backpack have a large accumulated footprint and fresh versions. [Solana Mobile](https://solanamobile.com/blog/skr-season-1-claims-wrap-monolith-crowns-winners-and-seeker-goes-shopping) also reported a notable volume of DEX operations from Seeker in Q1; this is the organizer's data, not an independent study of users.
+- [Chartz](https://www.chartz.xyz/) uses history, not a live chart. The site has a competition on identical charts. You cannot claim uniqueness simply from the combination of a chart and PvP.
+- [The Klout card](https://seekertracker.com/dapps/com.kloutgg.app) describes a game on internet trends; [the current klout.gg](https://klout.gg/) is paid link promotion. The reliability of the old reference is in question.
+- "Competitors have only simulation and points" is incorrect for the whole list: several products directly use real-money prediction markets.
+- 3.5-3.9 stars do not mean competition is easy: the cause may be unclear payouts, the wallet, delays or expectations of rewards. To choose, real reviews and tests are needed, which are not available here.
 
-## Предлагаемая форма продукта
+## Proposed product shape
 
-Рабочий питч: **«Свежий мемкоин. Общий старт. 60 секунд, чтобы проверить свой прогноз против других Seeker-игроков - без покупки самого токена».**
+Working pitch: **"A fresh memecoin. A shared start. 60 seconds to test your forecast against other Seeker players - without buying the token itself."**
 
-Формулировка «можно только купить» слишком абсолютна: доступность шортов и иных продуктов меняется. Точная проблема - возможность выразить короткий bearish/bullish взгляд на очень свежий поддерживаемый токен без покупки его спота. Это не полноценный хедж: неполное исполнение, срок и ограниченный выигрыш меняют его свойства.
+The wording "you can only buy" is too absolute: the availability of shorts and other products changes. The exact problem is the ability to express a short bearish/bullish view on a very fresh supported token without buying its spot. This is not a full hedge: partial execution, the term and the limited payout change its properties.
 
-Общая арена хорошо концентрирует внимание и встречные заявки. Но тезис «контента нет» чрезмерен. Есть траектория цены, возраст, глубина ликвидности, активность и участники. Следует показать достаточно информации для решения, а не заставить реагировать на пустой тикер.
+A shared arena concentrates attention and opposing orders well. But the thesis "there is no content" is excessive. There are the price trajectory, age, liquidity depth, activity and participants. Enough information to decide should be shown, rather than forcing a reaction to an empty ticker.
 
-Не превращать отсутствие видео в аргумент против любой ленты. Карточка нового токена может работать. Выбор арены здесь - осознанная ставка на совместный момент и доступный объём разработки, а не доказанная единственная правильная форма.
+Do not turn the absence of video into an argument against any feed. A new-token card may work. The choice of an arena here is a deliberate bet on a shared moment and an affordable development scope, not a proven single correct form.
 
-Для старта - **одна арена, одна пара сторон, одна длительность и один источник пулов**. Ежедневные объявленные сессии по 3-5 раундов собирают небольшую аудиторию лучше круглосуточного обещания толпы. Вне сессий - бесплатный просмотр/тренировка с явной пометкой, что это запись. Не изображать записанные события и ботов живыми людьми.
+For the start - **one arena, one pair of sides, one duration and one pool source**. Daily announced sessions of 3-5 rounds gather a small audience better than a round-the-clock promise of a crowd. Outside sessions - free viewing/practice with an explicit note that this is a recording. Do not pass off recorded events and bots as live people.
 
-## Раунд нужно определить до реализации
+## The round must be defined before implementation
 
-Пример для прототипа, не проверенные оптимальные интервалы:
+Example for a prototype, not verified optimal intervals:
 
-1. Около 20 секунд приёма прогнозов. Все видят текущие данные, но понимают, что цена отсчёта будет определена после закрытия.
-2. Вход закрыт по времени программы. Короткий запас на доставку и подтверждение транзакций; запоздавшие отклоняются. Время клиентского тапа не является доказательством участия.
-3. Формируется общий P0 по заранее заданному окну наблюдений после cutoff.
-4. 60 секунд измеряемого движения; в конце - заранее определённое окно P1. Нельзя добавлять ставку или менять сторону после закрытия.
-5. Расчёт UP/DOWN; при равенстве в установленной зоне - возврат. При отсутствии достоверных данных - предусмотренная процедура refund.
+1. About 20 seconds of accepting forecasts. Everyone sees the current data but understands that the reference price will be determined after closing.
+2. Entry is closed by program time. A short margin for transaction delivery and confirmation; late ones are rejected. The time of the client's tap is not proof of participation.
+3. A shared P0 is formed over a predefined observation window after the cutoff.
+4. 60 seconds of measured movement; at the end - a predefined P1 window. No bet may be added and no side changed after closing.
+5. UP/DOWN settlement; on a tie within the set zone - refund. If there is no reliable data - the provided refund procedure.
 
-«60 секунд движения» не означает «полный цикл за 60 секунд»: с набором, ценовыми окнами и расчётом цикл будет длиннее. Полоса таймера должна подписывать фазу. Настоящий исход нужно подтвердить до обещания полученной выплаты.
+"60 seconds of movement" does not mean "a full cycle in 60 seconds": with intake, price windows and settlement the cycle will be longer. The timer bar must label the phase. The actual outcome must be confirmed before promising a received payout.
 
-Отдельно определить: валюту котировки; арифметическое или геометрическое среднее; точность; минимальное число наблюдений; допустимую давность; правила пауз; миграцию пула; перенос/отмену рынка; крайний срок расчёта. Раг с валидной ценой - обычный рыночный исход, а техническая потеря цены - другая ситуация. Автовозврат при любом падении создаёт неверные стимулы.
+Define separately: the quote currency; arithmetic or geometric mean; precision; minimum number of observations; allowed staleness; pause rules; pool migration; postponement/cancellation of a market; the settlement deadline. A rug with a valid price is an ordinary market outcome, while a technical loss of price is a different situation. An automatic refund on any drop creates wrong incentives.
 
-**Главное отличие от старого плана:** вместо индивидуальных `entry_price` и `settle_at` у матчей нужен общий `Round` с зафиксированными временем, источником цены, окнами и правилами. Пятиминутная очередь не сочетается с общим текущим раундом.
+**Main difference from the old plan:** instead of individual `entry_price` and `settle_at` per match, a shared `Round` with fixed time, price source, windows and rules is needed. A five-minute queue does not combine with a shared current round.
 
-## Матчинг: выбрать одну экономику
+## Matching: pick one economy
 
-| Вариант | Плюс | Цена решения |
+| Option | Plus | Cost of the decision |
 |---|---|---|
-| Парное покрытие 1:1, расчёт всем раундом | Предсказуемый выигрыш на исполненную часть | Возврат избытка одной стороны, нужен понятный partial fill |
-| Общий тотализатор, выигравшие делят банк | Проще собрать один банк, исполняются обе стороны целиком при наличии обеих | Коэффициент меняется до закрытия; другая программа и экономика |
-| Парное покрытие и дом | Может уменьшить возвраты | Капитал, риск манипуляции, конфликт интересов, учёт резервов |
+| 1:1 pair coverage, settlement by the whole round | Predictable win on the executed portion | Return of one side's excess; a clear partial fill is needed |
+| Shared pari-mutuel pool, winners split the pot | Easier to assemble a single pot; both sides are executed in full when both are present | The odds change before closing; a different program and economics |
+| Pair coverage plus a house | Can reduce refunds | Capital, manipulation risk, conflict of interest, reserve accounting |
 
-Для сохранения основного замысла начинать с первого варианта, без обещания полного исполнения каждой заявки. Честно показать «подано», «покрыто», «возвращено». Аллокация избытка: заранее выбранное pro rata или другая прозрачная политика; это важнее анимации аватара.
+To preserve the core idea, start with the first option, without promising full execution of every order. Honestly show "submitted", "covered", "returned". Allocation of the excess: a pre-chosen pro rata or another transparent policy; this matters more than the avatar animation.
 
-Пример без дома: UP = 2,3 SOL, DOWN = 7,1 SOL. Сопоставлено 2,3 на каждой стороне, банк 4,6; 4,8 DOWN возвращается. Если комиссия равна 1% именно от всего сопоставленного банка, победитель получает 1,98× исполненной суммы с учётом возвращённого первоначального тела. Другой способ брать комиссию даёт другой результат - слова «рейк 1%» недостаточно.
+Example without a house: UP = 2.3 SOL, DOWN = 7.1 SOL. 2.3 is matched on each side, the pot is 4.6; 4.8 of DOWN is returned. If the fee equals 1% specifically of the entire matched pot, the winner receives 1.98× the executed amount, with the returned original principal taken into account. Another way of charging the fee gives a different result - the words "rake 1%" are not enough.
 
-Толпа не меняет коэффициент в таком 1:1 варианте: преимущество меньшинства - прежде всего вероятность полного исполнения. В тотализаторе меньшинство влияет на коэффициент. Эти модели нельзя смешивать в интерфейсе.
+The crowd does not change the odds in such a 1:1 variant: the minority's advantage is above all the probability of full execution. In a pari-mutuel pool the minority affects the odds. These models cannot be mixed in the interface.
 
-Дом, если появится, должен заранее резервировать средства, иметь явно показанные сторону и исполненную сумму и соблюдать ту же границу входа. Надпись `HOUSE · REKT` не доказывает честность. Особый конфликт: одна сторона выбирает токен, предоставляет цену и принимает противоположную ставку. Не скрывать эти роли. Процент от собственного банкролла не защищает остальных участников от манипуляции ценой.
+The house, if it appears, must reserve funds in advance, have its side and executed amount explicitly displayed, and observe the same entry boundary. The label `HOUSE · REKT` does not prove fairness. A special conflict: one side chooses the token, provides the price and accepts the opposing bet. Do not hide these roles. A percentage of one's own bankroll does not protect other participants from price manipulation.
 
-## Источник цены - основная техническая развилка
+## Price source - the main technical fork
 
-В референсе написано `pump.fun`, а дизайн планирует изучать Meteora DLMM / Raydium CLMM. Это разные состояния и типы пулов. Найденный TWAP в CLMM не гарантирует доступность цены для ещё не мигрировавшего launchpad-токена. Сначала определить поддерживаемый источник и этап жизни токена, затем обещать возраст «четыре минуты».
+The reference says `pump.fun`, while the design plans to study Meteora DLMM / Raydium CLMM. These are different states and pool types. A TWAP found in a CLMM does not guarantee price availability for a launchpad token that has not yet migrated. First define the supported source and the stage of the token's life, then promise an age of "four minutes".
 
-[Raydium](https://docs.raydium.io/security/oracle-and-token-risks) описывает внутренние наблюдения и предупреждает против использования мгновенной цены для производных продуктов. Но наличие поля oracle не доказывает достаточную историю или экономическую устойчивость выбранного минутного рынка. На молодом редкоторгуемом пуле усреднение не создаёт информацию из ничего.
+[Raydium](https://docs.raydium.io/security/oracle-and-token-risks) describes internal observations and warns against using the instantaneous price for derivative products. But the presence of an oracle field does not prove sufficient history or economic robustness of the chosen one-minute market. On a young, thinly traded pool, averaging does not create information from nothing.
 
-Минимальные критерии допуска надо проверить на реальных пулах: доступность нужного окна, давность наблюдений, глубина ликвидности, активность, расширения токена и возможность получить воспроизводимый результат. Ограничивать нужно совокупную выплату по рынку, а не только ставку отдельного кошелька. Численные лимиты выбираются после анализа поддерживаемых пулов, не из предположения, что комиссии Solana малы.
+Minimum admission criteria must be checked on real pools: availability of the needed window, staleness of observations, liquidity depth, activity, token extensions and the ability to obtain a reproducible result. What should be capped is the aggregate payout per market, not only the stake of an individual wallet. Numerical limits are chosen after analysis of the supported pools, not from the assumption that Solana fees are small.
 
-Если MVP использует подписанную цену своего сервера, говорить об этом прямо: расчёт денег выполняется программой, источник результата пока доверенный. Хранить параметры и использованные наблюдения/ссылки, предусмотреть конечный deadline и самостоятельный claim/refund при остановке keeper. Не называть такую конструкцию полностью trustless.
+If the MVP uses a signed price from its own server, say so plainly: the money settlement is performed by the program, but the source of the result is still trusted. Store the parameters and the observations/references used, provide a finite deadline and a self-service claim/refund if the keeper stops. Do not call such a construction fully trustless.
 
-## Под Solana Mobile
+## For Solana Mobile
 
-- **MWA + ограниченная сессия:** через кошелёк подтверждается бюджет и срок. Далее быстрые действия локальным ключом. [Solana рекомендует session keys](https://solana.com/developers/cookbook/wallets/auto-approve), но лимиты ставок и разрешённые инструкции должна проверять твоя программа. В [SessionToken](https://raw.githubusercontent.com/magicblock-labs/session-keys/master/programs/gpl_session/src/lib.rs) есть authority, signer, target program и expiry; универсальных лимитов твоего оборота там нет. Фиксировать версию, а не считать текущий master аудированным.
-- **Нельзя восстанавливать потраченный лимит выигрышами по умолчанию.** Разделить общий оборот, открытый риск и доступный баланс. `withdraw`, смена полномочий и повышение лимита не должны быть доступны игровому ключу.
-- **SGT:** проверка владения кошельком и подлинности SGT; дневная уникальность по mint SGT, не адресу кошелька. [Актуальный рецепт](https://docs.solanamobile.com/recipes/general/detecting-seeker-users) прямо учитывает перенос между кошельками. Устройство не равно уникальному человеку, а `.skr` не равно доставленному push.
-- **Имена:** [.skr разрешается в адрес через AllDomains](https://docs.solanamobile.com/solana-mobile-stack/skr-domain). Приглашение доставляется только через установленное приложение и согласие на уведомления либо обычную ссылку через системный Share. При истёкшем раунде открывать следующий, не ошибку.
-- **Практический мобильный UX:** большие цели для большого пальца, разные подписи фаз, короткая вибрация при подтверждённом входе/исходе, отключение звука и вибрации, восстановление состояния после фона, уведомление о запланированной сессии. Не рассылать push о каждой ставке всей комнаты.
+- **MWA + limited session:** the budget and term are confirmed through the wallet. After that, quick actions with a local key. [Solana recommends session keys](https://solana.com/developers/cookbook/wallets/auto-approve), but bet limits and allowed instructions must be checked by your program. The [SessionToken](https://raw.githubusercontent.com/magicblock-labs/session-keys/master/programs/gpl_session/src/lib.rs) has an authority, signer, target program and expiry; there are no general limits on your turnover there. Pin a version, rather than assuming the current master is audited.
+- **Do not restore the spent limit with winnings by default.** Separate total turnover, open risk and available balance. `withdraw`, authority change and limit increase must not be available to the game key.
+- **SGT:** verification of wallet ownership and SGT authenticity; daily uniqueness by SGT mint, not by wallet address. [The current recipe](https://docs.solanamobile.com/recipes/general/detecting-seeker-users) explicitly accounts for transfer between wallets. A device is not a unique person, and `.skr` is not a delivered push.
+- **Names:** [.skr resolves to an address via AllDomains](https://docs.solanamobile.com/solana-mobile-stack/skr-domain). An invitation is delivered only through the installed app and notification consent, or as an ordinary link through the system Share. If the round has expired, open the next one, not an error.
+- **Practical mobile UX:** large thumb targets, distinct phase labels, a short vibration on a confirmed entry/outcome, the ability to turn off sound and vibration, state recovery after backgrounding, a notification about a scheduled session. Do not send a push for every bet to the whole room.
 
-## Какие механики оставить и заменить
+## Which mechanics to keep and replace
 
-**Оставить:** узнаваемые аватары, общую сцену, бесплатный ежедневный прогноз, историю результатов, осмысленную карточку для шаринга, кнопку повторить прежнюю сумму явным тапом. Поощрять точность и участие в одинаковых условиях, а не депозит или проигрыш.
+**Keep:** recognizable avatars, the shared scene, a free daily forecast, the history of results, a meaningful share card, a button to repeat the previous amount with an explicit tap. Reward accuracy and participation under equal conditions, not deposits or losses.
 
-**Ежедневное возвращение:** 3-5 общих раундов как короткий турнир; бесплатный прогноз в тех же событиях; маленький рейтинг друзей/недели. Для бесплатной лиги одинаковое число попыток и правила, деньги не покупают точность. История должна показывать число прогнозов рядом с процентом правильных ответов. Сложный рейтинг уверенности и Bayesian score можно отложить.
+**Daily return:** 3-5 shared rounds as a short tournament; a free forecast in the same events; a small friends/weekly leaderboard. For the free league, the same number of attempts and the same rules; money does not buy accuracy. The history should show the number of forecasts next to the percentage of correct answers. A complex confidence ranking and a Bayesian score can be deferred.
 
-**Бесплатно по SGT:** безопаснее для экономики бесплатная попытка с очками; если нужен денежный приз - заранее фиксированный спонсорский бюджет и правила. Выдача расходуемых за реальные деньги кредитов в PvP требует защиты от сливов через второго участника. Одного наличия SGT недостаточно.
+**Free by SGT:** safer for the economy is a free attempt with points; if a money prize is needed - a pre-fixed sponsor budget and rules. Issuing credits that are spent for real money in PvP requires protection against drains through a second participant. The presence of an SGT alone is insufficient.
 
-**SKR:** не открывать им сектора, более быстрый вход или лучшие рыночные сведения. Не делить раннюю аудиторию между SOL и SKR банками. Практичный первый вариант - полезная опция в той же арене: оплата косметики/эмоций либо ограниченный по бюджету gas pass. Это не автоматически сильная конкурсная интеграция. Более выраженная идея на потом - спонсируемый бесплатный турнир с заранее внесённым SKR-призом, общими условиями и проверяемой выплатой; он требует отдельной спецификации.
+**SKR:** do not use it to unlock sectors, faster entry or better market information. Do not split the early audience between SOL and SKR pots. A practical first option is a useful option in the same arena: payment for cosmetics/emotes or a budget-limited gas pass. This is not automatically a strong contest integration. A more pronounced idea for later - a sponsored free tournament with a pre-deposited SKR prize, common conditions and a verifiable payout; it requires a separate specification.
 
-**Убрать перенос выигрыша в новую ставку по умолчанию.** Выигрыш можно оставить доступным на балансе. Новая ставка - отдельное действие на выбранном токене. После закрытия раунда нельзя обещать забрать уже заблокированную ставку «в любой момент». Для cashout нужен отдельный покупатель/ликвидность и новые правила.
+**Remove rolling a win into a new bet by default.** The win can stay available on the balance. A new bet is a separate action on a chosen token. After the round closes, you cannot promise that an already locked bet can be taken back "at any moment". Cashout requires a separate buyer/liquidity and new rules.
 
-**Приглашение другу:** приглашает смотреть и выбрать сторону. Если это строгая дуэль с противоположными сторонами, нужен явный accept, сумма и срок; это отдельный сценарий. Не делать его обязательным в MVP.
+**Invitation to a friend:** invites the friend to watch and choose a side. If this is a strict duel with opposite sides, an explicit accept, amount and term are needed; this is a separate scenario. Do not make it mandatory in the MVP.
 
-## Поправки к присланному экрану
+## Corrections to the supplied screen
 
-Сильные элементы: свой персонаж среди других, короткие .skr-имена, общая сцена, простая палитра. Пиксельная графика даёт узнаваемость без затрат на полноценный игровой мир.
+Strong elements: your own character among others, short .skr names, a shared scene, a simple palette. Pixel graphics give recognizability without the cost of a full game world.
 
-1. Большая плиточная пустота и монета занимают место графика. Отдать центр графику с общей стартовой линией; оставить монету маленьким портретом токена.
-2. Две явные зоны UP и DOWN с подписями, людьми и суммами. Цвет дополняет направление, а не заменяет его. Аватары должны означать подтверждённые позиции. Зрители считаются отдельно.
-3. На исходном экране справа видимые игроки дают 2,6 SOL, тогда как сумма стороны 7,1. Если разницу 4,5 закрывает дом, показать это как реальную позицию; `cap 4.5` значит только лимит, а не внесённую сумму.
-4. Таймер подписывать: «Вход закроется», «До результата», «Подтверждаем выплату». Не смешивать эти моменты.
-5. В момент выбора дать равноценные UP и DOWN. После подтверждения показать сумму участия; кнопку ADD UP не оставлять доступной после cutoff.
-6. 0,1-1 SOL не делать стандартным стартовым диапазоном для первого знакомства. Точные малые суммы подобрать по тестам и экономике; показывать эквивалент и предельный риск.
-7. Вместо неподписанного `$422.30` указать, что это: цена или капитализация. Основная цифра во время раунда - изменение от общего P0, не произвольные +5,5% от неизвестного момента.
-8. Добавить 2-3 сигнала до решения: возраст токена, недавняя активность, ликвидность/её понятная категория. Фильтр не называть гарантией отсутствия рага.
-9. `session -0.7 SOL`, `week -1.8 SOL` и `HOUSE REKT` увести из центра. На виду нужны свободный баланс, заблокированная сумма и разрешённый бюджет; история выигрышей и потерь - в деталях.
-10. Бегущая строка покупок спота не должна смешиваться со ставками участников. Сделать отдельную раскрываемую ленту рынка или убрать из MVP.
-11. Результат: исход цены, итог своей позиции, возврат неисполненной части и комиссия. Общая радость/анимация не заменяет чек расчёта.
-12. Ограничить сцену несколькими аватарами с приоритетом себе/друзьям, остальных объединять счётчиком. Не строить полноценный движок перемещения.
+1. The large empty tiled area and the coin take the place of the chart. Give the center to the chart with a shared starting line; keep the coin as a small portrait of the token.
+2. Two explicit UP and DOWN zones with labels, people and amounts. Color complements the direction and does not replace it. Avatars should mean confirmed positions. Spectators are counted separately.
+3. On the original screen, on the right side, the visible players add up to 2.6 SOL, while the side total is 7.1. If the 4.5 difference is covered by the house, show it as a real position; `cap 4.5` means only a limit, not a deposited amount.
+4. Label the timer: "Entry closes", "Until result", "Confirming payout". Do not mix these moments.
+5. At the moment of choice, give UP and DOWN equal weight. After confirmation, show the participation amount; do not leave the ADD UP button available after the cutoff.
+6. 0.1-1 SOL should not be the standard starting range for a first acquaintance. Pick exact small amounts from tests and economics; show the equivalent and the maximum risk.
+7. Instead of an unlabeled `$422.30`, specify what it is: price or market cap. The main number during the round is the change from the shared P0, not an arbitrary +5.5% from an unknown moment.
+8. Add 2-3 signals before the decision: token age, recent activity, liquidity/its understandable category. Do not call the filter a guarantee against a rug.
+9. Move `session -0.7 SOL`, `week -1.8 SOL` and `HOUSE REKT` away from the center. What needs to be in view: free balance, locked amount and the permitted budget; the history of wins and losses belongs in the details.
+10. The ticker of spot purchases must not be mixed with participants' bets. Make a separate expandable market feed or remove it from the MVP.
+11. Result: the price outcome, the result of one's own position, the refund of the unexecuted part and the fee. General joy/animation does not replace a settlement receipt.
+12. Limit the scene to a few avatars with priority to yourself/friends, and merge the rest into a counter. Do not build a full movement engine.
 
-## Объём и порядок работ
+## Scope and order of work
 
-| Приоритет | Что входит |
+| Priority | What is included |
 |---|---|
-| Обязательное ядро | Android APK и MWA; одна арена; общий Round; источник цены; вход/закрытие/расчёт/возврат; ограниченная сессия; баланс и история; явные статусы сети |
-| Следом | SGT и .skr; бесплатный режим; карточка результата; ссылка на приглашение; простая ежедневная сессия |
-| Только при готовом ядре | Одна SKR-полезность; push; минимальная недельная таблица |
-| После подачи | Карта, рилсы, отдельные комнаты, собственный SKR-стейкинг, 16 бейджей, сложные дуэли, LP внешних пользователей, auto-rollover, cashout |
+| Required core | Android APK and MWA; one arena; a shared Round; price source; entry/closing/settlement/refund; limited session; balance and history; explicit network statuses |
+| Next | SGT and .skr; free mode; result card; invitation link; a simple daily session |
+| Only if the core is ready | One SKR utility; push; a minimal weekly leaderboard |
+| After submission | Map, reels, separate rooms, own SKR staking, 16 badges, complex duels, LP from external users, auto-rollover, cashout |
 
-**10-13 сентября:** уточнить допуск проекта, выбрать поддерживаемые пулы и правила цены, выпустить первый APK на физическом Android, проверить кошелёк. Одновременно показать макет нескольким людям и выяснить, могут ли они объяснить цель без подсказки.
+**September 10-13:** clarify the project's eligibility, choose supported pools and price rules, release the first APK on a physical Android device, test the wallet. At the same time show the mockup to several people and find out whether they can explain the goal without a hint.
 
-**14-21 сентября:** в исходном календаре занято Arbitrum. Не считать эту неделю производственной мощностью Solana.
+**September 14-21:** in the original calendar this week is taken by Arbitrum. Do not count this week as Solana production capacity.
 
-**21-27 сентября:** полный вертикальный сценарий на devnet: вход, подтверждение, закрытие, расчёт, возврат, повторное открытие приложения. Базовая арена развивается вместе с программой, не после завершения backend.
+**September 21-27:** a full vertical scenario on devnet: entry, confirmation, closing, settlement, refund, reopening the app. The base arena develops together with the program, not after the backend is finished.
 
-**28 сентября - 2 октября:** тесты маленькой группой с общей сессией. Меньше декоративной разработки, больше проверки понимания и сетевых сбоев.
+**September 28 - October 2:** tests with a small group in a shared session. Less decorative development, more checking of understanding and network failures.
 
-**3-5 октября:** исправления, подписанный APK, воспроизводимая сборка, видео и презентация. **6-7 октября:** подача с запасом; **8 октября** - резерв.
+**October 3-5:** fixes, signed APK, reproducible build, video and presentation. **October 6-7:** submission with a margin; **October 8** - reserve.
 
-Если до 27 сентября нет надёжного полного сценария, сокращать денежные механики и расширение источников, а не скрывать ошибки за анимацией. Демонстрация может ясно маркировать devnet; поддержку требуемого окружения и допустимость конкретного формата проверять по актуальным условиям. Не подменять рабочий Solana-сценарий роликом.
+If there is no reliable full scenario by September 27, cut the money mechanics and the expansion of sources, rather than hiding errors behind animation. The demo can clearly label devnet; check support for the required environment and the admissibility of a specific format against the current conditions. Do not replace a working Solana scenario with a video clip.
 
-## Что реально проверить
+## What to actually verify
 
-- Пять тестировщиков своими словами объясняют, относительно чего выигрывает UP, что значит таймер и сколько денег под риском.
-- Медиана и медленные случаи времени до первого действия; доля завершивших первый раунд; возвращение на вторую объявленную сессию.
-- Одновременные участники, перекос сторон, доля исполненной суммы и причины возвратов; эти показатели важнее числа регистраций.
-- Истёкшая сессия, повторный тап, потерянный ответ RPC, поздняя транзакция, повторный settlement/claim, офлайн и возврат из фона.
-- Равенство цен, редкие наблюдения, остановка пула, миграция и остановка keeper; средства не должны зависнуть без конечного пути возврата.
-- Денежные инварианты отдельно от покрытия инструкций: обязательства обеспечены; комиссии, резервы, rent и пользовательские деньги разведены; выплата не создаёт деньги; обновление сессии не обходит лимит.
+- Five testers explain in their own words what UP wins relative to, what the timer means and how much money is at risk.
+- Median and slow cases of time to first action; share of those who completed the first round; return for the second announced session.
+- Concurrent participants, side skew, share of the executed amount and reasons for refunds; these indicators matter more than the number of sign-ups.
+- Expired session, repeated tap, lost RPC response, late transaction, repeated settlement/claim, offline and return from background.
+- Equal prices, sparse observations, pool halt, migration and keeper stop; funds must not hang without a finite refund path.
+- Money invariants separately from instruction coverage: obligations are backed; fees, reserves, rent and user money are kept separate; a payout does not create money; a session renewal does not bypass the limit.
 
-Основная экономическая проверка - способен ли раунд пережить направленное влияние на цену при своём максимальном банке. Отсутствие аудита и низкий per-wallet cap не решают этот вопрос. Ставки на реальный рынок также не получают автоматического освобождения от правил финансовых продуктов/игр на деньги: [Publisher Policy](https://docs.solanamobile.com/dapp-store/publisher-policy) требует соблюдения применимых требований. Доступность магазина и допуск к конкурсу не равны допустимости денежной версии во всех странах.
+The main economic check is whether a round can survive directional influence on the price at its own maximum pot. The absence of an audit and a low per-wallet cap do not resolve this question. Bets on a real market also do not automatically get an exemption from the rules for financial products/money games: the [Publisher Policy](https://docs.solanamobile.com/dapp-store/publisher-policy) requires compliance with applicable requirements. Store availability and contest eligibility do not equal permissibility of the money version in all countries.
 
-**Демо для судей:** общий токен и два игрока на двух устройствах → разрешение на ограниченную сессию → вход без повторного кошелька → общее закрытие → понятный результат и onchain-транзакция → бесплатный Seeker-сценарий/приглашение → краткое объяснение источника цены. Главная продаваемая ценность - совместное решение на живом рынке; техническая архитектура подкрепляет его.
+**Demo for judges:** a shared token and two players on two devices → permission for a limited session → entry without a repeated wallet prompt → shared closing → a clear result and an onchain transaction → a free Seeker scenario/invitation → a brief explanation of the price source. The main selling value is a joint decision on a live market; the technical architecture supports it.

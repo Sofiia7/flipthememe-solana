@@ -4,7 +4,7 @@ Notes from the audit passes of 8 to 10 October. They describe the state at the t
 
 ## Audit revision, 10 October 2026
 
-The implementation of the requested audit changes is tracked in [the fix checklist, in Russian](audits/2026-10-10-fixes-ru.md). Source changes do not update an already installed APK or the deployed keeper. The APK build now produces a manifest binding the binary to its commit, dependency lock and program source files; deployed program bytes and physical-device acceptance are separate checks.
+The implementation of the requested audit changes is tracked in [the fix checklist](audits/2026-10-10-fixes.md). Source changes do not update an already installed APK or the deployed keeper. The APK build now produces a manifest binding the binary to its commit, dependency lock and program source files; deployed program bytes and physical-device acceptance are separate checks.
 
 Final positions are archived in signed, paginated per-wallet snapshots before this keeper closes player accounts. A claim update invalidates the publication acknowledgement; restart requires republication. Mobile restores the newest 500 archived results, retaining local history during network errors. Records already closed before indexing cannot be recovered by this mechanism. The public leaderboard reports chain indexing time independently of publication time.
 

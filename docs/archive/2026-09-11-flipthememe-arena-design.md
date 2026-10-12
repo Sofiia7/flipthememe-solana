@@ -1,237 +1,262 @@
 > Status: superseded on 2026-10-05 by [README.md](../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the pari-mutuel economics described here were replaced by the matched 1:1 bank, and the code described here is not current.
 
-# FlipTheMeme: общая арена и настраиваемые пиксельные лица
+# FlipTheMeme: a shared arena and customizable pixel faces
 
-> Для передачи в разработку использовать [DEVELOPMENT_BRIEF.md](DEVELOPMENT_BRIEF.md).
-> Он сводит решения в единое задание и уточняет критерии реализации.
+> For handoff to development, use [DEVELOPMENT_BRIEF.md](DEVELOPMENT_BRIEF.md).
+> It consolidates the decisions into a single assignment and refines the
+> implementation criteria.
 
-Дата: 11 сентября 2026. Текущая рабочая версия дизайна после обсуждения.
-Заменяет версию от 10 сентября с картой, колодой и индивидуальными матчами.
-Реализация ещё не начата. Настройки и численные параметры ниже - стартовые
-предложения для проверки, не результаты пользовательских тестов.
+Date: 11 September 2026. The current working version of the design after the
+discussion. Replaces the 10 September version with the map, the deck and
+individual matches. Implementation has not started. The settings and numeric
+parameters below are starting proposals to be tested, not results of user
+testing.
 
-## Зафиксировано пользователем
+## Fixed by the user
 
-- Подаёмся на CLOCK IN; запрос организаторам не является зависимостью работ.
-  Решение участвовать не означает, что организатор уже подтвердил eligibility.
-- Арбитрум исключён из календаря этой работы. Весь оставшийся срок - Solana.
-- Основная форма: одна общая арена с короткими раундами на свежие токены.
-- Предложения из разбора от 10 сентября в целом приняты, кроме внешности
-  аватаров. Шахматные/схематические фигурки не подходят.
-- Последнее уточнение: только ПИКСЕЛЬНЫЕ ЛИЦА в направлении Pixels и MattleFun.
-  Для фигур в полный рост на арене нет места. Настраиваются кожа, волосы,
-  лицо и аксессуары; одежда/тело исключены. Sims - референс только по
-  возможностям персонализации, не по отрисовке. Гладкий концепт отклонён.
-- Выбор между 1:1 и тотализатором поручен ассистенту.
+- We are applying to CLOCK IN; the request to the organizers is not a
+  dependency of the work. The decision to participate does not mean the
+  organizer has already confirmed eligibility.
+- Arbitrum is excluded from the calendar of this work. The whole remaining
+  time is Solana.
+- The main form: one shared arena with short rounds on fresh tokens.
+- The proposals from the 10 September review are accepted in general, except
+  the appearance of the avatars. Chess-like/schematic figurines do not fit.
+- The latest clarification: only PIXEL FACES in the direction of Pixels and
+  MattleFun. There is no room on the arena for full-length figures. Skin, hair,
+  face and accessories are customizable; clothing/body are excluded. Sims is a
+  reference only for personalization capabilities, not for rendering. The
+  smooth concept is rejected.
+- The choice between 1:1 and the pari-mutuel pool was delegated to the
+  assistant.
 
-## Выбор механики: тотализатор
+## Choice of mechanic: pari-mutuel
 
-Рекомендация - общий банк раунда. Все принятые ставки на UP и DOWN входят
-целиком; при наличии обеих сторон победившая сторона получает свои ставки
-обратно и делит проигравший банк пропорционально размерам своих ставок.
+The recommendation is a shared round pool. All accepted bets on UP and DOWN go
+in whole; when both sides are present, the winning side gets its stakes back
+and splits the losing pool in proportion to the sizes of its bets.
 
-Почему это подходит текущему продукту:
+Why this suits the current product:
 
-1. Суммы на двух сторонах не обязаны совпадать. Не нужно объяснять частичное
-   исполнение и постоянный возврат избытка одной стороны.
-2. Видимая толпа влияет на выплату: у меньшинства выше потенциальная выплата
-   на единицу ставки. Это делает выбор стороны содержательной частью арены.
-3. Не нужен дом как обязательный контрагент и не нужен его торговый банкролл.
-4. Программа рассчитывает один исход раунда, затем долю каждого игрока.
-   Уходят индивидуальные Order/Match, поиск пар и очереди.
+1. The amounts on the two sides do not have to match. There is no need to
+   explain partial fills and the constant refund of one side's excess.
+2. The visible crowd affects the payout: the minority has a higher potential
+   payout per unit of stake. This makes the choice of side a meaningful part of
+   the arena.
+3. No house is needed as a mandatory counterparty, and no trading bankroll for
+   it either.
+4. The program settles one round outcome, then each player's share. The
+   individual Order/Match, pair search and queues go away.
 
-Ранее предложенное сохранение 1:1 было мотивировано преемственностью старого
-матчинга. Для нового продукта с общей ареной приоритет - цельный игровой
-сценарий, поэтому рекомендация изменена.
+The earlier proposal to keep 1:1 was motivated by continuity with the old
+matching. For a new product with a shared arena the priority is a coherent game
+scenario, so the recommendation has changed.
 
-Не утверждаем, что тотализатор доказанно лучше удерживает аудиторию. Это
-выбор по свойствам механики и объёму первой версии. 1:1 подходит будущим
-личным дуэлям с согласованной суммой; в первую версию его не включаем.
+We do not claim that the pari-mutuel pool is proven to retain the audience
+better. This is a choice based on the properties of the mechanic and the scope
+of the first version. 1:1 suits future personal duels with an agreed amount; we
+do not include it in the first version.
 
-Известный референс самой математики общих банков -
+A known reference for the math of shared pools itself is
 [PancakeSwap Prediction](https://docs.pancakeswap.finance/play/prediction).
-Это не ориентир по размеру бизнеса, не обещание спроса и не новая конкурентная
-разведка. Собственная отстройка - свежие токены, совместный момент,
-Seeker-идентичность и персональные аватары.
+This is not a benchmark for business size, not a promise of demand and not new
+competitive intelligence. Our own differentiation is fresh tokens, a shared
+moment, Seeker identity and personal avatars.
 
-## Комиссия и понятная выплата
+## Fee and a clear payout
 
-Предлагается **1% с чистого выигрыша**, не со всего банка и не с возвращаемого
-тела ставки. На уровне раунда это 1% проигравшего банка. Это уточнение меняет
-базу комиссии по сравнению с примером 1% от всего банка в предыдущем разборе.
+The proposal is **1% of the net win**, not of the whole pool and not of the
+returned stake principal. At the round level this is 1% of the losing pool.
+This clarification changes the fee base compared with the example of 1% of the
+whole pool in the previous review.
 
-При победившем банке W, проигравшем L и ставке победителя s:
+With a winning pool W, a losing pool L and a winner's stake s:
 
-- fee = floor(L × fee_bps / 10_000), для предлагаемого 1% fee_bps = 100;
+- fee = floor(L × fee_bps / 10_000), for the proposed 1% fee_bps = 100;
 - prize = L − fee;
 - payout = s + floor(prize × s / W).
 
-Вычисления - целочисленные, с достаточно широким промежуточным типом. Комиссия
-фиксируется на уровне раунда один раз. Остатки округления учитываются явно;
-их правила вывода после закрытия всех обязательств нужно специфицировать.
+The computations are integer, with a sufficiently wide intermediate type. The
+fee is fixed at the round level once. Rounding remainders are accounted for
+explicitly; the rules for withdrawing them after all obligations are closed
+need to be specified.
 
-Пример окончательных банков: UP = 0,6 SOL, DOWN = 0,2 SOL.
+An example of final pools: UP = 0.6 SOL, DOWN = 0.2 SOL.
 
-| Исход | Комиссия | Выплата на единицу ставки | Выплата при ставке 0,01 SOL |
+| Outcome | Fee | Payout per unit of stake | Payout at a 0.01 SOL stake |
 |---|---:|---:|---:|
-| UP | 0,002 SOL | 1,33× | 0,0133 SOL |
-| DOWN | 0,006 SOL | 3,97× | 0,0397 SOL |
+| UP | 0.002 SOL | 1.33× | 0.0133 SOL |
+| DOWN | 0.006 SOL | 3.97× | 0.0397 SOL |
 
-Это суммы с возвращаемым телом ставки. Пример предполагает, что 0,01 SOL уже
-включены в итоговый банк выбранной стороны. Для предварительного расчёта UI
-добавляет новую ставку в выбранную сторону перед вычислением выплаты.
+These are amounts including the returned stake principal. The example assumes
+that the 0.01 SOL is already included in the final pool of the chosen side. For
+the preliminary calculation, the UI adds the new bet to the chosen side before
+computing the payout.
 
-Комиссия с прибыли предотвращает ситуацию, когда при крайнем перекосе
-правильный прогноз возвращает меньше тела ставки из-за комиссии с общего
-банка. При этом доход протокола ниже, чем при 1% всего банка; при равных
-сторонах он составляет 0,5% общего банка. Экономику RPC/расчёта/спонсирования
-транзакций нужно считать исходя из этой базы, не обещать окупаемость.
+A fee on profit prevents the situation where, with an extreme skew, a correct
+prediction returns less than the stake principal because of a fee on the whole
+pool. At the same time the protocol's income is lower than with 1% of the whole
+pool; with equal sides it is 0.5% of the total pool. The economics of
+RPC/settlement/transaction sponsoring must be computed from this base, and
+payback must not be promised.
 
-До закрытия показывать «выплата сейчас, если вход закроется с этим составом».
-После закрытия - окончательную выплату для каждого исхода. Нельзя обещать
-первому игроку коэффициент, который не меняется при последующих ставках.
-Процент денег на стороне не подписывается как вероятность исхода.
+Before closing, show "the payout now, if entry closes with this composition".
+After closing, show the final payout for each outcome. We must not promise the
+first player a multiplier that does not change with subsequent bets. The
+percentage of money on a side is not labeled as the probability of the outcome.
 
-## Границы раунда
+## Round boundaries
 
-Один источник пулов, одна валюта ставки SOL, одна длительность движения 60 с.
-Настройка длительности набора и ценовых окон - после проверки источника.
+One pool source, one bet currency SOL, one movement duration of 60 s. The
+tuning of the intake duration and the price windows comes after the source is
+verified.
 
-Последовательность:
+Sequence:
 
-1. Открыт приём ставок, видны банки сторон и предварительные выплаты.
-2. Приём закрывается по времени программы. Подтверждение запоздавших ставок
-   не переносит их в уже закрытый раунд. Они не становятся реальными по
-   одному только времени клиентского тапа.
-3. Проверяется наличие обеих сторон и фиксируется состав банков. При пустой
-   стороне раунд возвращает ставки без комиссии; неизвестная цена не нужна
-   для определения такого возврата.
-4. Формируется общая стартовая цена из заранее оговорённого окна ПОСЛЕ
-   прекращения приёма. Это не позволяет ставить на почти известный исход.
-5. Измеряется движение, в конце определяется итоговая цена.
-6. Фиксируется результат; по нему игроки получают выплату или возврат.
+1. Bet intake is open, the side pools and preliminary payouts are visible.
+2. Intake closes by the program's time. Confirmation of late bets does not move
+   them into the already closed round. They do not become real on the strength
+   of the client's tap time alone.
+3. The presence of both sides is checked and the composition of the pools is
+   fixed. If a side is empty, the round returns the bets without a fee; an
+   unknown price is not needed to determine such a refund.
+4. A shared start price is formed from a pre-agreed window AFTER intake stops.
+   This prevents betting on an almost known outcome.
+5. The movement is measured, and the final price is determined at the end.
+6. The result is fixed; based on it, players receive a payout or a refund.
 
-Одинаковая цена/оговорённая зона равенства, недостаток достоверных данных и
-истёкший предельный срок расчёта имеют заранее определённые правила возврата
-без комиссии. Обвал цены с валидными данными - обычный рыночный исход.
+An equal price/a stated tie zone, a lack of reliable data and an expired
+settlement deadline have predetermined refund rules without a fee. A price
+collapse with valid data is an ordinary market outcome.
 
-Одна оплаченная позиция на игрока в раунде в MVP. Изменение стороны, отмена
-после принятия и докупка позиции не входят в первую версию. Защита от
-повторного тапа и повтора сетевого запроса обязательна.
+One paid position per player per round in the MVP. Changing sides, cancelling
+after acceptance and topping up a position are not part of the first version.
+Protection against a repeated tap and a replayed network request is mandatory.
 
-Сохраняются ограничения бюджета сессии, per-bet cap и общий лимит банка
-раунда, связанный с устойчивостью используемого рынка. Малый per-wallet cap
-не является достаточной защитой от нескольких кошельков или влияния на цену.
+The session budget limits, the per-bet cap and the overall round pool limit
+tied to the resilience of the market in use are kept. A small per-wallet cap
+is not sufficient protection against multiple wallets or price impact.
 
-Тотализатор не создаёт людей на пустой стороне. Сначала нужны общий трафик,
-короткие объявленные сессии и бесплатные прогнозы в тех же событиях. Дом,
-фиктивные противники, скрытое засеивание банков и обещания постоянной
-ликвидности не входят в MVP.
+The pari-mutuel pool does not create people on an empty side. First we need
+shared traffic, short announced sessions and free predictions in the same
+events. A house, fake opponents, hidden seeding of pools and promises of
+permanent liquidity are not part of the MVP.
 
-## Onchain-состояние и обязанности сервера
+## Onchain state and server duties
 
-Рабочая схема для плана реализации:
+A working scheme for the implementation plan:
 
-- Vault: доступный баланс пользователя, разрешения сессии и лимиты.
-- Market: разрешённый источник/пул и конфигурация создания раундов.
-- Round: идентификатор, pool, open/lock/start/end/deadline, окна цены,
-  snapshot комиссии, total_up/total_down, P0/P1, исход, учёт выплат и возвратов.
+- Vault: the user's available balance, session permissions and limits.
+- Market: the allowed source/pool and the round-creation configuration.
+- Round: identifier, pool, open/lock/start/end/deadline, price windows, fee
+  snapshot, total_up/total_down, P0/P1, outcome, accounting of payouts and
+  refunds.
 - Position: round, authority, side, stake, claim/refund status.
-- Profile: отдельные неденежные данные внешности и проверенная идентичность.
+- Profile: separate non-monetary appearance data and verified identity.
 
-Никаких новых Order, Match, LP-экспозиций и SkrStake ради секторов карты.
-MWA - подключение, средства, выдача/отзыв разрешений. Игровой ключ - только
-допустимые программой действия в ограниченном бюджете, не вывод или повышение
-своих лимитов. Win не обнуляет счётчик расхода разрешения автоматически.
+No new Order, Match, LP exposures or SkrStake for the sake of map sectors.
+MWA is for connecting, funds, and issuing/revoking permissions. The game key
+may only perform actions the program allows within a limited budget, not
+withdraw or raise its own limits. A win does not reset the permission spend
+counter automatically.
 
-Keeper определяет допустимые рынки, обслуживает наблюдения и помогает расчёту.
-Если расчётная цена подписывается нашим сервером, доверие к нему явно
-обозначено. Пользовательский claim/refund должен иметь конечный путь, даже
-если основной keeper остановился. Закрытие времени и финальность выплат -
-разные состояния UI.
+The keeper determines the allowed markets, serves the observations and helps
+with settlement. If the settlement price is signed by our server, trust in it
+is stated explicitly. A user's claim/refund must have a finite path even if the
+main keeper has stopped. Time closure and payout finality are different UI
+states.
 
-## Аватары: только пиксельные лица
+## Avatars: pixel faces only
 
-Визуальное направление: выразительные пиксельные головы/лица, без тела,
-плеч, одежды и фигур в полный рост, включая редактор. Узнаваемые причёски,
-черты лица и аксессуары. Настоящие 2D pixel-art спрайты в направлении Pixels
-и MattleFun.
-Схематические шахматные фигурки из старого макета отклонены, но пиксельная
-стилистика остаётся обязательной. Гладкие 2.5D-иллюстрации, 3D, воксели и
-персонажи в визуальном стиле Sims не подходят.
+Visual direction: expressive pixel heads/faces, without a body, shoulders,
+clothing or full-length figures, including in the editor. Recognizable
+hairstyles, facial features and accessories. Real 2D pixel-art sprites in the
+direction of Pixels and MattleFun. The schematic chess-like figurines from the
+old mockup are rejected, but the pixel style remains mandatory. Smooth 2.5D
+illustrations, 3D, voxels and characters in the visual style of Sims do not
+fit.
 
-Предлагаемый первый набор:
+The proposed first set:
 
-- 6 тонов кожи;
-- 8 причёсок, включая короткие, длинные и кудрявые;
-- 6 цветов волос;
-- несколько вариантов лица и необязательные аксессуары.
+- 6 skin tones;
+- 8 hairstyles, including short, long and curly;
+- 6 hair colors;
+- several face variants and optional accessories.
 
-Числа - бюджетный ориентир; набор фиксируется после проверки совместимости
-слоёв. Не обещаем произвольную генерацию на лету или тысячи проверенных
-комбинаций. Причёски и аксессуары не ограничиваем выбором пола.
+The numbers are a budget guideline; the set is fixed after the layer
+compatibility is checked. We do not promise arbitrary on-the-fly generation or
+thousands of verified combinations. We do not restrict hairstyles and
+accessories by gender choice.
 
-Базовая внешность бесплатная. Изменение цвета кожи не является наградой или
-платной опцией. Возможная SKR-полезность позже - дополнительные головные
-аксессуары, рамки и реакции; внешний вид не влияет на коэффициент или шанс
-победы. Магазин одежды не нужен, поскольку тела не показываются.
+The base appearance is free. Changing the skin color is not a reward or a paid
+option. A possible SKR utility later is additional head accessories, frames and
+reactions; the look does not affect the multiplier or the chance of winning. A
+clothing shop is not needed, since bodies are not shown.
 
-Техническое предложение: квадратное 2D pixel-art лицо из совместимых слоёв:
-задние волосы → форма лица/кожа → глаза/брови/рот → передние волосы → аксессуары.
-Первый пробный размер спрайта - 24×24 или 32×32 пикселя; окончательный размер
-выбираем по читаемости на арене. Требуются общие размеры, точки совмещения, палитры и
-проверка перекрытий. Масштабирование целыми множителями без сглаживания,
-чёткая пиксельная сетка. В редакторе тот же портрет показывается крупнее.
-Полнофигурные спрайты и анимации ходьбы не разрабатываем.
+Technical proposal: a square 2D pixel-art face made of compatible layers:
+back hair → face shape/skin → eyes/eyebrows/mouth → front hair → accessories.
+The first trial sprite size is 24×24 or 32×32 pixels; we choose the final size
+by legibility on the arena. Shared dimensions, anchor points, palettes and
+overlap checks are required. Scaling by integer multiples without smoothing, a
+crisp pixel grid. In the editor the same portrait is shown larger. We do not
+develop full-figure sprites or walking animations.
 
-Состояние внешности - компактный набор идентификаторов и цветов, связанный
-с подписанным профилем кошелька. Минт NFT и транзакция при каждой смене волос
-не нужны. .skr-имя и проверка SGT - отдельные свойства профиля.
+The appearance state is a compact set of identifiers and colors tied to the
+wallet's signed profile. Minting an NFT and a transaction on every hair change
+are not needed. The .skr name and the SGT check are separate profile
+properties.
 
-Вход в редактор - через профиль. При первом запуске предлагается готовый
-образ с кнопкой «Настроить», выбор можно отложить и сразу смотреть раунд.
+Entry to the editor is through the profile. On first launch a ready-made look
+is offered with a "Customize" button; the choice can be postponed and the
+round watched right away.
 
-## Лица на арене
+## Faces on the arena
 
-- Лицо сохраняет внешность при смене стороны в следующем раунде.
-  UP/DOWN кодируются группой и маркером, а не перекраской кожи или волос.
-- Принятая позиция добавляет портрет в группу соответствующей стороны.
-  Ожидающая транзакция не изображается принятой ставкой.
-- Компактная строка: лицо + .skr-имя + сумма. Свой портрет выделен маркером.
-- Две компактные группы под графиком; крупный центр экрана остаётся графику.
-- Реакция на исход - маленькая эмоция/смена выражения, без движения фигур.
-- При большом числе игроков приоритет у себя и друзей; остальных объединяем
-  счётчиком. Нет трибун с фигурами или обязательного пространства для ходьбы.
-- Эмоции ограничены готовым набором и частотой. Свободный чат не входит в MVP.
-- Звук, вибрация и декоративные движения отключаемы.
+- A face keeps its appearance when the side changes in the next round.
+  UP/DOWN are encoded by group and marker, not by recoloring skin or hair.
+- An accepted position adds the portrait to the group of the corresponding
+  side. A pending transaction is not shown as an accepted bet.
+- A compact row: face + .skr name + amount. One's own portrait is highlighted
+  with a marker.
+- Two compact groups under the chart; the large center of the screen stays
+  with the chart.
+- The reaction to the outcome is a small emotion/change of expression, without
+  figures moving.
+- With a large number of players, priority goes to oneself and friends; the
+  rest are merged into a counter. There are no stands with figures and no
+  mandatory space for walking.
+- Emotes are limited to a ready-made set and by frequency. Free chat is not
+  part of the MVP.
+- Sound, vibration and decorative motion can be turned off.
 
-## Остальной согласованный объём
+## The rest of the agreed scope
 
-Одна арена, баланс/история, профиль/редактор лица. Бесплатные прогнозы в тех же
-событиях, SGT-проверка по уникальному mint, разрешение .skr, системный Share,
-карточка результата. Приглашение открывает актуальную сессию/следующий раунд.
+One arena, balance/history, profile/face editor. Free predictions in the same
+events, SGT check by a unique mint, .skr resolution, the system Share, a
+result card. An invitation opens the current session/next round.
 
-Новая ставка всегда отдельным действием. Автоперенос выигрыша в ставку,
-cashout посреди раунда, карта, колода, рилсы, отдельная SKR-комната, 16 бейджей
-и внешние LP-депозиты исключены. SKR-косметика после готового ядра; не вводить
-новый стейкинг ради необязательной фичи.
+A new bet is always a separate action. Auto-rollover of winnings into a bet,
+mid-round cashout, the map, the deck, reels, a separate SKR room, 16 badges
+and external LP deposits are excluded. SKR cosmetics come after the core is
+ready; do not introduce new staking for the sake of an optional feature.
 
-## Календарь без паузы на Арбитрум
+## Calendar without a pause for Arbitrum
 
-| Срок | Результат |
+| Period | Result |
 |---|---|
-| 11-14 сентября | Android APK, MWA, выбранный источник цены; кликабельная арена, первый тест слоёв лица |
-| 15-21 сентября | Полный devnet-сценарий тотализатора: депозит, ставка, закрытие, цена, claim/refund, история |
-| 22-28 сентября | Редактор пиксельного лица, .skr/SGT, бесплатный режим, общие сессии с небольшой группой |
-| 29 сентября - 3 октября | Сетевые ошибки, лимиты, мобильная полировка, Share, косметика SKR при готовом ядре |
-| 4-6 октября | Финальный APK, воспроизводимая сборка, демо и презентация, подача |
-| 7-8 октября | Запас на исправления и технические проблемы подачи |
+| 11-14 September | Android APK, MWA, the chosen price source; a clickable arena, a first test of the face layers |
+| 15-21 September | The full devnet pari-mutuel scenario: deposit, bet, closing, price, claim/refund, history |
+| 22-28 September | The pixel face editor, .skr/SGT, free mode, shared sessions with a small group |
+| 29 September - 3 October | Network errors, limits, mobile polish, Share, SKR cosmetics if the core is ready |
+| 4-6 October | Final APK, reproducible build, demo and presentation, submission |
+| 7-8 October | A reserve for fixes and technical problems with the submission |
 
-Контрольные вопросы: понимают ли люди плавающую выплату; сколько раундов
-отменяются из-за пустой стороны; возвращаются ли игроки без денежных наград;
-видят ли свой образ и друзей на арене; проходит ли весь денежный сценарий
-при пропадании сети и перезапуске приложения.
+Control questions: do people understand a floating payout; how many rounds are
+cancelled because of an empty side; do players come back without monetary
+rewards; do they see their own look and their friends on the arena; does the
+whole money scenario survive a network loss and an app restart.
 
-Сначала проверяем работающий продукт на реальном Android. Публичный mainnet
-приём средств - отдельный шаг после проверки выбранной экономики, источника
-цены и готовности денежной программы, не следствие создания этого документа.
+First we test a working product on a real Android device. Accepting public
+mainnet funds is a separate step after the chosen economics, the price source
+and the readiness of the money program have been verified, not a consequence of
+creating this document.

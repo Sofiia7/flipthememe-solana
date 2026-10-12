@@ -1,272 +1,276 @@
 > Status: superseded on 2026-10-05 by [README.md](../../README.md) and [2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; the economics and code described here are not current.
 
-# FlipTheMeme на Solana: мобильная заявка на Clock In
+# FlipTheMeme on Solana: a mobile entry for Clock In
 
-> Архивная версия. Решения об арене, тотализаторе, персонализации аватаров и
-> календаре без Арбитрума отражены в
-> [дизайне от 11 сентября](2026-09-11-flipthememe-arena-design.md).
-> Текст ниже сохранён как история предыдущего дизайна.
+> Archived version. The decisions on the arena, the pari-mutuel pool, avatar
+> personalization and the calendar without Arbitrum are reflected in the
+> [design of 11 September](2026-09-11-flipthememe-arena-design.md).
+> The text below is kept as the history of the previous design.
 
-Дата: 2026-09-10. Статус: дизайн согласован, план реализации ещё не написан.
+Date: 2026-09-10. Status: design agreed, implementation plan not yet written.
 
-## 1. Что и зачем
+## 1. What and why
 
-Android-приложение для Solana dApp Store: непрерывный PvP up/down на свежие
-токены солановских лаунчпадов, поданный как бродилка по карте. Заявка на
-хакатон Clock In (Solana Mobile и Radiants DAO), приём работ до 8 октября
-2026, результаты 10 ноября.
+An Android app for the Solana dApp Store: continuous PvP up/down on fresh
+tokens from Solana launchpads, presented as a walk around a map. An entry for
+the Clock In hackathon (Solana Mobile and Radiants DAO), submissions accepted
+until 8 October 2026, results on 10 November.
 
-Продуктовый тезис переносится из пивота на Robinhood Chain дословно и на
-Solana звучит сильнее: **на цепочке, где тысячи токенов в день, с токеном
-можно сделать ровно одно, купить его.** Ни зашортить градуацию, ни
-захеджировать мешок, ни поспорить «выстрелит или сдуется за минуту» без
-покупки самого токена нельзя.
+The product thesis carries over from the Robinhood Chain pivot word for word
+and sounds stronger on Solana: **on a chain with thousands of tokens a day,
+there is exactly one thing you can do with a token: buy it.** You cannot short
+a graduation, hedge a bag, or bet "it will pump or fizzle within a minute"
+without buying the token itself.
 
-## 2. Жёсткие требования хакатона
+## 2. Hard hackathon requirements
 
-Проверены на странице правил `solanamobile.radiant.nexus`, не по письму.
+Checked on the rules page `solanamobile.radiant.nexus`, not from the announcement.
 
-- Только Android, обязателен работающий APK.
-- Обязательны Solana Mobile Stack и Mobile Wallet Adapter.
-- Мобильный дизайн с нуля. Прямые порты и PWA-обёртки «will score poorly».
-- Осмысленное взаимодействие с сетью Solana.
-- Сдать: APK, репозиторий с исходниками, демо-видео на три минуты, питч-дек.
-- Должно запускаться на живом устройстве, не только в эмуляторе.
-- Одна заявка на участника.
-- USDC-призы только командам без VC и ангельских денег.
-- KYC через Sumsub, список eligible countries.
-- Публикация в dApp Store не нужна к дедлайну, только победителям в течение
-  30 дней после объявления.
+- Android only, a working APK is required.
+- Solana Mobile Stack and Mobile Wallet Adapter are required.
+- Mobile design from scratch. Direct ports and PWA wrappers "will score poorly".
+- Meaningful interaction with the Solana network.
+- To submit: APK, repository with sources, a three-minute demo video, a pitch deck.
+- Must run on a live device, not only in an emulator.
+- One entry per participant.
+- USDC prizes only for teams without VC or angel money.
+- KYC through Sumsub, a list of eligible countries.
+- Publication in the dApp Store is not needed by the deadline, only for winners
+  within 30 days after the announcement.
 
-Критерии, по 25% каждый: цепкость и PMF у Seeker-аудитории, UX,
-инновационность, качество презентации. Отдельного пункта за техническую
-сложность нет.
+Criteria, 25% each: stickiness and PMF with the Seeker audience, UX,
+innovation, quality of presentation. There is no separate item for technical
+complexity.
 
-Отдельный приз: $10 000 в SKR за творческую и осмысленную интеграцию SKR.
+A separate prize: $10,000 in SKR for a creative and meaningful SKR integration.
 
-## 3. Что показала разведка магазина
+## 3. What the store reconnaissance showed
 
-Каталог выгружен через `seekertracker.com/api/dappstore`, 1361 активное
-приложение. Рейтинг без числа отзывов бесполезен: у половины «пятёрок»
-один-два отзыва.
+The catalog was exported through `seekertracker.com/api/dappstore`, 1361 active
+apps. A rating without a review count is useless: half of the "five-star" apps
+have one or two reviews.
 
-- Серьёзные торговые инструменты на телефоне мертвы. Manic.Trade
-  («предскажи цену за 1-5 минут, плечо 1-100x»), то есть буквально наша
-  механика в виде профессионального продукта, имеет 5 отзывов. Снайперы,
-  сигналы, стаканы, перпы, опционы, prediction DEX-ы: все ниже 40.
-- Игровые и свайповые прогнозы живут: Klout 776, Chartz 527, Polyswipe 439,
-  TBD 407, Vibe Predict 374, PredictTok 247. Рейтинги 3.5-3.9, планка низкая.
-- Витрина Top Picks, куда попадают победители хакатона, состоит из семи
-  приложений с медианой 3693 отзыва против 41 в категории DeFi & Trading.
+- Serious trading tools on the phone are dead. Manic.Trade
+  ("predict the price in 1-5 minutes, 1-100x leverage"), that is, literally our
+  mechanic as a professional product, has 5 reviews. Snipers, signals, order
+  books, perps, options, prediction DEXes: all below 40.
+- Game-like and swipe-style predictions are alive: Klout 776, Chartz 527,
+  Polyswipe 439, TBD 407, Vibe Predict 374, PredictTok 247. Ratings 3.5-3.9,
+  the bar is low.
+- The Top Picks showcase, where hackathon winners end up, consists of seven
+  apps with a median of 3693 reviews versus 41 in the DeFi & Trading category.
 
-Вывод, определяющий дизайн: **аудитория Seeker не торгует с телефона всерьёз,
-она играет.** Поэтому продукт подаётся как игра с настоящим ончейн-расчётом,
-а не как терминал.
+The conclusion that determines the design: **the Seeker audience does not trade
+seriously from a phone, it plays.** So the product is presented as a game with
+real onchain settlement, not as a terminal.
 
-## 4. Принятые решения
+## 4. Decisions made
 
-| Решение | Выбор | Почему |
+| Decision | Choice | Why |
 |---|---|---|
-| Форма основного экрана | Карта-лайт плюс колода как быстрый режим | Карта даёт лицо продукта и цепкость, колода даёт «играть можно за пять секунд» для демо |
-| Экран ставки | Дуэль с видимым соперником | Рынок и так PvP. Ни одно из 27 приложений-конкурентов этого не показывает |
-| Ходьба по карте | Тап и мгновенный переезд анимацией | Полная бродилка с путями, туманом и тратой времени съедает бюджет полировки, а UX это 25% оценки |
-| Подпись ставок | Сессионный ключ | MWA уводит в кошелёк на каждую подпись, это убивает минутную игру |
-| Валюта ставки | SOL | Единица счёта аудитории, глубокая ликвидность, нативные лампорты |
-| Роль SKR | Стейк открывает секторы карты | SKR даёт то, чего за SOL не купишь, и связан именно с главной механикой |
+| Form of the main screen | Map-lite plus a deck as the quick mode | The map gives the product a face and stickiness, the deck gives "you can play in five seconds" for the demo |
+| Bet screen | A duel with a visible opponent | The market is PvP anyway. None of the 27 competing apps shows this |
+| Walking on the map | Tap and an instant animated transfer | A full walking game with paths, fog and time cost eats the polish budget, and UX is 25% of the score |
+| Signing bets | Session key | MWA sends the user to the wallet for every signature, which kills a one-minute game |
+| Bet currency | SOL | The audience's unit of account, deep liquidity, native lamports |
+| Role of SKR | Staking opens map sectors | SKR gives what cannot be bought for SOL, and is tied specifically to the main mechanic |
 
-### 4.1 Почему сессионный ключ это не обход требования
+### 4.1 Why the session key is not a way around the requirement
 
-Проверено 2026-09-10:
+Checked on 2026-09-10:
 
-- У Solana есть собственный гайд
-  `solana.com/developers/guides/advanced/auto-approve`, где сессионные ключи
-  названы рекомендуемым решением, со ссылкой на крейт MagicBlock.
-- Программа живёт на мейннете: `getAccountInfo` по адресу
-  `KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5` отдаёт `executable = true`,
-  владелец BPF Upgradeable Loader.
-- Крейт `session-keys` версии 3.1.1, опубликован 2026-05-26, 29 526 загрузок,
-  лицензия MIT, репозиторий `magicblock-labs/session-keys` не заброшен.
-- Скоуп задаётся по целевой программе, сроку жизни, максимуму трат и числу
-  транзакций.
+- Solana has its own guide
+  `solana.com/developers/guides/advanced/auto-approve`, where session keys are
+  named as the recommended solution, with a link to the MagicBlock crate.
+- The program lives on mainnet: `getAccountInfo` at the address
+  `KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5` returns `executable = true`,
+  owner BPF Upgradeable Loader.
+- The `session-keys` crate version 3.1.1, published 2026-05-26, 29,526
+  downloads, MIT license, the repository `magicblock-labs/session-keys` is not
+  abandoned.
+- The scope is set by the target program, lifetime, maximum spend and number of
+  transactions.
 
-Не подтверждено: аудит, совместимость с конкретной версией Anchor, обёртка
-под React Native. Первая сторона интегрировала это в Unity SDK.
+Not confirmed: an audit, compatibility with the specific Anchor version, a
+wrapper for React Native. The first party integrated this into the Unity SDK.
 
-MWA при этом используется на всё, что касается денег и разрешений:
-подключение, открытие хранилища, пополнение, старт сессии, отзыв сессии,
-вывод, стейк SKR. Сессионным ключом подписывается только `place_bet`.
+MWA is still used for everything that concerns money and permissions:
+connecting, opening the vault, topping up, starting a session, revoking a
+session, withdrawing, staking SKR. Only `place_bet` is signed with the session
+key.
 
-**Радиус поражения ограничен нашим же кодом.** Деньги лежат в нашей PDA-
-хранилке, лимиты проверяет наша программа. Сессионная программа отвечает
-только на вопрос «этот эфемерный ключ авторизован этим пользователем для этой
-программы и не протух».
+**The blast radius is limited by our own code.** The money sits in our own PDA
+vault, and the limits are checked by our program. The session program only
+answers the question "is this ephemeral key authorized by this user for this
+program and not expired".
 
-Запасной путь, если крейт подерётся с версией Anchor: сессионный PDA внутри
-нашей программы, примерно 150 строк. Дизайн не меняется, из питча уходит
-только строчка про взятый стандарт.
+Fallback if the crate clashes with the Anchor version: a session PDA inside
+our program, about 150 lines. The design does not change, only the line in the
+pitch about the adopted standard goes away.
 
-## 5. Границы
+## 5. Boundaries
 
-### Едет
+### Ships
 
-- Программа на Anchor: хранилище, рынки, ордера и матчи, сеттлмент, стейк SKR.
-- Приложение на Expo: карта, колода, дуэль, хранилище, профиль с бейджами.
-- Кипер и API: детект пулов, рагчек-гейт, создание рынков, батч-сеттлмент,
-  пуш-уведомления.
-- Игровой слой: шестнадцать бейджей, серия, глубина.
+- An Anchor program: vault, markets, orders and matches, settlement, SKR stake.
+- An Expo app: map, deck, duel, vault, profile with badges.
+- Keeper and API: pool detection, rug-check gate, market creation, batch
+  settlement, push notifications.
+- The game layer: sixteen badges, streak, depth.
 
-### Не едет, осознанно
+### Does not ship, deliberately
 
-LP-пул для посторонних вкладчиков (наш собственный кошелёк как контрагент да,
-чужие депозиты нет), рефералка, Genesis NFT, iOS, аудит, несколько источников
-пулов одновременно, вывод в фиат.
+An LP pool for outside depositors (our own wallet as a counterparty yes,
+other people's deposits no), referrals, Genesis NFT, iOS, an audit, several
+pool sources at the same time, withdrawal to fiat.
 
-## 6. Архитектура
+## 6. Architecture
 
-Три части с чёткими границами.
+Three parts with clear boundaries.
 
-### 6.1 Программа на Anchor
+### 6.1 The Anchor program
 
-Счета:
+Accounts:
 
-- `Vault` (PDA на игрока): баланс в лампортах, `session_pubkey`,
+- `Vault` (PDA per player): balance in lamports, `session_pubkey`,
   `session_expiry`, `max_per_bet`, `session_cap`, `spent_in_session`.
-- `Market` (PDA на пару пул и длительность): адрес пула, длительность,
-  снимок `fee_bps` на момент создания, флаг паузы.
-- `Order` и `Match`: сторона, размер, цена входа, `settle_at`.
-- `SkrStake` (PDA на игрока): сумма стейка, из неё выводится число открытых
-  секторов. Сколько секторов всего, сколько SKR стоит каждый следующий и
-  сколько локаций видно в секторе, это параметры баланса игры, а не дизайна.
-  Они настраиваются на неделе 28 сентября, когда карта уже играется, и
-  задаются так, чтобы нулевой стейк оставался играбельным: SKR расширяет
-  обзор, а не открывает доступ.
+- `Market` (PDA per pair of pool and duration): pool address, duration, a
+  snapshot of `fee_bps` at the moment of creation, pause flag.
+- `Order` and `Match`: side, size, entry price, `settle_at`.
+- `SkrStake` (PDA per player): stake amount, from which the number of open
+  sectors is derived. How many sectors there are in total, how much SKR each
+  next one costs and how many locations are visible in a sector are game
+  balance parameters, not design ones. They are tuned in the week of 28
+  September, when the map is already playable, and are set so that a zero
+  stake stays playable: SKR widens the view, it does not unlock access.
 
-Инструкции через MWA: `open_vault`, `deposit`, `withdraw`, `start_session`,
+Instructions through MWA: `open_vault`, `deposit`, `withdraw`, `start_session`,
 `revoke_session`, `stake_skr`, `unstake_skr`.
 
-Инструкции без MWA: `create_market` (permissionless, с гейтами),
-`place_bet` (подпись сессионным ключом), `settle_match` и его батч-вариант,
-`refund_unmatched`.
+Instructions without MWA: `create_market` (permissionless, with gates),
+`place_bet` (signed with the session key), `settle_match` and its batch
+variant, `refund_unmatched`.
 
-Инварианты, которые программа обязана держать всегда:
+Invariants the program must hold at all times:
 
-1. Рейк не выше 1%, потолок константой в коде.
-2. Ставка не выше `max_per_bet`.
-3. `spent_in_session` не выше `session_cap`.
-4. Сессия не истекла.
-5. Хранилище не уходит в минус.
-6. Экспозиция LP не выше 5% на рынок и 10% суммарно.
-7. Сумма хранилищ и эскроу равна балансу программы.
+1. Rake no higher than 1%, the ceiling is a constant in the code.
+2. A bet no higher than `max_per_bet`.
+3. `spent_in_session` no higher than `session_cap`.
+4. The session has not expired.
+5. The vault does not go negative.
+6. LP exposure no higher than 5% per market and 10% in total.
+7. The sum of vaults and escrow equals the program balance.
 
-Границы ставки: `MIN_BET` и `MAX_BET` константами в коде. На Base и Robinhood
-Chain нижнюю границу задавал газ сеттлмента, на Solana он копеечный, поэтому
-`MIN_BET` становится продуктовым решением, а не техническим. `MAX_BET`
-ставится намеренно низким по той же логике, что и на Base: продукт не
-проходил аудит, и это должно быть видно в интерфейсе, а не только в тексте.
-Конкретные числа выбираются на неделе 21-28 сентября, когда будет понятна
-типичная ликвидность пулов, попадающих в игру.
+Bet limits: `MIN_BET` and `MAX_BET` as constants in the code. On Base and
+Robinhood Chain the lower bound was set by the settlement gas, on Solana it is
+pennies, so `MIN_BET` becomes a product decision, not a technical one.
+`MAX_BET` is deliberately set low by the same logic as on Base: the product has
+not been audited, and this must be visible in the interface, not only in the
+text. The specific numbers are chosen in the week of 21-28 September, when the
+typical liquidity of the pools that enter the game becomes clear.
 
-### 6.2 Кипер и API
+### 6.2 Keeper and API
 
-Переезжает из `meteora_early_mem` и `mem_caller` почти без переписывания:
+Moves over from `meteora_early_mem` and `mem_caller` almost without rewriting:
 
-- Вотчер новых пулов через Helius, детект за 60-180 секунд.
-- Гейт: mint и freeze authority отозваны, ликвидность заблокирована,
-  деплоер не в чёрном списке, минимальная ликвидность, минимальный возраст.
-- `create_market` для прошедших гейт.
-- Батч-сеттлмент.
-- Пуш-уведомления через Expo.
-- Read API для приложения: живые пулы, состояние игрока.
+- A watcher for new pools through Helius, detection in 60-180 seconds.
+- Gate: mint and freeze authority revoked, liquidity locked, the deployer is
+  not blacklisted, minimum liquidity, minimum age.
+- `create_market` for those that pass the gate.
+- Batch settlement.
+- Push notifications through Expo.
+- A read API for the app: live pools, player state.
 
-### 6.3 Приложение
+### 6.3 The app
 
-Expo и React Native. MWA для денег и разрешений, сессионный ключ в Android
-Keystore для игры. Пять экранов: карта, колода, дуэль, хранилище, профиль.
+Expo and React Native. MWA for money and permissions, the session key in
+Android Keystore for play. Five screens: map, deck, duel, vault, profile.
 
-### 6.4 Жизненный цикл ставки
+### 6.4 Lifecycle of a bet
 
-Новый пул проходит рагчек и получает рынок, локация всплывает в открытом
-секторе карты, игрок тапает и попадает в дуэль, ставка подписывается
-сессионным ключом без выхода в кошелёк, матчинг находит соперника,
-фиксируется цена входа, через 60 секунд кипер закрывает матч батчем, рейк 1%,
-выплата падает в хранилище, прилетает пуш.
+A new pool passes the rug check and gets a market, a location pops up in an
+open sector of the map, the player taps and enters the duel, the bet is signed
+with the session key without leaving for the wallet, matching finds an
+opponent, the entry price is fixed, after 60 seconds the keeper closes the
+match in a batch, 1% rake, the payout lands in the vault, a push arrives.
 
-## 7. Холодный старт
+## 7. Cold start
 
-Переносится из существующего решения на Base без изменений. Три слоя
-матчинга, каждый следующий включается, если предыдущий не сработал:
+Carried over from the existing Base solution unchanged. Three matching layers,
+each next one switches on if the previous one did not work:
 
-1. Ордербук, ищем живого соперника 60 секунд. Лучший UX, риска нет.
-2. LP-пул как контрагент, максимум 5% депозита на рынок и 10% суммарно.
-3. Очередь пять минут с уведомлением, затем автоматический возврат.
+1. Order book, we look for a live opponent for 60 seconds. The best UX, no risk.
+2. The LP pool as a counterparty, at most 5% of the deposit per market and 10%
+   in total.
+3. A five-minute queue with a notification, then an automatic refund.
 
-Это то, что делает дуэль честной с первого дня: соперник находится всегда.
+This is what makes the duel fair from day one: an opponent is always found.
 
-## 8. Открытый пункт первого дня: источник цены
+## 8. Open item for day one: the price source
 
-Спот брать нельзя: свежий пул на $20K двигается за секунды, и минутная ставка
-превращается в тир по своей же ноге. На Robinhood Chain это решено через
-TWAP из `observe()` самого пула.
+Spot cannot be used: a fresh $20K pool moves in seconds, and a one-minute bet
+turns into shooting yourself in the foot. On Robinhood Chain this is solved
+through a TWAP from the pool's own `observe()`.
 
-Солановский аналог надо подтвердить кодом на живых пулах, а не по памяти.
-Кандидаты: аккаунты-обсервации Meteora DLMM и Raydium CLMM. Проверить надо
-конкретно: какое окно они реально дают на пуле возрастом четыре минуты, и не
-надо ли его предварительно расширять, как `increaseObservationCardinalityNext`
-на Uniswap v3.
+The Solana analogue has to be confirmed with code on live pools, not from
+memory. Candidates: the observation accounts of Meteora DLMM and Raydium CLMM.
+What specifically needs checking: what window they actually give on a pool four
+minutes old, and whether it has to be widened beforehand, like
+`increaseObservationCardinalityNext` on Uniswap v3.
 
-Запасной путь, уже записанный в дизайне Robinhood Chain как фаза 2: TWAP
-считает кипер по событиям свопа и подаёт в сеттлмент подписью.
+The fallback, already written into the Robinhood Chain design as phase 2: the
+keeper computes the TWAP from swap events and submits it to settlement with a
+signature.
 
-**От этого пункта зависит, какой источник пулов мы берём, поэтому он делается
-первым.**
+**Which pool source we take depends on this item, so it is done first.**
 
-## 9. Пути, где ломается баланс
+## 9. Paths where the balance breaks
 
-Каждый обязателен к тесту, все уже реализованы и протестированы на Base:
+Each one must be tested, all are already implemented and tested on Base:
 
-- Соперник не нашёлся за 60 секунд.
-- LP на капе, очередь истекла, нужен возврат.
-- Пул умер посреди матча и цену не прочитать.
-- Цена дёрнулась за пределы допустимого спреда.
-- Сессия истекла между тапом и подтверждением.
-- Игрок ушёл в офлайн после подписи. Ставка считается реальной только после
-  подтверждения транзакции, до этого экран показывает ожидание.
+- No opponent was found within 60 seconds.
+- LP at the cap, the queue expired, a refund is needed.
+- The pool died in the middle of a match and the price cannot be read.
+- The price jumped beyond the allowed spread.
+- The session expired between the tap and the confirmation.
+- The player went offline after signing. A bet counts as real only after the
+  transaction is confirmed, until then the screen shows waiting.
 
-## 10. Приёмка
+## 10. Acceptance
 
-- Тесты Anchor на каждую инструкцию.
-- Денежный инвариант отдельным тестом.
-- Соук двумя ботами на девнете, как на Base.
-- Обязательный прогон на живом Android. Правила: видео, по которому нельзя
-  установить, не считается заявкой.
+- Anchor tests for every instruction.
+- The money invariant as a separate test.
+- A soak with two bots on devnet, as on Base.
+- A mandatory run on a live Android device. Rules: a video from which the app
+  cannot be installed does not count as an entry.
 
-## 11. Календарь
+## 11. Calendar
 
-| Когда | Что |
+| When | What |
 |---|---|
-| 10-13 сентября | Подтвердить источник цены на живых пулах, поднять скелет программы |
-| 14-21 сентября | Неделя Arbitrum Open House. Solana стоит. Подать сразу в конце недели |
-| 21-28 сентября | Программа и кипер до зелёных тестов на девнете |
-| 28 сентября - 5 октября | Приложение: карта, дуэль, хранилище, бейджи, SKR |
-| 5-8 октября | Живое устройство, соук, демо-видео, дек, подача |
+| 10-13 September | Confirm the price source on live pools, stand up the program skeleton |
+| 14-21 September | Arbitrum Open House week. Solana stands still. Submit right at the end of the week |
+| 21-28 September | Program and keeper to green tests on devnet |
+| 28 September - 5 October | The app: map, duel, vault, badges, SKR |
+| 5-8 October | Live device, soak, demo video, deck, submission |
 
-## 12. Что делает София сама
+## 12. What Sofia does herself
 
-1. Регистрация на Align и проверка, что её страна в списке eligible countries.
-2. Решение по доступу к репозиторию: публичный или по приглашению. Судьи
-   смотрят историю коммитов.
-3. Подача заявки на Arbitrum Open House в конце недели 14-21 сентября.
+1. Register on Align and check that her country is on the eligible countries list.
+2. Decide on repository access: public or by invitation. Judges look at the
+   commit history.
+3. Submit the Arbitrum Open House application at the end of the 14-21 September week.
 
-## 13. Риски
+## 13. Risks
 
-1. **Источник цены может не найтись** в удобном виде ни у Meteora, ни у
-   Raydium. Тогда кипер считает TWAP сам, и это добавляет ему доверия, которое
-   надо честно сказать в UI.
-2. **Три недели соло на программу, приложение, видео и дек.** Резерва нет.
-   Первое, что режется при отставании, это карта: колода и дуэль остаются
-   работающим продуктом сами по себе.
-3. **Крейт сессионных ключей тихий**, последняя активность 26 мая 2026.
-   Запасной путь описан в 4.1.
-4. **Категория забита**: 27 приложений с прогнозами. Отстройка держится на
-   том, что у конкурентов симуляция и очки, а у нас настоящий ончейн-расчёт,
-   некастодиальность и видимый соперник.
+1. **A price source may not be found** in a convenient form at either Meteora
+   or Raydium. Then the keeper computes the TWAP itself, and this adds trust in
+   it that has to be stated honestly in the UI.
+2. **Three weeks solo on the program, the app, the video and the deck.** There
+   is no reserve. The first thing cut if we fall behind is the map: the deck and
+   the duel remain a working product on their own.
+3. **The session-key crate is quiet**, last activity 26 May 2026. The fallback
+   is described in 4.1.
+4. **The category is crowded**: 27 prediction apps. The differentiation rests
+   on the fact that competitors have simulation and points, while we have real
+   onchain settlement, non-custody and a visible opponent.

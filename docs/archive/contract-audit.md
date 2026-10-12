@@ -1,45 +1,45 @@
 > Status: superseded on 2026-10-05 by [README.md](../../README.md) and [docs/superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md](../superpowers/specs/2026-10-05-flipthememe-solana-hackathon-build-design.md). Kept for history; it reviews the September program draft (`MOCK_ONLY`, `lock_round` / `activate_round`, `settle_round` with two prices, the example program id), which was replaced. The later review notes (5 and 6 October 2026) were local working notes and are not part of the repository.
 
-# Статический аудит - 15 сентября 2026
+# Static audit - 15 September 2026
 
-**Граница проверки.** Это внутренний аудит исходного кода, не независимое заключение и не разрешение принимать деньги. Проверены `programs/flip-the-meme/src/lib.rs`, модель `packages/arena-core`, keeper и экран mobile. Rust/Solana/Anchor на машине отсутствуют, поэтому Anchor build, IDL, account-size и runtime/integration-тесты пока не подтверждены.
+**Scope of the review.** This is an internal source-code audit, not an independent opinion and not permission to accept money. Reviewed: `programs/flip-the-meme/src/lib.rs`, the `packages/arena-core` model, the keeper and the mobile screen. Rust/Solana/Anchor are not installed on the machine, so the Anchor build, the IDL, account sizes and runtime/integration tests are not yet confirmed.
 
-## Итог
+## Summary
 
-Репозиторий корректно маркирует текущий режим как mock/devnet draft. Денежную программу нельзя деплоить или использовать даже на devnet до закрытия P0. Самая опасная найденная проблема - администратор может снова изменить уже финализированный раунд через неограниченные переходы `lock_round`/`activate_round`; а результат всё ещё определяется двумя непроверяемыми значениями от price authority.
+The repository correctly labels the current mode as a mock/devnet draft. The money-handling program must not be deployed or used even on devnet until the P0 items are closed. The most dangerous problem found is that the administrator can modify an already finalized round again through unrestricted `lock_round`/`activate_round` transitions; and the result is still determined by two unverifiable values from the price authority.
 
-## Исполнение исправлений
+## Status of fixes
 
-- Исправлено в исходнике: точные переходы `Scheduled → Open → Locked → Active → terminal`; финальный раунд больше нельзя повторно lock/activate/settle.
-- Исправлено в исходнике: strict session expiry, безопасное переиздание revoked/expired session и учёт общих available/locked обязательств.
-- Исправлено в исходнике: `withdraw_round_fees` доступен treasury только после claim каждой позиции и проверяет reserve плюс все пользовательские обязательства.
-- Защитно закрыто: `MOCK_ONLY` теперь отклоняет deposit и создание раунда on-chain; mobile не создаёт ложную локальную позицию.
-- Подтверждено: `cargo check` проходит с закреплённым `anchor-lang 1.1.2`; Rust, MSVC Build Tools и Windows SDK подготовлены локально.
-- Остаётся внешней зависимостью: program keypair/ID, проверяемый live-price adapter, Solana/Anchor runtime и integration-тесты. Эти пункты нельзя объявить закрытыми до появления соответствующей инфраструктуры и правила рынка.
+- Fixed in the source: exact transitions `Scheduled → Open → Locked → Active → terminal`; a final round can no longer be re-locked, re-activated or re-settled.
+- Fixed in the source: strict session expiry, safe re-issuing of a revoked/expired session and accounting of the shared available/locked obligations.
+- Fixed in the source: `withdraw_round_fees` is available to the treasury only after every position has been claimed, and it checks the reserve plus all user obligations.
+- Closed defensively: `MOCK_ONLY` now rejects deposit and round creation on-chain; mobile does not create a false local position.
+- Confirmed: `cargo check` passes with the pinned `anchor-lang 1.1.2`; Rust, MSVC Build Tools and the Windows SDK have been prepared locally.
+- Remains an external dependency: the program keypair/ID, a verifiable live-price adapter, the Solana/Anchor runtime and integration tests. These items cannot be declared closed until the corresponding infrastructure and the market rule exist.
 
-## Найденные проблемы
+## Findings
 
-| Приоритет | Где | Наблюдение и риск | Требуемое условие закрытия |
+| Priority | Where | Observation and risk | Condition required to close |
 |---|---|---|---|
-| P0 | `lib.rs`: `lock_round`, `activate_round` | Инструкции проверяют лишь время, но не предыдущее состояние. После `SETTLED_*` или `REFUNDABLE` admin может вызвать `lock_round`, потом `activate_round`, а price authority - новый settlement. Уже получившие claim не участвуют в новом результате, остальные получают изменённый результат. | Разрешить только `Scheduled → Open → Locked → Active → terminal`; каждую инструкцию ограничить точным предыдущим `RoundStatus`. Финальные статусы должны быть необратимы; покрыть retry и вызовы после каждого terminal state. |
-| P0 | `lib.rs`: `settle_round`, `Round`; keeper | Контракт принимает две голые цены от одного доверенного ключа. В Round нет идентификатора источника/наблюдений, границ P0/P1, метода агрегации или доказательства связи с `pool`. Price authority может рассчитать другой рынок или произвольный исход. | До реализации проверяемого адаптера оставлять программу в `MOCK_ONLY` и не принимать депозиты. Зафиксировать в Round source/pool/rule/window и хеш или проверяемые ссылки на наблюдения; добавить fixtures и негативные тесты. |
-| P0 | `declare_id!`, `Anchor.toml` | В обоих местах задан стандартный пример Anchor `Fg6Pa…`; это не ключ развёртывания и клиенты не могут безопасно определить, какую программу вызывают. | Сгенерировать отдельный program keypair для devnet, синхронно заменить `declare_id!`, `Anchor.toml`, сгенерированный IDL и mobile environment; зафиксировать upgrade authority. |
-| P0 | сборка/тесты | На текущей машине нет `cargo`, `anchor` и `solana`; program draft не скомпилирован. Следовательно PDA constraints, `InitSpace`, lamport mutations и инструкции не были исполнены. | Закрепить совместимую версию Anchor/Solana/Rust, выполнить `anchor build` и integration tests с двумя кошельками: deposit → session bet → settle → claim; refund; replay; cutoff/expiry/deadline границы; переполнение и неверные аккаунты. |
-| P1 | `lib.rs`: fee/dust | Комиссия и lamport-остаток округления остаются в общем Config, но нет ledger-а, счётчика обработанных победителей или безопасного `withdraw_fee`. Их нельзя прозрачно отделить от невостребованных выплат. | Хранить fee/dust/claimed obligations раздельно; переводить только доказанный остаток после всех допустимых claims либо не вводить fee withdrawal в MVP. Невостребованные claims не считать округлением. |
-| P1 | `lib.rs`: `start_session` | Session PDA создаётся с `init` и никогда не закрывается/не переинициализируется. После revoke или expiry та же пара vault + session signer больше не может получить новое разрешение. | Либо документировать ротацию signer для каждой новой сессии, либо добавить безопасное переиздание/закрытие при согласии authority и проверить, что старый ключ нельзя оживить. |
-| P2 | `lib.rs`: session expiry | Bet допускается при `now == expiry` (`now <= expiry`). Если expiry - момент истечения, это расширяет разрешение на один слот/секунду относительно обычной семантики. | Зафиксировать семантику и, если expiry исключителен, применить `now < expiry`; добавить boundary test. |
-| P2 | mobile `App.tsx` | Нажатие «ВЫБРАТЬ» после подключения меняет только локальный `entered`; нет deposit, session, подписанной `place_bet`, подтверждения, восстановления или claim/refund. Экран также показывает mock pools/chart как OPEN. | До wallet-flow держать действие явно как demo/mock и не выдавать его за позицию. Для devnet подключить authoritative snapshot, transaction lifecycle и direct claim/refund. |
-| P2 | mobile/keeper config | `apiBaseUrl` использует `10.0.2.2`, который работает лишь в Android emulator, а сам App API не потребляет. На физическом устройстве keeper по этому адресу недоступен. | Использовать доступный HTTPS endpoint или настраиваемый LAN URL для development build; тестировать на физическом Android. |
+| P0 | `lib.rs`: `lock_round`, `activate_round` | The instructions check only the time, not the previous state. After `SETTLED_*` or `REFUNDABLE`, the admin can call `lock_round`, then `activate_round`, and the price authority can call a new settlement. Those who have already claimed do not participate in the new result; the others receive a changed result. | Allow only `Scheduled → Open → Locked → Active → terminal`; restrict each instruction to the exact previous `RoundStatus`. Final statuses must be irreversible; cover retry and calls after each terminal state. |
+| P0 | `lib.rs`: `settle_round`, `Round`; keeper | The contract accepts two bare prices from a single trusted key. Round has no source/observation identifier, no P0/P1 boundaries, no aggregation method and no proof of a link to the `pool`. The price authority can settle a different market or an arbitrary outcome. | Until a verifiable adapter is implemented, keep the program in `MOCK_ONLY` and do not accept deposits. Record in Round the source/pool/rule/window and a hash or verifiable references to the observations; add fixtures and negative tests. |
+| P0 | `declare_id!`, `Anchor.toml` | Both places use the standard Anchor example `Fg6Pa…`; this is not a deployment key and clients cannot safely determine which program they are calling. | Generate a separate program keypair for devnet, replace `declare_id!`, `Anchor.toml`, the generated IDL and the mobile environment in sync; fix the upgrade authority. |
+| P0 | build/tests | The current machine has no `cargo`, `anchor` or `solana`; the program draft has not been compiled. Consequently the PDA constraints, `InitSpace`, lamport mutations and instructions have not been executed. | Pin compatible Anchor/Solana/Rust versions, run `anchor build` and integration tests with two wallets: deposit → session bet → settle → claim; refund; replay; cutoff/expiry/deadline boundaries; overflow and wrong accounts. |
+| P1 | `lib.rs`: fee/dust | The fee and the lamport rounding remainder stay in the shared Config, but there is no ledger, no counter of processed winners and no safe `withdraw_fee`. They cannot be transparently separated from unclaimed payouts. | Store fee/dust/claimed obligations separately; transfer only the proven remainder after all permitted claims, or do not introduce fee withdrawal in the MVP. Do not treat unclaimed claims as rounding. |
+| P1 | `lib.rs`: `start_session` | The Session PDA is created with `init` and is never closed/re-initialized. After revoke or expiry, the same vault + session signer pair can no longer obtain a new permission. | Either document signer rotation for every new session, or add safe re-issuing/closing with the authority's consent and verify that the old key cannot be revived. |
+| P2 | `lib.rs`: session expiry | A bet is allowed at `now == expiry` (`now <= expiry`). If expiry is the moment of expiration, this extends the permission by one slot/second relative to the usual semantics. | Fix the semantics and, if expiry is exclusive, apply `now < expiry`; add a boundary test. |
+| P2 | mobile `App.tsx` | Pressing "SELECT" after connecting changes only the local `entered`; there is no deposit, session, signed `place_bet`, confirmation, recovery or claim/refund. The screen also shows mock pools/chart as OPEN. | Until the wallet flow exists, keep the action explicitly as demo/mock and do not present it as a position. For devnet, connect an authoritative snapshot, the transaction lifecycle and direct claim/refund. |
+| P2 | mobile/keeper config | `apiBaseUrl` uses `10.0.2.2`, which works only in the Android emulator, and the App itself does not consume the API. On a physical device the keeper is unreachable at this address. | Use a reachable HTTPS endpoint or a configurable LAN URL for the development build; test on a physical Android device. |
 
-## Проверенные положительные свойства
+## Positive properties verified
 
-- `withdraw` удерживает rent-exempt reserve Config и уменьшает только `vault.available`; заблокированная ставка не выводится.
-- Position PDA включает `(round, authority)` и `init` предотвращает вторую позицию на тот же раунд.
-- Session проверяет signer, revoke, сумму одной ставки и накопленный cap; сессионный ключ не имеет инструкции вывода.
-- `claim` связывает Config с `round.config`; получатель начисления - исходный Vault, не вызывающий keeper.
-- Расчёт использует lamports и `u128` для произведения prize × stake; tie, пустая сторона и timeout дают возврат без комиссии.
-- JS-модель использует `bigint`; `pnpm test` прошёл 7/7, `pnpm --filter @flipthememe/mobile typecheck` прошёл.
+- `withdraw` holds back the rent-exempt reserve of Config and reduces only `vault.available`; a locked bet cannot be withdrawn.
+- The Position PDA includes `(round, authority)` and `init` prevents a second position on the same round.
+- Session checks the signer, revoke, the amount of a single bet and the accumulated cap; the session key has no withdrawal instruction.
+- `claim` binds Config to `round.config`; the recipient of the payout is the original Vault, not the calling keeper.
+- The calculation uses lamports and `u128` for the prize × stake product; a tie, an empty side and a timeout result in a refund without a fee.
+- The JS model uses `bigint`; `pnpm test` passed 7/7, `pnpm --filter @flipthememe/mobile typecheck` passed.
 
-## Обязательная повторная проверка
+## Mandatory re-check
 
-После P0 нужны compiled Anchor tests и независимый review. До них запрещены mainnet, реальные средства, заявления о готовом APK или о live market-price settlement. Отдельно вручную пройти на двух устройствах: потерянный RPC-ответ после исполнения, double tap, уход в фон, перезапуск, остановка keeper и permissionless refund после deadline.
+After the P0 items, compiled Anchor tests and an independent review are needed. Until then mainnet, real funds, claims of a finished APK and claims of live market-price settlement are prohibited. Separately, walk through the following manually on two devices: a lost RPC response after execution, double tap, going to the background, restart, keeper stop and permissionless refund after the deadline.
