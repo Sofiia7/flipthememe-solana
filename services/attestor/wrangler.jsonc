@@ -27,7 +27,10 @@
     "ATTEST_TOLERANCE_BPS": "150",
     // Attempts per round and window (strike or exit) that reach the samples before the attestor answers
     // "too_many_attempts". Once a sample set is signed for a window, any other set is "already_signed".
-    "ATTEST_MAX_TRIES": "6"
+    "ATTEST_MAX_TRIES": "6",
+    // Since 12 October 2026 this (main) deployment only forwards to the backup deployment on the second
+    // Cloudflare account, so one attestor serves each round window. Remove this line to serve directly again.
+    "ATTEST_PROXY": "https://ftm-attestor.flipthememe-attestor.workers.dev"
   },
   "durable_objects": {
     "bindings": [{ "name": "ATTESTOR", "class_name": "Attestor" }]
